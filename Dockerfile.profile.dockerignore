@@ -1,0 +1,7 @@
+**
+!profiling/
+!profiling/*.c
+!profiling/*.h
+!profiling/*.py
+!profiling/*.sh
+!Dockerfile.profile

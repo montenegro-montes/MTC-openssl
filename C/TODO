@@ -1,0 +1,14 @@
+1. Árbol de datos ✅
+
+2. Árbol de certificados ✅
+   (X509 → DER → hoja)
+
+3. Proofs de certificados ✅
+
+4. Serialización de proofs
+
+5. Extensión TLS privada
+
+6. Integración en s_client
+
+7. Integración en s_server

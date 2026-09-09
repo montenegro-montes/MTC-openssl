@@ -1,0 +1,15 @@
+# Build the original Dockerfile first; previous binaries remain intact.
+FROM mt-tls-lab:local
+COPY compact /opt/compact
+RUN cp -a /opt/src/openssl /opt/src/openssl-compact && \
+    python3 /opt/compact/patch.py /opt/src/openssl-compact && \
+    cd /opt/src/openssl-compact && perl configdata.pm --reconfigure && make -j2 apps/openssl && \
+    mkdir -p /opt/openssl-compact/bin && cp apps/openssl /opt/openssl-compact/bin/openssl && \
+    cp COMPACT_SHA256 /opt/openssl-compact/
+RUN cc -Wall -Wextra -Werror -I/opt/openssl/include /opt/compact/test_peer.c \
+    -L/opt/openssl/lib -lssl -lcrypto -o /opt/compact/test_peer && \
+    cc -Wall -Wextra -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -I/opt/openssl/include -I/opt/mt/integration -I/opt/mt/crypto \
+    /opt/compact/test_parser.c /opt/mt/integration/mt_wire.c /opt/mt/crypto/merkle.c \
+    -L/opt/openssl/lib -lssl -lcrypto -o /opt/compact/test_parser
+WORKDIR /work

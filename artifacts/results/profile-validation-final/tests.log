@@ -1,0 +1,79 @@
+ Container mtprofile-client-run-ec39e02159c8 Creating 
+ Container mtprofile-client-run-ec39e02159c8 Created 
+PASS classic
+PASS pq
+PASS classic-mt
+PASS pq-mt
+PASS classic-compact-warm
+PASS classic-compact-cold
+PASS pq-compact-warm
+PASS pq-compact-cold
+PASS classic-rpk
+PASS pq-rpk
+PASS classic wrong identity
+PASS classic wrong authority
+PASS classic wrong authority cold
+PASS classic unknown cached root
+PASS classic rejects -reconnect
+PASS classic rejects -psk
+PASS classic rejects -adv
+PASS classic rejects -sess_in
+PASS classic rejects -early_data
+PASS classic HRR classic-compact-warm
+PASS classic HRR classic-compact-cold
+PASS classic invalid cached signature
+PASS classic no downgrade to X509
+PASS classic other valid leaf
+PASS classic wrong RPK despite valid credential
+PASS classic raw valid
+PASS classic raw missing
+PASS classic raw truncated
+PASS classic raw trailing
+PASS classic raw version
+PASS classic raw credential_length
+PASS classic raw sibling
+PASS classic raw credential_mutation
+PASS classic cold valid
+PASS classic cold bad_signature
+PASS classic signed expired_credential
+PASS classic signed wrong_purpose
+PASS classic signed future_root
+PASS classic signed expired_root
+PASS pq wrong identity
+PASS pq wrong authority
+PASS pq wrong authority cold
+PASS pq unknown cached root
+PASS pq rejects -reconnect
+PASS pq rejects -psk
+PASS pq rejects -adv
+PASS pq rejects -sess_in
+PASS pq rejects -early_data
+PASS pq HRR pq-compact-warm
+PASS pq HRR pq-compact-cold
+PASS pq invalid cached signature
+PASS pq no downgrade to X509
+PASS pq other valid leaf
+PASS pq wrong RPK despite valid credential
+PASS pq raw valid
+PASS pq raw missing
+PASS pq raw truncated
+PASS pq raw trailing
+PASS pq raw version
+PASS pq raw credential_length
+PASS pq raw sibling
+PASS pq raw credential_mutation
+PASS pq cold valid
+PASS pq cold bad_signature
+PASS pq signed expired_credential
+PASS pq signed wrong_purpose
+PASS pq signed future_root
+PASS pq signed expired_root
+Compact TLS: 68 PASS
+PASS classic rejects wrong pin
+PASS classic rejects missing pin
+PASS classic pinned RPK rejects X509 fallback
+PASS pq rejects wrong pin
+PASS pq rejects missing pin
+PASS pq pinned RPK rejects X509 fallback
+Profile TLS: 74 PASS
+Profile timer state: PASS

@@ -1,0 +1,24 @@
+x-lab: &lab
+  image: mt-tls-lab:local
+  build: .
+  volumes:
+    - ./artifacts:/work
+services:
+  setup:
+    <<: *lab
+    command: ["bash", "/opt/lab/generate-certs.sh"]
+  server:
+    <<: *lab
+    command: ["bash", "/opt/lab/server.sh"]
+    environment:
+      SCENARIO: ${SCENARIO:-classic}
+      GROUPS_TLS: ${GROUPS_TLS:-X25519}
+    ports:
+      - "127.0.0.1:4433:4433"
+  client:
+    <<: *lab
+    command: ["bash", "/opt/lab/client.sh"]
+    environment:
+      SCENARIO: ${SCENARIO:-classic}
+      GROUPS_TLS: ${GROUPS_TLS:-X25519}
+      TLS_HOST: server

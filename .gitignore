@@ -1,0 +1,8 @@
+.DS_Store
+artifacts/
+__pycache__/
+*.key
+*.dSYM/
+C/merkle_tests
+C/mtc_tests
+C/merkle_mtc_tests
