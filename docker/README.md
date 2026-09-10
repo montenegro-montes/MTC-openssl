@@ -1,25 +1,133 @@
-# Docker definitions
+# Docker images and Compose definitions
 
-Run Docker commands from the repository root and pass the Compose file explicitly:
+Run every command from the repository root and always pass the Compose file
+explicitly. Compose resolves the build context and bind mounts relative to the
+Compose file, while the documented commands assume the repository root.
+
+## Prerequisites
+
+```sh
+docker version
+docker compose version
+docker info
+mkdir -p artifacts/results
+```
+
+The first build needs Internet access. Generated certificates and keys are
+written below `artifacts/`, which must remain outside Git.
+
+## Image dependency chain
+
+```text
+docker/Dockerfile          -> mt-tls-lab:local
+docker/Dockerfile.compact  -> mt-tls-compact:local
+docker/Dockerfile.profile  -> mt-tls-profile:local
+docker/Dockerfile.mtc      -> mt-tls-mtc:local
+docker/Dockerfile.paper    -> mt-tls-paper:local
+docker/Dockerfile.network  -> mt-tls-network:latency
+```
+
+Build in this order because every stage uses the preceding local tag as its
+`FROM` image.
+
+## Step 1 — build the base OpenSSL/PQ/Merkle image
 
 ```sh
 docker compose -f docker/compose.yaml build
 docker compose -f docker/compose.yaml run --rm setup
 ```
 
-The Compose definitions use `..` as their build context and bind `../artifacts` and `../campaigns`, because paths are resolved relative to this directory.
+The setup service creates classic and ML-DSA-65 certificates plus the initial
+Merkle fixtures in `artifacts/certs/` and `artifacts/merkle/`.
 
-| Compose file | Purpose |
-|---|---|
-| `compose.yaml` | Original classic/PQ TLS laboratory |
-| `compose.compact.yaml` | Compact Merkle authentication |
-| `compose.profile.yaml` | Detailed profiling |
-| `compose.mtc.yaml` | Experimental MTC implementation |
-| `compose.paper.yaml` | Controlled N=16 campaign image |
-| `compose.scaling.yaml` | Tree-population scaling |
-| `compose.network-latency.yaml` | Latency-only network campaign |
-| `compose.network-bandwidth.yaml` | Bandwidth-limited campaign |
-| `compose.network-loss.yaml` | Packet-loss campaign |
-| `compose.network-combined.yaml` | Combined representative profiles |
+## Step 2 — test an initial TLS scenario
 
-`archive/` contains obsolete definitions retained only for historical inspection. Do not use them for new measurements.
+```sh
+SCENARIO=pq-mt docker compose -f docker/compose.yaml up -d --force-recreate server
+sleep 2
+SCENARIO=pq-mt docker compose -f docker/compose.yaml run --rm client
+docker compose -f docker/compose.yaml down
+```
+
+Supported values are `classic`, `pq`, `classic-mt` and `pq-mt`. Always
+stop the `mt` project after the check.
+
+## Step 3 — build Compact and generate its N=16 fixtures
+
+```sh
+docker compose -f docker/compose.compact.yaml build
+docker compose -f docker/compose.compact.yaml run --rm setup
+```
+
+## Step 4 — build profiling and MTC
+
+```sh
+docker compose -f docker/compose.profile.yaml build
+docker compose -f docker/compose.mtc.yaml build
+docker compose -f docker/compose.mtc.yaml run --rm setup
+```
+
+The MTC setup creates `artifacts/mtc/batch16-v2/`.
+
+## Step 5 — build and test the paper image
+
+```sh
+docker build -f docker/Dockerfile.paper \
+  --build-arg BASE_IMAGE=mt-tls-mtc:local \
+  -t mt-tls-paper:local .
+
+docker run --rm --network none \
+  -v "$PWD/artifacts:/work:ro" \
+  mt-tls-paper:local sh /opt/paper/tests.sh
+```
+
+Do not use the image for measurements unless the output contains
+`ALL REGRESSION AND NEGATIVE TESTS PASS`.
+
+## Step 6 — build and inspect the network image
+
+```sh
+docker build -f docker/Dockerfile.network -t mt-tls-network:latency .
+docker run --rm --network none mt-tls-network:latency sh -c \
+  'command -v tc && command -v ping && command -v nstat && command -v iperf3'
+```
+
+The network stage only installs `iproute2`, `iputils-ping` and `iperf3`.
+It retains the OpenSSL binary from `mt-tls-paper:local`.
+
+## Compose inventory
+
+| Compose file | Project | Purpose |
+|---|---|---|
+| `compose.yaml` | `mt` | Initial classic/PQ and Merkle TLS laboratory |
+| `compose.compact.yaml` | `mtcompact` | Compact Merkle fixtures and benchmark |
+| `compose.profile.yaml` | `mtprofile` | Detailed timing instrumentation |
+| `compose.mtc.yaml` | `mtclab` | Experimental MTC implementation |
+| `compose.paper.yaml` | `papern16` | Controlled N=16 measurements |
+| `compose.scaling.yaml` | `mtscaling` | Tree-population scaling |
+| `compose.network-latency.yaml` | `mtlatency` | Latency-only campaign |
+| `compose.network-bandwidth.yaml` | `mtbandwidth` | Bandwidth-limited campaign |
+| `compose.network-loss.yaml` | `mtloss` | Packet-loss campaign |
+| `compose.network-combined.yaml` | `mtcombined` | Combined network profiles |
+
+The campaign Compose definitions are execution infrastructure. Launch them
+through their package runners under `campaigns/`, because those runners record
+metadata, validate qdiscs and protect against overwrites.
+
+## Inspection and cleanup
+
+```sh
+docker compose -f docker/compose.yaml ps
+docker compose -f docker/compose.yaml logs server
+docker compose -f docker/compose.yaml down
+docker image ls 'mt-tls-*'
+```
+
+Packet-loss and combined-network packages provide a campaign-specific
+`cleanup.sh` for interruptions. Those scripts stop only their own Compose
+project and preserve results. For latency and bandwidth, use the exact Compose
+file shown in their runner/README with `down`. Do not use
+`docker system prune` as part of the reproducibility workflow.
+
+`archive/` contains obsolete definitions retained for historical inspection.
+Do not use them for new measurements.

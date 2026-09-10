@@ -6,7 +6,18 @@ El objetivo científico es determinar si Compact Merkle y MTC reducen los bytes 
 
 ## Variantes evaluadas
 
-La configuración controlada fija TLS 1.3, X25519, `TLS_AES_256_GCM_SHA384`, autenticación exclusiva del servidor y ausencia de tickets o reanudación. La autenticación poscuántica utiliza ML-DSA-65; X25519 se conserva para no mezclar el efecto de la representación de certificados con un cambio del intercambio de claves.
+La configuración controlada fija TLS 1.3, X25519, `TLS_AES_256_GCM_SHA384`, autenticación exclusiva del servidor y ausencia de tickets o reanudación. Los certificados clásicos usan ECDSA con la curva P-256 y los certificados poscuánticos usan ML-DSA-65. En ambos casos, la CA y el servidor se generan con el algoritmo correspondiente.
+
+| Elemento criptográfico | Configuración | Papel |
+|---|---|---|
+| Firma clásica de certificados | ECDSA P-256 | Firma de la CA, certificado del servidor y `CertificateVerify` clásico |
+| Firma poscuántica de certificados | ML-DSA-65 | Firma de la CA, certificado del servidor y `CertificateVerify` poscuántico |
+| Intercambio de claves TLS | X25519 | Acuerdo de la clave efímera de la conexión |
+| Suite TLS 1.3 | `TLS_AES_256_GCM_SHA384` | Cifrado simétrico e integridad del canal |
+
+X25519 no es el algoritmo de firma del certificado. Se mantiene igual en todas
+las variantes para estudiar el coste de la autenticación sin introducir además
+un cambio en el intercambio de claves.
 
 | Familia | Escenario | Función |
 |---|---|---|
@@ -50,17 +61,174 @@ Los resultados generados viven en `artifacts/results/` y están excluidos de Git
 
 Los puntos de entrada de cada experimento están en [campaigns/](campaigns/README.md). Las imágenes y servicios disponibles se describen en [docker/](docker/README.md). La documentación del primer laboratorio se conserva en [docs/tls-merkle-laboratory.md](docs/tls-merkle-laboratory.md). `codigoOriginal/` se mantiene separado del desarrollo activo para conservar claramente la procedencia del código recibido.
 
-## Inicio rápido
+## Requisitos para crear el laboratorio
 
-Los comandos se ejecutan desde la raíz del repositorio. Para construir y validar el laboratorio inicial:
+- Git y Python 3 disponibles en el host.
+- Docker Desktop o Docker Engine con Compose v2.
+- Acceso a Internet durante la construcción inicial para descargar Debian,
+  OpenSSL, liboqs y oqs-provider.
+- Espacio suficiente para compilar y conservar la cadena de imágenes.
+- En campañas de red, capacidad `NET_ADMIN` dentro de los contenedores. Los
+  Compose ya declaran esta capacidad donde es necesaria.
+
+Compruebe el entorno desde la raíz del repositorio:
+
+```sh
+git status --short
+git rev-parse HEAD
+python3 --version
+docker version
+docker compose version
+docker info
+```
+
+## Creación inicial paso a paso
+
+### Paso 1 — clonar y entrar en el proyecto
+
+```sh
+git clone https://github.com/montenegro-montes/MTC-openssl.git
+cd MTC-openssl
+```
+
+Todos los comandos posteriores se ejecutan desde esta raíz. No ejecute los
+Compose desde `docker/`, porque la documentación y los scripts toman la raíz
+como directorio de trabajo.
+
+### Paso 2 — crear los directorios locales
+
+```sh
+mkdir -p artifacts/results
+```
+
+`artifacts/` está ignorado por Git y contendrá claves privadas, certificados,
+fixtures y resultados. No copie claves desde `codigoOriginal/` al historial.
+
+### Paso 3 — construir la imagen base
 
 ```sh
 docker compose -f docker/compose.yaml build
-docker compose -f docker/compose.yaml run --rm setup
-docker compose -f docker/compose.yaml up -d server
-docker compose -f docker/compose.yaml run --rm client
-docker compose -f docker/compose.yaml down
+docker image inspect mt-tls-lab:local --format '{{.Id}}'
 ```
+
+Esta etapa compila OpenSSL 3.5.8, liboqs 0.14.0, oqs-provider 0.10.0, las pruebas
+C recibidas y la primera integración Merkle de `s_client`/`s_server`.
+
+### Paso 4 — generar certificados y fixtures Merkle iniciales
+
+```sh
+docker compose -f docker/compose.yaml run --rm setup
+find artifacts/certs artifacts/merkle -maxdepth 2 -type f -print
+```
+
+El generador utiliza `umask 077` y conserva directorios existentes. Para una
+regeneración científica use un árbol de artefactos nuevo; no mezcle fixtures
+regeneradas con resultados anteriores.
+
+Para preparar un algoritmo de firma adicional, asigne un nombre nuevo al perfil
+y pase el algoritmo junto con sus parámetros de OpenSSL:
+
+```sh
+docker compose -f docker/compose.yaml run --rm setup \
+  bash /opt/lab/generate-certs.sh \
+  --profile mldsa44 --algorithm ML-DSA-44
+
+docker compose -f docker/compose.yaml run --rm setup \
+  bash /opt/lab/generate-certs.sh \
+  --profile ecdsa-p384 --algorithm EC \
+  --pkeyopt ec_paramgen_curve:P-384 --digest sha384
+```
+
+`--pkeyopt` y `--sigopt` se pueden repetir; `--digest` y `--days` son
+opcionales. El comando crea la CA autofirmada, el certificado de servidor, el
+DER, `generation-parameters.txt` y la fixture Merkle bajo el mismo nombre. Use:
+
+```sh
+docker compose -f docker/compose.yaml run --rm setup \
+  bash /opt/lab/generate-certs.sh --help
+```
+
+La disponibilidad del algoritmo depende de la imagen. Compruébela con
+`openssl list -signature-algorithms` dentro de `mt-tls-lab:local`.
+La generación de un perfil no lo añade automáticamente a `scenario.sh` ni a
+las campañas congeladas; debe incorporarse en una campaña nueva para evitar
+alterar las comparaciones existentes.
+
+### Paso 5 — validar los cuatro escenarios iniciales
+
+```sh
+for SCENARIO in classic pq classic-mt pq-mt; do
+  export SCENARIO
+  docker compose -f docker/compose.yaml up -d --force-recreate server
+  sleep 2
+  docker compose -f docker/compose.yaml run --rm client
+  docker compose -f docker/compose.yaml down
+done
+unset SCENARIO
+```
+
+Cada cliente debe completar TLS 1.3 y verificar el servidor. Los escenarios
+`classic-mt` y `pq-mt` deben mostrar además la verificación Merkle esperada.
+Si una iteración falla, ejecute `docker compose -f docker/compose.yaml down`
+antes de diagnosticarla.
+
+### Paso 6 — construir Compact Merkle y generar N=16
+
+```sh
+docker compose -f docker/compose.compact.yaml build
+docker compose -f docker/compose.compact.yaml run --rm setup
+test -f artifacts/compact/batch16/classic/manifest.json
+test -f artifacts/compact/batch16/pq/manifest.json
+```
+
+### Paso 7 — construir profiling y MTC-experimental
+
+```sh
+docker compose -f docker/compose.profile.yaml build
+docker compose -f docker/compose.mtc.yaml build
+docker compose -f docker/compose.mtc.yaml run --rm setup
+test -d artifacts/mtc/batch16-v2
+```
+
+Las imágenes dependen unas de otras; respete este orden. La generación MTC
+produce material local que permanece bajo `artifacts/`.
+
+### Paso 8 — construir y validar la imagen de medición
+
+```sh
+docker build -f docker/Dockerfile.paper \
+  --build-arg BASE_IMAGE=mt-tls-mtc:local \
+  -t mt-tls-paper:local .
+
+docker run --rm --network none \
+  -v "$PWD/artifacts:/work:ro" \
+  mt-tls-paper:local sh /opt/paper/tests.sh
+```
+
+La salida válida termina con:
+
+```text
+ALL REGRESSION AND NEGATIVE TESTS PASS
+```
+
+No continúe con campañas si esta prueba falla.
+
+### Paso 9 — construir la imagen con herramientas de red
+
+```sh
+docker build -f docker/Dockerfile.network -t mt-tls-network:latency .
+docker run --rm --network none mt-tls-network:latency sh -c \
+  'command -v tc && command -v ping && command -v nstat && command -v iperf3'
+```
+
+Esta última imagen añade herramientas de red sobre la imagen de medición; no
+recompila OpenSSL.
+
+### Paso 10 — elegir una campaña
+
+Consulte [campaigns/](campaigns/README.md), respete el orden recomendado y use
+el README específico. Cada campaña crea un directorio fechado independiente,
+registra Git, imagen y hashes, y exige sus propios tests y gates.
 
 La cadena de imágenes experimentales se construye por etapas:
 

@@ -40,37 +40,114 @@ N=1 is a no-sibling corner case. For N≥4, the saved MTC covering subtrees requ
 one fewer sibling level than the full Compact tree. Actual encoded objects, DER
 boundaries and TLS bytes are measured separately from theoretical hash-path sizes.
 
-## Reproduce
+## Step 1 — inspect the environment
 
 Run from the repository root with the exact local Docker image available.
-Use a new timestamped result directory; do not reuse an existing one. For example,
-replace `scaling-NEW` below once with a new timestamp:
+Confirm the Git state, frozen image and N=16 regression fixtures:
 
 ```sh
-python3 campaigns/scaling_campaign/control.py init artifacts/results/scaling-NEW
-python3 campaigns/scaling_campaign/control.py tests-before artifacts/results/scaling-NEW
-python3 campaigns/scaling_campaign/control.py generate artifacts/results/scaling-NEW
-python3 campaigns/scaling_campaign/structural.py artifacts/results/scaling-NEW
-python3 campaigns/scaling_campaign/run.py artifacts/results/scaling-NEW --preflight
-python3 campaigns/scaling_campaign/run.py artifacts/results/scaling-NEW
-python3 campaigns/scaling_campaign/control.py tests-after artifacts/results/scaling-NEW
+git status --short
+git rev-parse HEAD
+docker image inspect sha256:4b04891fc50251a422c3357f35f355151ea50150d0e678dadde8c8f97b968b43 --format '{{.Id}}'
+docker ps
+test -d artifacts/compact/batch16
+test -d artifacts/mtc/batch16-v2
+```
+
+## Step 2 — initialize a new result directory
+
+```sh
+SCALING_ROOT="artifacts/results/scaling-$(date +%Y%m%d-%H%M%S)"
+echo "$SCALING_ROOT"
+python3 campaigns/scaling_campaign/control.py init "$SCALING_ROOT"
+```
+
+The command refuses existing paths. Keep this variable for the complete run.
+
+## Step 3 — run the pre-generation regression gate
+
+```sh
+python3 campaigns/scaling_campaign/control.py tests-before "$SCALING_ROOT"
+cat "$SCALING_ROOT/tests-status.json"
+```
+
+Do not generate fixtures unless this gate passes.
+
+## Step 4 — generate and structurally validate fixtures
+
+```sh
+python3 campaigns/scaling_campaign/control.py generate "$SCALING_ROOT"
+python3 campaigns/scaling_campaign/structural.py "$SCALING_ROOT"
+```
+
+Inspect the generated manifests and structural report before measuring. Existing
+N=16 fixtures and previous outputs are not overwritten.
+
+## Step 5 — run the measurement preflight
+
+```sh
+python3 campaigns/scaling_campaign/run.py "$SCALING_ROOT" --preflight
+cat "$SCALING_ROOT/preflight-run-status.json"
+```
+
+The six short preflight campaigns collect 96 checks and 48 warmups and remain
+outside full-campaign inference.
+
+## Step 6 — run the full experiment
+
+```sh
+python3 campaigns/scaling_campaign/run.py "$SCALING_ROOT"
+```
+
+The full runner creates sixty campaigns and refuses existing campaign paths or
+automatic retries.
+
+## Step 7 — monitor from a second terminal
+
+```sh
+docker ps --filter label=com.docker.compose.project=mtscaling
+cat "$SCALING_ROOT/campaign-status.json"
+find "$SCALING_ROOT" -name driver.log -exec tail -n 3 {} \;
+du -sh "$SCALING_ROOT"
+```
+
+## Step 8 — rerun regression tests
+
+```sh
+python3 campaigns/scaling_campaign/control.py tests-after "$SCALING_ROOT"
+```
+
+This confirms that the frozen N=16 behavior still passes after collection.
+
+## Step 9 — analyze, plot and audit
+
+```sh
 python3 campaigns/scaling_campaign/test_analysis.py
-python3 campaigns/scaling_campaign/analyze.py artifacts/results/scaling-NEW
-python3 campaigns/scaling_campaign/plots.py artifacts/results/scaling-NEW
-python3 campaigns/scaling_campaign/control.py audit artifacts/results/scaling-NEW
+python3 campaigns/scaling_campaign/analyze.py "$SCALING_ROOT"
+python3 campaigns/scaling_campaign/plots.py "$SCALING_ROOT"
+python3 campaigns/scaling_campaign/control.py audit "$SCALING_ROOT"
 ```
 
 Plot generation needs matplotlib and numpy; use a separate virtual environment
 and install `campaigns/scaling_campaign/requirements-plots.txt`.
 The completed output records their exact versions. Everything else uses Python's
 standard library on the host or the saved container tools. The fixtures are under
-`artifacts/scaling/scaling-NEW/batchN/{compact,mtc}/`. After structural validation,
+`artifacts/scaling/<result-directory-name>/batchN/{compact,mtc}/`. After structural validation,
 fixture files are read-only and benchmark containers mount them read-only too.
 Private keys remain in fixture storage, excluded by Git; outputs record hashes.
 
-The six short preflight campaigns (N=1,16,1024 in both modes) collect 96 checks and
-48 warmups; these are excluded from the full campaign inference. The gate tests
-run before and after the full experiment on the original N=16 regression fixtures.
+## Step 10 — inspect and preserve the result
+
+```sh
+cat "$SCALING_ROOT/report.md"
+ls -lh "$SCALING_ROOT"/*.csv
+git status --short
+git rev-parse HEAD
+```
+
+Commit scaling changes and documentation separately from later network
+experiments. Keep generated fixtures, private keys, raw results and Docker logs
+under ignored `artifacts/`.
 
 ## Analysis and interpretation
 

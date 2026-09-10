@@ -28,40 +28,94 @@ validate the new namespaces. Both directions must be within the predeclared
 ±15% tolerance. Any ping loss, iperf retransmission or qdisc drop stops the run
 and marks that campaign invalid. There is no automatic retry.
 
-## Manual execution
+## Step 1 — inspect the environment
 
-First finish and commit the latency experiment. Confirm a clean worktree, then
-create a unique result directory; substitute one timestamp consistently:
+First finish and commit the latency experiment. Confirm a clean worktree, the
+saved image and the required fixtures:
 
 ```sh
 git status --short
 git rev-parse HEAD
-python3 campaigns/network_bandwidth/control.py init artifacts/results/network-bandwidth-NEW
-python3 campaigns/network_bandwidth/control.py tests artifacts/results/network-bandwidth-NEW
-python3 campaigns/network_bandwidth/run.py artifacts/results/network-bandwidth-NEW --smoke
+docker image inspect mt-tls-network:latency --format '{{.Id}}'
+docker ps
+test -d artifacts/compact/batch16
+test -d artifacts/mtc/batch16-v2
+test -d artifacts/certs
+```
+
+## Step 2 — initialize a new result directory
+
+```sh
+BANDWIDTH_ROOT="artifacts/results/network-bandwidth-$(date +%Y%m%d-%H%M%S)"
+echo "$BANDWIDTH_ROOT"
+python3 campaigns/network_bandwidth/control.py init "$BANDWIDTH_ROOT"
+```
+
+Initialization refuses existing paths. Reuse this variable in all later commands.
+
+## Step 3 — build the image if necessary
+
+```sh
+docker build -f docker/Dockerfile.network -t mt-tls-network:latency .
+```
+
+Skip the build when the recorded validated image is already available.
+
+## Step 4 — run the regression gate
+
+```sh
+python3 campaigns/network_bandwidth/control.py tests "$BANDWIDTH_ROOT"
+cat "$BANDWIDTH_ROOT/tests-status.json"
+```
+
+Do not continue unless `passed` is true.
+
+## Step 5 — run and inspect the smoke test
+
+```sh
+python3 campaigns/network_bandwidth/run.py "$BANDWIDTH_ROOT" --smoke
 ```
 
 Inspect the smoke status, RTT/throughput validation, qdisc statistics and drops:
 
 ```sh
-cat artifacts/results/network-bandwidth-NEW/smoke-status.json
-find artifacts/results/network-bandwidth-NEW/smoke -name validation.json -exec cat {} \;
-find artifacts/results/network-bandwidth-NEW/smoke -name '*qdisc*' -type f -print
+cat "$BANDWIDTH_ROOT/smoke-status.json"
+find "$BANDWIDTH_ROOT/smoke" -name validation.json -exec cat {} \;
+find "$BANDWIDTH_ROOT/smoke" -name '*qdisc*' -type f -print
 ```
 
-Only if all three smoke conditions pass (`RTT=50`, rates 20, 5 and 1 Mbps), run:
+Only if all three smoke conditions pass (`RTT=50`, rates 20, 5 and 1 Mbps),
+continue.
+
+## Step 6 — run the full experiment
 
 ```sh
-python3 campaigns/network_bandwidth/run.py artifacts/results/network-bandwidth-NEW
-python3 campaigns/network_bandwidth/analyze.py artifacts/results/network-bandwidth-NEW
+python3 campaigns/network_bandwidth/run.py "$BANDWIDTH_ROOT"
+```
+
+The full run contains 75 campaigns and refuses overwrites or automatic retries.
+
+## Step 7 — monitor from a second terminal
+
+```sh
+docker ps --filter label=com.docker.compose.project=mtbandwidth
+cat "$BANDWIDTH_ROOT/campaign-status.json"
+find "$BANDWIDTH_ROOT/campaigns" -name driver.log -exec tail -n 3 {} \;
+du -sh "$BANDWIDTH_ROOT"
+```
+
+## Step 8 — analyze, plot and audit
+
+```sh
+python3 campaigns/network_bandwidth/analyze.py "$BANDWIDTH_ROOT"
 ```
 
 Generate plots using the same temporary plotting environment created for the
 scaling experiment, or install its pinned requirements in a new venv:
 
 ```sh
-/tmp/mt-scaling-plots-venv/bin/python campaigns/network_bandwidth/plots.py artifacts/results/network-bandwidth-NEW
-python3 campaigns/network_bandwidth/control.py audit artifacts/results/network-bandwidth-NEW
+/tmp/mt-scaling-plots-venv/bin/python campaigns/network_bandwidth/plots.py "$BANDWIDTH_ROOT"
+python3 campaigns/network_bandwidth/control.py audit "$BANDWIDTH_ROOT"
 ```
 
 The full experiment runs 75 campaigns: three RTTs × five rates × five campaigns.
@@ -69,7 +123,7 @@ Each campaign has five warmup and thirty measured randomized rounds over six PQ
 scenarios. Expected totals are 13,500 measurements and 2,250 warmups. The smoke
 adds 90 measurements and 54 warmups and is excluded from inference.
 
-## Outputs and interpretation
+## Step 9 — inspect outputs and interpretation
 
 The result directory contains all requested raw/aggregate CSVs, qdisc evidence,
 validation, serialization references, break-even observations, amortization,
@@ -81,13 +135,15 @@ Warm trust amortization is an analytical byte model and is not mixed into measur
 handshake latency. Compact/MTC comparisons remain architectural, and MTC standalone
 includes a local cosigner absent from ordinary X.509.
 
+## Step 10 — finish and record the experiment
+
 After audit, commit only these scripts/configuration and update the ignored result
 `metadata.json` and `report.md` with the resulting commit hash. Suggested commit:
 
 ```sh
 git add docker/compose.network-bandwidth.yaml campaigns/network_bandwidth
 git commit -m "experiment: add controlled bandwidth-limited TLS measurements"
-python3 campaigns/network_bandwidth/record_commit.py artifacts/results/network-bandwidth-NEW
+python3 campaigns/network_bandwidth/record_commit.py "$BANDWIDTH_ROOT"
 ```
 
 Do not add `artifacts/`, private keys, Docker logs or transient output to Git.
