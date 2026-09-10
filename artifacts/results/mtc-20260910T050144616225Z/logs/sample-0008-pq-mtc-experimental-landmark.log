@@ -1,0 +1,164 @@
+CONNECTED(00000003)
+---
+Certificate chain
+ 0 s:CN=server
+   i:1.3.6.1.4.1.44363.47.1=32473.2
+   a:PKEY: ML-DSA-65, 15616 (bit); sigalg: undefined
+   v:NotBefore: Sep  9 13:05:57 2026 GMT; NotAfter: Oct  9 13:05:57 2026 GMT
+---
+Server certificate
+-----BEGIN CERTIFICATE-----
+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
+-----END CERTIFICATE-----
+subject=CN=server
+issuer=1.3.6.1.4.1.44363.47.1=32473.2
+---
+No client certificate CA names sent
+Peer signature type: mldsa65
+Peer Temp Key: X25519, 253 bits
+---
+SSL handshake has read 5968 bytes and written 414 bytes
+Verification: OK
+---
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Protocol: TLSv1.3
+Server public key is 15616 bit
+This TLS version forbids renegotiation.
+Compression: NONE
+Expansion: NONE
+No ALPN negotiated
+Early data was not sent
+Verify return code: 0 (ok)
+---
+HTTP/1.0 200 ok
+Content-type: text/html
+
+<HTML><BODY BGCOLOR="#ffffff">
+<pre>
+
+s_server -accept 4444 -tls1_3 -groups X25519 -ciphersuites TLS_AES_256_GCM_SHA384 -cert /work/mtc/batch16-v2/pq/landmark-0000.pem -key /work/certs/pq/server.key -num_tickets 0 -www -quiet -lab_metrics -mtc_id 32473.2.1.1.1 
+This TLS version forbids renegotiation.
+Ciphers supported in s_server binary
+TLSv1.3    :TLS_AES_256_GCM_SHA384    TLSv1.2    :ECDHE-ECDSA-AES256-GCM-SHA384 
+TLSv1.2    :ECDHE-RSA-AES256-GCM-SHA384 TLSv1.2    :DHE-RSA-AES256-GCM-SHA384 
+TLSv1.2    :ECDHE-ECDSA-CHACHA20-POLY1305 TLSv1.2    :ECDHE-RSA-CHACHA20-POLY1305 
+TLSv1.2    :DHE-RSA-CHACHA20-POLY1305 TLSv1.2    :ECDHE-ECDSA-AES128-GCM-SHA256 
+TLSv1.2    :ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2    :DHE-RSA-AES128-GCM-SHA256 
+TLSv1.2    :ECDHE-ECDSA-AES256-SHA384 TLSv1.2    :ECDHE-RSA-AES256-SHA384   
+TLSv1.2    :DHE-RSA-AES256-SHA256     TLSv1.2    :ECDHE-ECDSA-AES128-SHA256 
+TLSv1.2    :ECDHE-RSA-AES128-SHA256   TLSv1.2    :DHE-RSA-AES128-SHA256     
+TLSv1.0    :ECDHE-ECDSA-AES256-SHA    TLSv1.0    :ECDHE-RSA-AES256-SHA      
+SSLv3      :DHE-RSA-AES256-SHA        TLSv1.0    :ECDHE-ECDSA-AES128-SHA    
+TLSv1.0    :ECDHE-RSA-AES128-SHA      SSLv3      :DHE-RSA-AES128-SHA        
+TLSv1.2    :RSA-PSK-AES256-GCM-SHA384 TLSv1.2    :DHE-PSK-AES256-GCM-SHA384 
+TLSv1.2    :RSA-PSK-CHACHA20-POLY1305 TLSv1.2    :DHE-PSK-CHACHA20-POLY1305 
+TLSv1.2    :ECDHE-PSK-CHACHA20-POLY1305 TLSv1.2    :AES256-GCM-SHA384         
+TLSv1.2    :PSK-AES256-GCM-SHA384     TLSv1.2    :PSK-CHACHA20-POLY1305     
+TLSv1.2    :RSA-PSK-AES128-GCM-SHA256 TLSv1.2    :DHE-PSK-AES128-GCM-SHA256 
+TLSv1.2    :AES128-GCM-SHA256         TLSv1.2    :PSK-AES128-GCM-SHA256     
+TLSv1.2    :AES256-SHA256             TLSv1.2    :AES128-SHA256             
+TLSv1.0    :ECDHE-PSK-AES256-CBC-SHA384 TLSv1.0    :ECDHE-PSK-AES256-CBC-SHA  
+SSLv3      :SRP-RSA-AES-256-CBC-SHA   SSLv3      :SRP-AES-256-CBC-SHA       
+TLSv1.0    :RSA-PSK-AES256-CBC-SHA384 TLSv1.0    :DHE-PSK-AES256-CBC-SHA384 
+SSLv3      :RSA-PSK-AES256-CBC-SHA    SSLv3      :DHE-PSK-AES256-CBC-SHA    
+SSLv3      :AES256-SHA                TLSv1.0    :PSK-AES256-CBC-SHA384     
+SSLv3      :PSK-AES256-CBC-SHA        TLSv1.0    :ECDHE-PSK-AES128-CBC-SHA256 
+TLSv1.0    :ECDHE-PSK-AES128-CBC-SHA  SSLv3      :SRP-RSA-AES-128-CBC-SHA   
+SSLv3      :SRP-AES-128-CBC-SHA       TLSv1.0    :RSA-PSK-AES128-CBC-SHA256 
+TLSv1.0    :DHE-PSK-AES128-CBC-SHA256 SSLv3      :RSA-PSK-AES128-CBC-SHA    
+SSLv3      :DHE-PSK-AES128-CBC-SHA    SSLv3      :AES128-SHA                
+TLSv1.0    :PSK-AES128-CBC-SHA256     SSLv3      :PSK-AES128-CBC-SHA        
+---
+Ciphers common between both SSL end points:
+TLS_AES_256_GCM_SHA384
+Signature Algorithms: id-ml-dsa-65:id-ml-dsa-87:id-ml-dsa-44:ECDSA+SHA256:ECDSA+SHA384:ECDSA+SHA512:ed25519:ed448:ecdsa_brainpoolP256r1_sha256:ecdsa_brainpoolP384r1_sha384:ecdsa_brainpoolP512r1_sha512:rsa_pss_pss_sha256:rsa_pss_pss_sha384:rsa_pss_pss_sha512:RSA-PSS+SHA256:RSA-PSS+SHA384:RSA-PSS+SHA512:RSA+SHA256:RSA+SHA384:RSA+SHA512:p256_mldsa44:rsa3072_mldsa44:p384_mldsa65:p521_mldsa87:falcon512:p256_falcon512:rsa3072_falcon512:falconpadded512:p256_falconpadded512:rsa3072_falconpadded512:falcon1024:p521_falcon1024:falconpadded1024:p521_falconpadded1024:sphincssha2128fsimple:p256_sphincssha2128fsimple:rsa3072_sphincssha2128fsimple:sphincssha2128ssimple:p256_sphincssha2128ssimple:rsa3072_sphincssha2128ssimple:sphincssha2192fsimple:p384_sphincssha2192fsimple:sphincsshake128fsimple:p256_sphincsshake128fsimple:rsa3072_sphincsshake128fsimple:mayo1:p256_mayo1:mayo2:p256_mayo2:mayo3:p384_mayo3:mayo5:p521_mayo5:CROSSrsdp128balanced:OV_Ip_pkc:p256_OV_Ip_pkc:OV_Ip_pkc_skc:p256_OV_Ip_pkc_skc:snova2454:p256_snova2454:snova2454esk:p256_snova2454esk:snova37172:p256_snova37172:snova2455:p384_snova2455:snova2965:p521_snova2965
+Shared Signature Algorithms: id-ml-dsa-65:id-ml-dsa-87:id-ml-dsa-44:ECDSA+SHA256:ECDSA+SHA384:ECDSA+SHA512:ed25519:ed448:ecdsa_brainpoolP256r1_sha256:ecdsa_brainpoolP384r1_sha384:ecdsa_brainpoolP512r1_sha512:rsa_pss_pss_sha256:rsa_pss_pss_sha384:rsa_pss_pss_sha512:RSA-PSS+SHA256:RSA-PSS+SHA384:RSA-PSS+SHA512:RSA+SHA256:RSA+SHA384:RSA+SHA512:p256_mldsa44:rsa3072_mldsa44:p384_mldsa65:p521_mldsa87:falcon512:p256_falcon512:rsa3072_falcon512:falconpadded512:p256_falconpadded512:rsa3072_falconpadded512:falcon1024:p521_falcon1024:falconpadded1024:p521_falconpadded1024:sphincssha2128fsimple:p256_sphincssha2128fsimple:rsa3072_sphincssha2128fsimple:sphincssha2128ssimple:p256_sphincssha2128ssimple:rsa3072_sphincssha2128ssimple:sphincssha2192fsimple:p384_sphincssha2192fsimple:sphincsshake128fsimple:p256_sphincsshake128fsimple:rsa3072_sphincsshake128fsimple:mayo1:p256_mayo1:mayo2:p256_mayo2:mayo3:p384_mayo3:mayo5:p521_mayo5:CROSSrsdp128balanced:OV_Ip_pkc:p256_OV_Ip_pkc:OV_Ip_pkc_skc:p256_OV_Ip_pkc_skc:snova2454:p256_snova2454:snova2454esk:p256_snova2454esk:snova37172:p256_snova37172:snova2455:p384_snova2455:snova2965:p521_snova2965
+Supported groups: x25519
+Shared groups: x25519
+---
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+SSL-Session:
+    Protocol  : TLSv1.3
+    Cipher    : TLS_AES_256_GCM_SHA384
+    Session-ID: 
+    Session-ID-ctx: 01000000
+    Resumption PSK: 
+    PSK identity: None
+    PSK identity hint: None
+    SRP username: None
+    Start Time: 1789016507
+    Timeout   : 7200 (sec)
+    Verify return code: 0 (ok)
+    Extended master secret: no
+    Max Early Data: 0
+---
+   0 items in the session cache
+   0 client connects (SSL_connect())
+   0 client renegotiates (SSL_connect())
+   0 client connects that finished
+  13 server accepts (SSL_accept())
+   0 server renegotiates (SSL_accept())
+  12 server accepts that finished
+   0 session cache hits
+   0 session cache misses
+   0 session cache timeouts
+   0 callback cache hits
+   0 cache full overflows (128 allowed)
+---
+no client certificate available
+</pre></BODY></HTML>
+
+closed
+MTC_SETUP {"mtc_setup_ms":1.162333,"mtc_trust_validation_ms":0.348292,"mtc_predistributed_bytes":10772,"mtc_trust_file_bytes":10772}
+Connecting to 172.20.0.2
+MTC verification: OK
+MTC_VERIFY {"mtc_credential_auth_ms":0.053958}
+PROFILE_METRICS {"client_random":"53b0287de361a6d3d6ad5297e4848211559d98cff6189cc124e023cd693bcb24","side":"client","detail":0,"profile_valid":1,"handshake_wall_ms":1.606709,"handshake_cpu_ms":0.511791,"transport_read_bytes":5968,"transport_written_bytes":414,"handshake_read_bytes":5869,"handshake_written_bytes":381,"certificate_message_bytes":2358,"certificate_verify_message_bytes":3317,"encrypted_extensions_bytes":20,"reused":0,"server_cert_type":0,"components":{"certificate_parse":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"rpk_parse":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"peer_auth":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"certificate_verify_verify":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"certificate_verify_sign":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"compact_payload_parse":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"root_auth":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"root_signature":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"credential_total":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"identity_validity":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"key_binding":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"spki_encode":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"spki_hash":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"merkle_proof":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"phase1_proof":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"certificate_build":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0}}}

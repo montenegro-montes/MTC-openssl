@@ -1,0 +1,59 @@
+import json,os,subprocess,tempfile
+from pathlib import Path
+from core import *
+BATCH=Path(os.environ.get('MTC_BATCH','/work/mtc/batch16-v2'))
+CHECK='/tmp/mtc-check'
+count=0
+
+def check(name,trust,mode,cert,ok):
+    global count
+    r=subprocess.run([CHECK,str(trust),str(int(mode=='landmark')),str(cert)],capture_output=True)
+    assert r.returncode in [0,1],name+': crash '+r.stderr.decode()
+    assert (r.returncode==0)==ok,name+': unexpected verification '+r.stderr.decode()
+    count+=1
+
+with tempfile.TemporaryDirectory() as temp:
+    temp=Path(temp)
+    for family in ['classic','pq']:
+        b=BATCH/family;trust=b/'trust.bin'
+        for mode in ['standalone','landmark']:
+            trust=b/('trust.bin' if mode=='landmark' else 'authority.bin')
+            cert=(b/f'{mode}-0000.der').read_bytes();outer,t=certificate_parts(cert);tbs=outer[0][2];p=outer[2][1][1:]
+            check(family+mode,trust,mode,b/f'{mode}-0000.der',True)
+            check('wrong mode',trust,'landmark' if mode=='standalone' else 'standalone',b/f'{mode}-0000.der',False)
+            # Every truncation of the MTCProof exercises the parser, including empty path for N=1.
+            variants={'leaf':certificate(mtc_tbs(cert,'32473.9',0),p),'no proof':certificate(tbs,b''),
+                      'extra proof':certificate(tbs,p+b'\0'),'trailing DER':cert+b'\0',
+                      'subtree':certificate(tbs,p[:2]+b'\xff'*6+p[8:]),'length':certificate(tbs,b'\xff\xff'+p[2:])}
+            if len(p)>18:
+                v=bytearray(p);v[16]^=1;variants['inclusion mutation']=certificate(tbs,bytes(v))
+            fields=[v[2] for v in t];fields[6]=certificate_parts((BATCH/('pq' if family=='classic' else 'classic')/f'{mode}-0000.der').read_bytes())[1][6][2]
+            variants['wrong public key']=certificate(seq(*fields),p)
+            if mode=='standalone':
+                v=bytearray(p);v[-1]^=1;variants['wrong cosignature']=certificate(tbs,bytes(v))
+                # First signature begins after extensions/start/end/path/vector/id.
+                off=16+int.from_bytes(p[14:16],'big')+2;off+=1+p[off]+2
+                v=bytearray(p);v[off]^=1;variants['wrong CA signature']=certificate(tbs,bytes(v))
+            if mode=='standalone':
+                off=16+int.from_bytes(p[14:16],'big')
+                block=p[off+2:];end=1+block[0];end+=2+int.from_bytes(block[end:end+2],'big')
+                first,second=block[:end],block[end:]
+                variants['duplicate cosigner']=certificate(tbs,p[:off]+vec(first+first+second))
+                variants['unordered cosigners']=certificate(tbs,p[:off]+vec(second+first))
+            for name,value in variants.items():
+                target=temp/'case.der';target.write_bytes(value);check(name,trust,mode,target,False)
+            for length in sorted(set([0,1,2,3,8,13,14,15,16,17,len(p)//2,len(p)-1])):
+                target=temp/'case.der';target.write_bytes(certificate(tbs,p[:length]));check('truncation',trust,mode,target,False)
+        config=(b/'trust.bin').read_bytes()
+        offset=4;offset+=1+config[offset];number=config[offset];offset+=1
+        for _ in range(number):
+            offset+=1+config[offset];offset+=2+int.from_bytes(config[offset:offset+2],'big')
+        checkpoint_hash_offset=offset+2+8+8+4+6+8
+        v=bytearray(config);v[checkpoint_hash_offset]^=1;target=temp/'checkpoint.bin';target.write_bytes(v)
+        check('modified checkpoint hash',target,'landmark',b/'landmark-0000.der',False)
+
+        for label,pos in [('wrong checkpoint',-1),('bad encoding',0)]:
+            v=bytearray(config);v[pos]^=1;target=temp/'trust.bin';target.write_bytes(v)
+            check(label,target,'landmark',b/'landmark-0000.der',False)
+        check('untrusted landmark',BATCH/('pq' if family=='classic' else 'classic')/'trust.bin','landmark',b/'landmark-0000.der',False)
+print('MTC standalone/landmark parser/verifier:',count,'PASS')

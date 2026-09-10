@@ -1,0 +1,49 @@
+tree_size,scenario,rounds,actual_proof_bytes,proof_definition,actual_encoded_proof_bytes,theoretical_compact_hash_array_bytes,theoretical_mtc_leaf0_hash_array_bytes,transport_total_bytes_median,handshake_wall_ms_median,handshake_client_cpu_ms_median,client_process_http_wall_ms_median,offline_setup_ms,client_trust_setup_ms_median
+1,classic-compact-warm,3,45,compact MTP1 encoded proof including root/header,45,0,,1032,1.535125,1.331042,20.09679099865025,13.372792000154732,0.084291
+1,classic-compact-cold,3,45,compact MTP1 encoded proof including root/header,45,0,,1162,1.627291,1.376126,19.751332998566795,13.372792000154732,0
+1,classic-mtc-experimental-standalone,3,0,MTC hash array only,176,,0,1318,0.791834,0.55725,17.02162500077975,39.07916699972702,0.828792
+1,classic-mtc-experimental-landmark,3,0,MTC hash array only,18,,0,1165,0.684125,0.448792,16.644541999994544,39.07916699972702,0.992709
+1,pq-compact-warm,3,45,compact MTP1 encoded proof including root/header,45,0,,6153,1.832709,1.407708,19.924874999560416,11.247917002037866,0.199375
+1,pq-compact-cold,3,45,compact MTP1 encoded proof including root/header,45,0,,9520,2.092042,1.610208,20.165541998721892,11.247917002037866,0
+1,pq-mtc-experimental-standalone,3,0,MTC hash array only,6650,,0,12914,1.123167,0.884792,16.36608300032094,58.506999997916864,0.792167
+1,pq-mtc-experimental-landmark,3,0,MTC hash array only,18,,0,6286,1.25175,0.518541,17.537790998176206,58.506999997916864,1.251167
+4,classic-compact-warm,3,109,compact MTP1 encoded proof including root/header,109,64,,1095,1.474292,1.268333,19.650750000437256,17.47104199966998,0.076583
+4,classic-compact-cold,3,109,compact MTP1 encoded proof including root/header,109,64,,1226,1.609959,1.373125,18.899541999417124,17.47104199966998,0
+4,classic-mtc-experimental-standalone,3,32,MTC hash array only,206,,32,1348,0.715125,0.514958,15.386916002171347,55.00324999957229,0.804667
+4,classic-mtc-experimental-landmark,3,32,MTC hash array only,50,,32,1197,0.668042,0.427125,16.293957996822428,55.00324999957229,0.952875
+4,pq-compact-warm,3,109,compact MTP1 encoded proof including root/header,109,64,,6217,2.29525,1.432,19.992083998658927,24.219667000579648,0.197167
+4,pq-compact-cold,3,109,compact MTP1 encoded proof including root/header,109,64,,9584,2.138,1.662125,20.57016600156203,24.219667000579648,0
+4,pq-mtc-experimental-standalone,3,32,MTC hash array only,6682,,32,12946,1.151791,0.894249,16.52408299923991,64.85604200133821,0.787917
+4,pq-mtc-experimental-landmark,3,32,MTC hash array only,50,,32,6318,1.11225,0.519709,16.61699999749544,64.85604200133821,1.167417
+16,classic-compact-warm,3,173,compact MTP1 encoded proof including root/header,173,128,,1161,1.555875,1.333874,19.716999999218388,39.79095899921958,0.076
+16,classic-compact-cold,3,173,compact MTP1 encoded proof including root/header,173,128,,1289,1.589042,1.363041,19.455208002909785,39.79095899921958,0
+16,classic-mtc-experimental-standalone,3,96,MTC hash array only,270,,96,1413,0.82625,0.569541,15.756083001178922,94.08054199957405,0.802916
+16,classic-mtc-experimental-landmark,3,96,MTC hash array only,114,,96,1261,0.680958,0.447083,15.647500000341097,94.08054199957405,0.976208
+16,pq-compact-warm,3,173,compact MTP1 encoded proof including root/header,173,128,,6281,2.285166,1.419208,20.220334001351148,64.2845420006779,0.205292
+16,pq-compact-cold,3,173,compact MTP1 encoded proof including root/header,173,128,,9648,1.96,1.638333,20.53462500043679,64.2845420006779,0
+16,pq-mtc-experimental-standalone,3,96,MTC hash array only,6746,,96,13010,1.261958,0.951585,17.06654099689331,79.04312499886146,0.88525
+16,pq-mtc-experimental-landmark,3,96,MTC hash array only,114,,96,6382,1.090875,0.52,16.50799999697483,79.04312499886146,1.210625
+64,classic-compact-warm,3,237,compact MTP1 encoded proof including root/header,237,192,,1225,1.538667,1.315625,19.732125001610257,178.20216600011918,0.082875
+64,classic-compact-cold,3,237,compact MTP1 encoded proof including root/header,237,192,,1352,1.568208,1.338499,19.45129199884832,178.20216600011918,0
+64,classic-mtc-experimental-standalone,3,160,MTC hash array only,335,,160,1478,0.788166,0.558791,16.307415997289354,231.14683300082106,0.85675
+64,classic-mtc-experimental-landmark,3,160,MTC hash array only,178,,160,1326,0.751833,0.495042,16.937374999542953,231.14683300082106,1.080458
+64,pq-compact-warm,3,237,compact MTP1 encoded proof including root/header,237,192,,6345,2.543541,1.407874,20.96870800232864,275.07058400078677,0.199125
+64,pq-compact-cold,3,237,compact MTP1 encoded proof including root/header,237,192,,9712,2.317458,1.75025,22.40666700163274,275.07058400078677,0
+64,pq-mtc-experimental-standalone,3,160,MTC hash array only,6810,,160,13074,1.067667,0.888874,16.29954099917086,227.4151659985364,0.85825
+64,pq-mtc-experimental-landmark,3,160,MTC hash array only,178,,160,6447,1.444333,0.533458,17.39208300205064,227.4151659985364,1.2125
+256,classic-compact-warm,3,301,compact MTP1 encoded proof including root/header,301,256,,1288,1.593333,1.358749,21.499874997971347,1244.5371670000895,0.076958
+256,classic-compact-cold,3,301,compact MTP1 encoded proof including root/header,301,256,,1416,1.604541,1.360333,20.23041600114084,1244.5371670000895,0
+256,classic-mtc-experimental-standalone,3,224,MTC hash array only,397,,224,1540,0.78175,0.563792,16.95850000032806,830.7613750002929,0.846917
+256,classic-mtc-experimental-landmark,3,224,MTC hash array only,242,,224,1390,0.744041,0.469042,18.48745800089091,830.7613750002929,1.093375
+256,pq-compact-warm,3,301,compact MTP1 encoded proof including root/header,301,256,,6409,2.586084,1.544084,26.367583999672206,915.0661239982583,0.21575
+256,pq-compact-cold,3,301,compact MTP1 encoded proof including root/header,301,256,,9776,2.077334,1.712917,20.939834001183044,915.0661239982583,0
+256,pq-mtc-experimental-standalone,3,224,MTC hash array only,6874,,224,13138,1.315292,0.940542,17.169666996778687,922.6764169980015,0.857958
+256,pq-mtc-experimental-landmark,3,224,MTC hash array only,242,,224,6511,1.75175,0.661749,19.983207999757724,922.6764169980015,1.392083
+1024,classic-compact-warm,3,365,compact MTP1 encoded proof including root/header,365,320,,1352,1.469625,1.261667,20.192457999655744,3920.7930020020285,0.075167
+1024,classic-compact-cold,3,365,compact MTP1 encoded proof including root/header,365,320,,1481,1.578,1.359542,19.540249999408843,3920.7930020020285,0
+1024,classic-mtc-experimental-standalone,3,288,MTC hash array only,462,,288,1605,0.743292,0.535083,16.076459000032628,4081.330793000234,0.781333
+1024,classic-mtc-experimental-landmark,3,288,MTC hash array only,306,,288,1454,0.648667,0.425666,16.4327089987637,4081.330793000234,0.936709
+1024,pq-compact-warm,3,365,compact MTP1 encoded proof including root/header,365,320,,6473,1.908333,1.443332,23.753625002427725,6213.0876279989025,0.238833
+1024,pq-compact-cold,3,365,compact MTP1 encoded proof including root/header,365,320,,9840,2.404833,1.611249,21.286458999384195,6213.0876279989025,0
+1024,pq-mtc-experimental-standalone,3,288,MTC hash array only,6938,,288,13202,1.191375,0.958585,16.881250001461012,4021.5411690005567,0.821667
+1024,pq-mtc-experimental-landmark,3,288,MTC hash array only,306,,288,6576,1.581958,0.482416,17.337457997200545,4021.5411690005567,1.1585

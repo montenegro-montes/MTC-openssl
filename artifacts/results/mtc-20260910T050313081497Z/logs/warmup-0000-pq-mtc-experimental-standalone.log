@@ -1,0 +1,304 @@
+CONNECTED(00000003)
+---
+Certificate chain
+ 0 s:CN=server
+   i:1.3.6.1.4.1.44363.47.1=32473.2
+   a:PKEY: ML-DSA-65, 15616 (bit); sigalg: undefined
+   v:NotBefore: Sep  9 13:05:57 2026 GMT; NotAfter: Oct  9 13:05:57 2026 GMT
+---
+Server certificate
+-----BEGIN CERTIFICATE-----
+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
+AAAAAAAAAAAAAgQJCxEc
+-----END CERTIFICATE-----
+subject=CN=server
+issuer=1.3.6.1.4.1.44363.47.1=32473.2
+---
+No client certificate CA names sent
+Peer signature type: mldsa65
+Peer Temp Key: X25519, 253 bits
+---
+SSL handshake has read 12663 bytes and written 411 bytes
+Verification: OK
+---
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+Protocol: TLSv1.3
+Server public key is 15616 bit
+This TLS version forbids renegotiation.
+Compression: NONE
+Expansion: NONE
+No ALPN negotiated
+Early data was not sent
+Verify return code: 0 (ok)
+---
+HTTP/1.0 200 ok
+Content-type: text/html
+
+<HTML><BODY BGCOLOR="#ffffff">
+<pre>
+
+s_server -accept 4443 -tls1_3 -groups X25519 -ciphersuites TLS_AES_256_GCM_SHA384 -cert /work/mtc/scaling-20260910/mtc-64/pq/standalone-0000.pem -key /work/certs/pq/server.key -num_tickets 0 -www -quiet -lab_metrics -mtc_id 32473.2 
+This TLS version forbids renegotiation.
+Ciphers supported in s_server binary
+TLSv1.3    :TLS_AES_256_GCM_SHA384    TLSv1.2    :ECDHE-ECDSA-AES256-GCM-SHA384 
+TLSv1.2    :ECDHE-RSA-AES256-GCM-SHA384 TLSv1.2    :DHE-RSA-AES256-GCM-SHA384 
+TLSv1.2    :ECDHE-ECDSA-CHACHA20-POLY1305 TLSv1.2    :ECDHE-RSA-CHACHA20-POLY1305 
+TLSv1.2    :DHE-RSA-CHACHA20-POLY1305 TLSv1.2    :ECDHE-ECDSA-AES128-GCM-SHA256 
+TLSv1.2    :ECDHE-RSA-AES128-GCM-SHA256 TLSv1.2    :DHE-RSA-AES128-GCM-SHA256 
+TLSv1.2    :ECDHE-ECDSA-AES256-SHA384 TLSv1.2    :ECDHE-RSA-AES256-SHA384   
+TLSv1.2    :DHE-RSA-AES256-SHA256     TLSv1.2    :ECDHE-ECDSA-AES128-SHA256 
+TLSv1.2    :ECDHE-RSA-AES128-SHA256   TLSv1.2    :DHE-RSA-AES128-SHA256     
+TLSv1.0    :ECDHE-ECDSA-AES256-SHA    TLSv1.0    :ECDHE-RSA-AES256-SHA      
+SSLv3      :DHE-RSA-AES256-SHA        TLSv1.0    :ECDHE-ECDSA-AES128-SHA    
+TLSv1.0    :ECDHE-RSA-AES128-SHA      SSLv3      :DHE-RSA-AES128-SHA        
+TLSv1.2    :RSA-PSK-AES256-GCM-SHA384 TLSv1.2    :DHE-PSK-AES256-GCM-SHA384 
+TLSv1.2    :RSA-PSK-CHACHA20-POLY1305 TLSv1.2    :DHE-PSK-CHACHA20-POLY1305 
+TLSv1.2    :ECDHE-PSK-CHACHA20-POLY1305 TLSv1.2    :AES256-GCM-SHA384         
+TLSv1.2    :PSK-AES256-GCM-SHA384     TLSv1.2    :PSK-CHACHA20-POLY1305     
+TLSv1.2    :RSA-PSK-AES128-GCM-SHA256 TLSv1.2    :DHE-PSK-AES128-GCM-SHA256 
+TLSv1.2    :AES128-GCM-SHA256         TLSv1.2    :PSK-AES128-GCM-SHA256     
+TLSv1.2    :AES256-SHA256             TLSv1.2    :AES128-SHA256             
+TLSv1.0    :ECDHE-PSK-AES256-CBC-SHA384 TLSv1.0    :ECDHE-PSK-AES256-CBC-SHA  
+SSLv3      :SRP-RSA-AES-256-CBC-SHA   SSLv3      :SRP-AES-256-CBC-SHA       
+TLSv1.0    :RSA-PSK-AES256-CBC-SHA384 TLSv1.0    :DHE-PSK-AES256-CBC-SHA384 
+SSLv3      :RSA-PSK-AES256-CBC-SHA    SSLv3      :DHE-PSK-AES256-CBC-SHA    
+SSLv3      :AES256-SHA                TLSv1.0    :PSK-AES256-CBC-SHA384     
+SSLv3      :PSK-AES256-CBC-SHA        TLSv1.0    :ECDHE-PSK-AES128-CBC-SHA256 
+TLSv1.0    :ECDHE-PSK-AES128-CBC-SHA  SSLv3      :SRP-RSA-AES-128-CBC-SHA   
+SSLv3      :SRP-AES-128-CBC-SHA       TLSv1.0    :RSA-PSK-AES128-CBC-SHA256 
+TLSv1.0    :DHE-PSK-AES128-CBC-SHA256 SSLv3      :RSA-PSK-AES128-CBC-SHA    
+SSLv3      :DHE-PSK-AES128-CBC-SHA    SSLv3      :AES128-SHA                
+TLSv1.0    :PSK-AES128-CBC-SHA256     SSLv3      :PSK-AES128-CBC-SHA        
+---
+Ciphers common between both SSL end points:
+TLS_AES_256_GCM_SHA384
+Signature Algorithms: id-ml-dsa-65:id-ml-dsa-87:id-ml-dsa-44:ECDSA+SHA256:ECDSA+SHA384:ECDSA+SHA512:ed25519:ed448:ecdsa_brainpoolP256r1_sha256:ecdsa_brainpoolP384r1_sha384:ecdsa_brainpoolP512r1_sha512:rsa_pss_pss_sha256:rsa_pss_pss_sha384:rsa_pss_pss_sha512:RSA-PSS+SHA256:RSA-PSS+SHA384:RSA-PSS+SHA512:RSA+SHA256:RSA+SHA384:RSA+SHA512:p256_mldsa44:rsa3072_mldsa44:p384_mldsa65:p521_mldsa87:falcon512:p256_falcon512:rsa3072_falcon512:falconpadded512:p256_falconpadded512:rsa3072_falconpadded512:falcon1024:p521_falcon1024:falconpadded1024:p521_falconpadded1024:sphincssha2128fsimple:p256_sphincssha2128fsimple:rsa3072_sphincssha2128fsimple:sphincssha2128ssimple:p256_sphincssha2128ssimple:rsa3072_sphincssha2128ssimple:sphincssha2192fsimple:p384_sphincssha2192fsimple:sphincsshake128fsimple:p256_sphincsshake128fsimple:rsa3072_sphincsshake128fsimple:mayo1:p256_mayo1:mayo2:p256_mayo2:mayo3:p384_mayo3:mayo5:p521_mayo5:CROSSrsdp128balanced:OV_Ip_pkc:p256_OV_Ip_pkc:OV_Ip_pkc_skc:p256_OV_Ip_pkc_skc:snova2454:p256_snova2454:snova2454esk:p256_snova2454esk:snova37172:p256_snova37172:snova2455:p384_snova2455:snova2965:p521_snova2965
+Shared Signature Algorithms: id-ml-dsa-65:id-ml-dsa-87:id-ml-dsa-44:ECDSA+SHA256:ECDSA+SHA384:ECDSA+SHA512:ed25519:ed448:ecdsa_brainpoolP256r1_sha256:ecdsa_brainpoolP384r1_sha384:ecdsa_brainpoolP512r1_sha512:rsa_pss_pss_sha256:rsa_pss_pss_sha384:rsa_pss_pss_sha512:RSA-PSS+SHA256:RSA-PSS+SHA384:RSA-PSS+SHA512:RSA+SHA256:RSA+SHA384:RSA+SHA512:p256_mldsa44:rsa3072_mldsa44:p384_mldsa65:p521_mldsa87:falcon512:p256_falcon512:rsa3072_falcon512:falconpadded512:p256_falconpadded512:rsa3072_falconpadded512:falcon1024:p521_falcon1024:falconpadded1024:p521_falconpadded1024:sphincssha2128fsimple:p256_sphincssha2128fsimple:rsa3072_sphincssha2128fsimple:sphincssha2128ssimple:p256_sphincssha2128ssimple:rsa3072_sphincssha2128ssimple:sphincssha2192fsimple:p384_sphincssha2192fsimple:sphincsshake128fsimple:p256_sphincsshake128fsimple:rsa3072_sphincsshake128fsimple:mayo1:p256_mayo1:mayo2:p256_mayo2:mayo3:p384_mayo3:mayo5:p521_mayo5:CROSSrsdp128balanced:OV_Ip_pkc:p256_OV_Ip_pkc:OV_Ip_pkc_skc:p256_OV_Ip_pkc_skc:snova2454:p256_snova2454:snova2454esk:p256_snova2454esk:snova37172:p256_snova37172:snova2455:p384_snova2455:snova2965:p521_snova2965
+Supported groups: x25519
+Shared groups: x25519
+---
+New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384
+SSL-Session:
+    Protocol  : TLSv1.3
+    Cipher    : TLS_AES_256_GCM_SHA384
+    Session-ID: 
+    Session-ID-ctx: 01000000
+    Resumption PSK: 
+    PSK identity: None
+    PSK identity hint: None
+    SRP username: None
+    Start Time: 1789016593
+    Timeout   : 7200 (sec)
+    Verify return code: 0 (ok)
+    Extended master secret: no
+    Max Early Data: 0
+---
+   0 items in the session cache
+   0 client connects (SSL_connect())
+   0 client renegotiates (SSL_connect())
+   0 client connects that finished
+   2 server accepts (SSL_accept())
+   0 server renegotiates (SSL_accept())
+   1 server accepts that finished
+   0 session cache hits
+   0 session cache misses
+   0 session cache timeouts
+   0 callback cache hits
+   0 cache full overflows (128 allowed)
+---
+no client certificate available
+</pre></BODY></HTML>
+
+closed
+MTC_SETUP {"mtc_setup_ms":0.827750,"mtc_trust_validation_ms":0.000000,"mtc_predistributed_bytes":0,"mtc_trust_file_bytes":3999}
+Connecting to 172.20.0.2
+MTC verification: OK
+MTC_VERIFY {"mtc_credential_auth_ms":0.430458}
+PROFILE_METRICS {"client_random":"d66b6c0408995989c583b02a561f1889775730d942fcdc18d7add16828dc7788","side":"client","detail":0,"profile_valid":1,"handshake_wall_ms":1.545416,"handshake_cpu_ms":0.960832,"transport_read_bytes":12663,"transport_written_bytes":411,"handshake_read_bytes":12564,"handshake_written_bytes":378,"certificate_message_bytes":9056,"certificate_verify_message_bytes":3317,"encrypted_extensions_bytes":17,"reused":0,"server_cert_type":0,"components":{"certificate_parse":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"rpk_parse":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"peer_auth":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"certificate_verify_verify":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"certificate_verify_sign":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"compact_payload_parse":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"root_auth":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"root_signature":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"credential_total":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"identity_validity":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"key_binding":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"spki_encode":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"spki_hash":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"merkle_proof":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"phase1_proof":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0},"certificate_build":{"wall_ms":0.000000,"cpu_ms":0.000000,"calls":0}}}
