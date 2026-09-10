@@ -48,9 +48,11 @@ are architectural; their trust and transparency models are not equivalent.
 | Controlled latency | Completed | Additional RTT from 0 to 200 ms |
 | Bandwidth constrained | Infrastructure prepared | Independent manual campaign |
 | Packet loss | Completed | Six loss levels at 50 ms RTT; latency, reliability, and TCP retransmission activity |
-| Combined network conditions | Infrastructure prepared | Baseline, WAN, constrained, and adverse profiles |
+| Combined network conditions | Completed | Baseline, WAN, constrained, and adverse profiles; 3,600 validated measurements |
 
-Generated data live under `artifacts/results/` and are excluded from Git.
+Generated data live under `artifacts/results/` and are excluded from Git by
+default. Selected validated summaries, metadata, and figures may be committed
+without raw logs, private keys, or large local sample directories.
 Campaigns record the commit, Git state, image, environment, hashes, effective
 configuration, and validation evidence.
 
@@ -74,6 +76,32 @@ BIO bytes are not network-wire bytes.
 - Validated experiment commit: `d6b98c7faf728e7627c6b7292a198548c38f9de4`
 - Postprocessing idempotency fix: `795c553d1d877b6f6d55b1131255592183b7e6a4`
 - Local result directory: `artifacts/results/network-loss-20260910-212643/`
+
+### Completed combined-network campaign
+
+The representative combined experiment completed 20 independent campaigns:
+five repetitions of baseline, WAN, constrained, and adverse profiles. Each
+campaign measured 30 randomized rounds across six PQ authentication scenarios,
+for **3,600 measured TLS handshakes and 600 warmups**. Every measured handshake
+completed successfully under the experiment's 30-second timeout.
+
+The profiles jointly apply symmetric per-egress delay, bandwidth limiting, and
+random loss. Additional RTT ranges from 10 to 100 ms, configured bandwidth from
+unlimited to 1 Mbit/s, and per-egress loss from 0% to 2%. These variables
+interact; isolated latency, bandwidth, and loss effects must not be added to
+predict the combined profiles.
+
+PQ X.509 used 9,572 TLS authentication bytes, Compact warm 6,281 bytes, and MTC
+landmark 6,382 bytes in every profile. Median-of-campaign-median handshake wall
+times for X.509 / Compact warm / MTC landmark were 12.58 / 13.53 / 12.45 ms at
+baseline and 175.30 / 148.72 / 148.98 ms under the adverse 100 ms RTT, 1 Mbit/s,
+2% per-egress-loss profile. These controlled Docker observations do not imply
+universal performance or loss-resilience properties.
+
+- Execution and reproduction: [combined-network campaign](campaigns/combined_network_campaign/README.md)
+- Measurement-source commit: `4a5cf75ea674095f52c7ee759c8b43c0080a1096`
+- Results commit: `6fa2a626f417db5fc7f31f26f2cff9096a6176fb`
+- Published summaries and figures: [`artifacts/results/combined-network-20260911-001540/`](artifacts/results/combined-network-20260911-001540/)
 
 ## Repository layout
 
@@ -263,6 +291,7 @@ bootstrap inference uses independent campaigns and retains outliers.
 
 ## Documentation
 
+- [Certificate and credential format comparison](docs/certificate-formats-comparison.md)
 - [Initial TLS-Merkle laboratory](docs/tls-merkle-laboratory.md)
 - [TLS-MT protocol](docs/tls-mt.md)
 - [Compact Merkle protocol](docs/compact-protocol.md)
