@@ -88,7 +88,7 @@ def execute(root,mode):
                 cb=counters(driver,'CLIENT_BEFORE');ca=counters(driver,'CLIENT_AFTER');tcp_server_after=parse_nstat(subprocess.check_output(['docker','exec',container,'nstat','-az','TcpRetransSegs','TcpOutSegs','TcpInSegs'],text=True));tcp={'client':delta(cb,ca),'server':delta(tcp_server_before,tcp_server_after)};save(directory/'tcp-counters.json',tcp)
                 validation={'passed':True,**probe,'configured_rtt_ms':RTT_MS,'loss_target_percent':loss,'client_qdisc':client_qdisc,'server_qdisc':server_after,'unexpected_bandwidth_limiter':False,'qdisc_dropped_packets':qdisc_drops(client_after)+qdisc_drops(server_after),'successful_attempts':len(successes),'failed_attempts':len(failures),'timeout_seconds':HANDSHAKE_TIMEOUT_SECONDS,'low_loss_note':'qdisc configuration is authoritative; finite probes need not observe exactly the target probability'};save(directory/'validation.json',validation)
                 rec.update(state='complete',measured_attempts=runs*6,warmup_attempts=warmups*6,successful_attempts=len(successes),failed_attempts=len(failures),**probe,tcp_counters=tcp,finished_utc=datetime.datetime.now(datetime.timezone.utc).isoformat());save(status_path,status);print(cid,'PASS',len(successes),'successes',len(failures),'failures',flush=True)
-        status['passed']=True;save(status_path,status);hashes(root)
+        hashes(root);status['passed']=True;save(status_path,status)
     except BaseException as error:
         status['failed_campaign']=status['campaigns'][-1]['campaign_id'] if status['campaigns'] else None;status['error']=repr(error)
         if status['campaigns']:status['campaigns'][-1]['state']='invalid'
