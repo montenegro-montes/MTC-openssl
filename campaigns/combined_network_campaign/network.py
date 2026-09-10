@@ -36,9 +36,10 @@ def parse_ping(text, sent):
     n=len(values); median=values[n//2] if n%2 else (values[n//2-1]+values[n//2])/2
     return {"probe_packets_sent":sent,"probe_packets_received":int(m.group(2)),"loss_measured_percent":float(m.group(3)),"measured_rtt_min_ms":values[0],"measured_rtt_median_ms":median,"measured_rtt_max_ms":values[-1]}
 def parse_iperf(text):
-    matches=re.findall(r'([0-9.]+)\s+Mbits/sec',text)
+    matches=re.findall(r'([0-9.]+)\s+([KMG])bits/sec',text)
     if not matches: raise ValueError("missing iperf throughput")
-    return float(matches[-1])
+    value,unit=matches[-1]
+    return float(value)*{"K":0.001,"M":1.0,"G":1000.0}[unit]
 def section(text,start,end):
     m=re.search(re.escape(start)+r'\n(.*?)'+re.escape(end),text,re.S)
     if not m: raise ValueError("missing section "+start)

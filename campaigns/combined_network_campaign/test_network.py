@@ -19,5 +19,7 @@ else:
     raise AssertionError('non-zero profile accepted omitted loss')
 assert len(commands(PROFILES['baseline']))==1 and len(commands(PROFILES['wan']))==2
 assert parse_iperf('[SUM] 0-2 sec 4 MBytes 19.7 Mbits/sec receiver')==19.7
+assert parse_iperf('[  5] 0.00-2.00 sec 263 MBytes 1.10 Gbits/sec receiver')==1100.0
+assert parse_iperf('[  5] 0.00-2.00 sec 125 KBytes 500 Kbits/sec receiver')==0.5
 assert parse_ping('2 packets transmitted, 2 received, 0% packet loss\n64 bytes time=9.0 ms\n64 bytes time=11.0 ms',2)['measured_rtt_median_ms']==10
 print('PASS network unit tests')
