@@ -2,6 +2,10 @@
 import csv,json,os,subprocess,sys
 from pathlib import Path
 
+PAPER_DIR='/opt/paper'
+if PAPER_DIR not in sys.path:
+    sys.path.insert(0,PAPER_DIR)
+
 failures=[]
 def write_failure(scenario,round_number,order,warm,result):
     reason='timeout' if result.returncode==124 else ('tls_error' if result.returncode else 'measurement_error')
