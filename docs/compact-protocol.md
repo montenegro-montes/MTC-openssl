@@ -2,7 +2,7 @@
 
 ## Separación de versiones
 
-`Dockerfile.compact` parte de `mt-tls-lab:local` y construye un tercer ejecutable,
+`docker/Dockerfile.compact` parte de `mt-tls-lab:local` y construye un tercer ejecutable,
 `/opt/openssl-compact/bin/openssl`. Copia los fuentes a
 `/opt/src/openssl-compact`, aplica `compact/patch.py` y conserva los ejecutables
 original y Merkle adicional en sus ubicaciones previas. No modifica libssl.

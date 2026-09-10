@@ -1,0 +1,17 @@
+services:
+  openssl-mtc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args: # Get arguments from .env file
+        OPENSSL_VERSION: ${OPENSSL_VERSION}
+        OPENSSL_DIR: ${OPENSSL_DIR}
+        WORKDIR: ${WORKDIR}
+    image: ${IMAGE_NAME}:latest
+    container_name: ${CONTAINER_NAME}
+    volumes:
+      - ./config:${WORKDIR}/config:ro
+      - ./scripts:${WORKDIR}/scripts:ro
+      - ./output:${WORKDIR}/output:rw
+      
+    command: tail -f /dev/null # Keep the container running

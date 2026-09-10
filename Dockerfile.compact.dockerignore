@@ -1,7 +1,0 @@
-**
-!compact/
-!compact/*.c
-!compact/*.h
-!compact/*.py
-!compact/*.sh
-!Dockerfile.compact

@@ -1,5 +1,0 @@
-**
-!Dockerfile.paper
-!paper_campaign/
-!paper_campaign/*.py
-!paper_campaign/*.sh

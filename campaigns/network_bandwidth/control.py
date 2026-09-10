@@ -1,0 +1,42 @@
+"""Initialize, gate and audit one bandwidth-only result directory."""
+import argparse,datetime,hashlib,json,shutil,subprocess
+from pathlib import Path
+
+REPO=Path(__file__).resolve().parents[2]
+IMAGE='mt-tls-network:latency'
+BASE='sha256:4b04891fc50251a422c3357f35f355151ea50150d0e678dadde8c8f97b968b43'
+def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
+def load(path):return json.loads(path.read_text())
+def save(path,value):path.write_text(json.dumps(value,indent=2)+'\n')
+def verify(root):
+    counts={}
+    for name in ['baseline-source-sha256.json','fixture-sha256.json']:
+        values=load(root/name)
+        for path,digest in values.items():
+            if not (REPO/path).is_file() or sha(REPO/path)!=digest:raise RuntimeError('Preservation mismatch: '+path)
+        counts[name]=len(values)
+    return counts
+def main():
+    p=argparse.ArgumentParser();p.add_argument('stage',choices=['init','tests','audit']);p.add_argument('root',type=Path);a=p.parse_args();root=a.root.resolve()
+    if a.stage=='init':
+        if root.exists():raise SystemExit('Refusing to overwrite output')
+        root.mkdir();tracked=subprocess.check_output(['git','ls-files','-z'],cwd=REPO).decode().split('\0')
+        save(root/'baseline-source-sha256.json',{s:sha(REPO/s) for s in tracked if s and (REPO/s).is_file()})
+        files=[f for b in ['artifacts/certs','artifacts/compact/batch16','artifacts/mtc/batch16-v2'] for f in (REPO/b).rglob('*') if f.is_file()]
+        save(root/'fixture-sha256.json',{str(f.relative_to(REPO)):sha(f) for f in files})
+        save(root/'metadata.json',{'experiment':'bandwidth-limited','git_commit_before':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip(),'git_status_before':subprocess.check_output(['git','status','--short'],cwd=REPO,text=True),'base_image_id':BASE,'rtt_targets_ms':[10,50,100],'bandwidth_targets_mbps':[100,20,10,5,1],'throughput_tolerance_percent':15,'rate_scope':'per direction; same TBF rate on client and server egress','queue_latency_ms':1000,'status':'initialized','git_commit_after_experiment':None})
+    elif a.stage=='tests':
+        image=json.loads(subprocess.check_output(['docker','image','inspect',IMAGE],text=True))[0]
+        with (root/'tests.log').open('w') as log:r=subprocess.run(['docker','run','--rm','--network','none','-v',str(REPO/'artifacts')+':/work:ro',image['Id'],'sh','/opt/paper/tests.sh'],stdout=log,stderr=subprocess.STDOUT)
+        save(root/'tests-status.json',{'passed':r.returncode==0,'exit_code':r.returncode,'image_id':image['Id'],'base_image_id':BASE});save(root/'images.json',{'network_image':image,'base_image':json.loads(subprocess.check_output(['docker','image','inspect',BASE],text=True))[0]});(root/'environment.json').write_text(subprocess.check_output(['docker','info','--format','{{json .}}'],text=True));verify(root)
+        if r.returncode:raise SystemExit('Regression failure')
+    else:
+        if not load(root/'campaign-status.json')['passed'] or not load(root/'analysis-status.json')['passed']:raise SystemExit('Experiment incomplete')
+        counts=verify(root);snapshot=root/'source';snapshot.mkdir();shutil.copytree(REPO/'campaigns/network_bandwidth',snapshot/'campaigns/network_bandwidth',ignore=shutil.ignore_patterns('__pycache__'));(snapshot/'docker').mkdir();shutil.copyfile(REPO/'docker/compose.network-bandwidth.yaml',snapshot/'docker/compose.network-bandwidth.yaml')
+        save(root/'source-sha256.json',{str(f.relative_to(snapshot)):sha(f) for f in snapshot.rglob('*') if f.is_file()})
+        active=subprocess.check_output(['docker','ps','--filter','label=com.docker.compose.project=mtbandwidth','--format','{{.ID}}'],text=True).strip()
+        if active:raise RuntimeError('Bandwidth containers remain active')
+        save(root/'preservation-after.json',{'passed':True,'checked_files':counts,'protocol_source_changed':False,'containers_stopped':True,'completed_utc':datetime.datetime.now(datetime.timezone.utc).isoformat()})
+        meta=load(root/'metadata.json');meta.update(status='complete',network_image_id=load(root/'tests-status.json')['image_id'],protocol_source_changed=False);save(root/'metadata.json',meta)
+    print(a.stage,'PASS',root)
+if __name__=='__main__':main()

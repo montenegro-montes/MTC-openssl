@@ -1,106 +1,101 @@
-# Laboratorio TLS y árboles de Merkle
+# TLS 1.3 con autenticación poscuántica y árboles de Merkle
 
-Entorno inicial para comparar TLS 1.3 con autenticación X.509 clásica y
-poscuántica, con una variante experimental que añade comprobación Merkle. El código recibido en `C/`
-y `Bash/` se conserva. **La comprobación Merkle ya está integrada en TLS 1.3, además de X.509.
-Todavía no sustituye certificados ni reduce los bytes transmitidos.**
+Laboratorio reproducible para estudiar el coste temporal y el tamaño de distintas representaciones de autenticación en TLS 1.3. El proyecto compara certificados X.509, certificados poscuánticos, claves públicas sin certificado y dos construcciones experimentales basadas en árboles de Merkle.
 
-## Entorno
+El objetivo científico es determinar si Compact Merkle y MTC reducen los bytes de autenticación de certificados poscuánticos y cómo cambian los tiempos de conexión cuando se introducen latencia, ancho de banda limitado y pérdida de paquetes.
 
-Docker Desktop/Engine con Compose. La imagen compila OpenSSL 3.5.8 LTS,
-liboqs 0.14.0 y oqs-provider 0.10.0. Los fuentes de OpenSSL quedan disponibles en
-`/opt/src/openssl`, incluidos `apps/s_client.c`, `apps/s_server.c` y `ssl/`.
-Se guardan los commits de los tres proyectos en la imagen. Las versiones están
-fijadas por etiquetas; la base Debian y los paquetes apt no están congelados por
-digest/versiones, por lo que esto no garantiza builds idénticos bit a bit.
+## Variantes evaluadas
 
-OpenSSL >=3.5 proporciona ML-DSA y ML-KEM de forma nativa; OQS desactiva sus
-implementaciones duplicadas. Instalar OQS no significa que ML-DSA use ese
-proveedor: en estas pruebas usa el proveedor `default`.
-Fuentes: [OpenSSL](https://openssl-library.org/source/),
-[OQS](https://github.com/open-quantum-safe/oqs-provider),
-[versiones OQS](https://openquantumsafe.org/applications/tls.html).
+La configuración controlada fija TLS 1.3, X25519, `TLS_AES_256_GCM_SHA384`, autenticación exclusiva del servidor y ausencia de tickets o reanudación. La autenticación poscuántica utiliza ML-DSA-65; X25519 se conserva para no mezclar el efecto de la representación de certificados con un cambio del intercambio de claves.
 
-## Ejecución
+| Familia | Escenario | Función |
+|---|---|---|
+| X.509 | `classic`, `pq` | Referencias clásica y poscuántica |
+| RPK | `pq-rpk` | Control del coste de representar únicamente la clave pública |
+| Compact Merkle | `pq-compact-warm`, `pq-compact-cold` | Credencial compacta y prueba Merkle, con confianza predistribuida o validada durante la conexión |
+| MTC | `pq-mtc-experimental-landmark`, `pq-mtc-experimental-standalone` | Implementación experimental de Merkle Tree Certificates |
 
-```sh
-docker compose build
-docker compose run --rm setup
-docker compose up -d server
-docker compose run --rm client
-# Repeticiones clásicas (servidor ya arrancado):
-docker compose run --rm client python3 /opt/lab/benchmark.py --runs 30
-# Cambiar servidor y cliente a certificados ML-DSA-65:
-SCENARIO=pq docker compose up -d --force-recreate server
-SCENARIO=pq docker compose run --rm client
-SCENARIO=pq docker compose run --rm client python3 /opt/lab/benchmark.py --runs 30
-docker compose down
+MTC se identifica siempre como **MTC-experimental** y tiene como objetivo `draft-ietf-plants-merkle-tree-certs-05`. Las comparaciones entre X.509, Compact y MTC son arquitectónicas; no implican que sus modelos de confianza y transparencia sean equivalentes.
+
+## Estado experimental
+
+| Fase | Estado | Finalidad |
+|---|---|---|
+| Laboratorio TLS/X.509/PQ/Merkle inicial | Implementado y validado | Integración funcional con OpenSSL `s_client` y `s_server` |
+| Comparación controlada N=16 | Completada | Tamaño, wall time, CPU y costes de confianza |
+| Escalado de población Merkle | Completada | Tamaños de árbol 1, 4, 16, 64, 256 y 1024 |
+| Latencia controlada | Completada | RTT adicional de 0 a 200 ms |
+| Ancho de banda limitado | Infraestructura preparada | Campaña manual independiente |
+| Pérdida de paquetes | Infraestructura preparada | Campaña manual con fallos y timeouts contabilizados |
+| Condiciones de red combinadas | Infraestructura preparada | Perfiles baseline, WAN, constrained y adverse |
+
+Los resultados generados viven en `artifacts/results/` y están excluidos de Git por su tamaño y porque el árbol de artefactos contiene material criptográfico local. Cada campaña conserva commit, estado Git, imagen, entorno, hashes, configuración efectiva y evidencia de validación.
+
+## Organización del repositorio
+
+```text
+.
+├── campaigns/       campañas, análisis, validadores y documentación de ejecución
+├── docker/          Dockerfiles, Compose y configuración de OpenSSL
+├── artifacts/       certificados, claves, fixtures y resultados locales ignorados
+├── compact/         credencial Compact Merkle
+├── mtc/             implementación MTC-experimental
+├── integration/     formato wire e integración Merkle con OpenSSL
+├── profiling/       instrumentación temporal detallada
+├── codigoOriginal/  código C, scripts Bash y prototipo MTC recibidos
+├── tests/           pruebas de integración TLS
+├── scripts/         automatización común
+└── docs/            protocolo, metodología, resultados y laboratorio inicial
 ```
 
-Esperar al mensaje de escucha del servidor (`docker compose logs server`) antes
-de lanzar el cliente. El puerto se publica solo en `127.0.0.1:4433`. Los servicios
-usan una misma imagen en contenedores separados. `artifacts/` contiene claves
-locales de laboratorio, certificados y resultados; no se incluye en la imagen ni
-en nuevos archivos Git. Setup conserva directorios de certificados existentes;
-los certificados caducan a los 30 días. Para regenerar, guardar el directorio
-anterior con otro nombre antes de ejecutar setup.
+Los puntos de entrada de cada experimento están en [campaigns/](campaigns/README.md). Las imágenes y servicios disponibles se describen en [docker/](docker/README.md). La documentación del primer laboratorio se conserva en [docs/tls-merkle-laboratory.md](docs/tls-merkle-laboratory.md). `codigoOriginal/` se mantiene separado del desarrollo activo para conservar claramente la procedencia del código recibido.
 
-La CA se distribuye al cliente fuera de TLS; el servidor envía solo el certificado
-hoja. Se verifican cadena, hostname y errores. No hay autenticación de cliente.
-En ambos escenarios se fija TLS 1.3, X25519, TLS_AES_256_GCM_SHA384 y sin tickets.
-`pq` estudia **autenticación poscuántica con intercambio clásico**, no TLS
-íntegramente poscuántico. Para un experimento adicional, establecer
-`GROUPS_TLS=X25519MLKEM768` tanto al recrear el servidor como al lanzar el cliente.
-No mezclar ese cambio con el efecto de los certificados en la comparación base.
+## Inicio rápido
 
-## Mediciones
-
-`artifacts/results/<fecha>-<escenario>/` contiene CSV, logs y versiones.
-El tiempo es el del proceso cliente completo (arranque, conexión, handshake,
-petición HTTP y cierre), **no tiempo puro de handshake**. Los bytes son los
-contadores de handshake que imprime s_client, no bytes Ethernet/IP/TCP ni tamaño
-exclusivo del mensaje Certificate. El tamaño DER corresponde solo a la hoja.
-Una muestra con fallo aborta; los logs permiten comprobar protocolo y algoritmos.
-Para el estudio final: instrumentar el handshake, separar calentamiento, alternar
-el orden de escenarios, registrar CPU/arquitectura y recursos Docker, y capturar
-tráfico si se necesitan tamaños sobre la red. No inferir resultados científicos
-con una única ejecución.
-
-## Código Merkle recibido
+Los comandos se ejecutan desde la raíz del repositorio. Para construir y validar el laboratorio inicial:
 
 ```sh
-docker compose run --rm client /opt/mt/bin/merkle_tests
-docker compose run --rm client /opt/mt/bin/merkle_mtc_tests /work/certs/classic
+docker compose -f docker/compose.yaml build
+docker compose -f docker/compose.yaml run --rm setup
+docker compose -f docker/compose.yaml up -d server
+docker compose -f docker/compose.yaml run --rm client
+docker compose -f docker/compose.yaml down
 ```
 
-Los ejecutables se recompilan para Linux; los binarios macOS originales no se
-copian. Son demostraciones: algunos retornos originales no reflejan errores
-(por ejemplo `mtc_tests` devuelve 1 al tener éxito). No son una suite automatizada
-fiable por su código de salida.
+La cadena de imágenes experimentales se construye por etapas:
 
-## X.509 + comprobación Merkle
-
-```sh
-# Setup también genera raíces y pruebas conservando los certificados existentes.
-docker compose run --rm setup
-SCENARIO=pq-mt docker compose up -d --force-recreate server
-SCENARIO=pq-mt docker compose run --rm client
-SCENARIO=pq-mt docker compose run --rm client python3 /opt/lab/benchmark.py --runs 30
-docker compose down
-# Tests (no necesitan un servicio server arrancado):
-docker compose run --rm client /opt/mt/bin/test_wire
-docker compose run --rm client python3 /opt/mt/tests/test_tls.py
+```text
+mt-tls-lab:local
+  └── mt-tls-compact:local
+      └── mt-tls-profile:local
+          └── mt-tls-mtc:local
+              └── mt-tls-paper:local
+                  └── mt-tls-network:latency
 ```
 
-Usar `classic-mt` para ECDSA + Merkle. Esperar al servidor antes de lanzar el
-cliente. El cliente debe completar la conexión y mostrar `Merkle verification:
-OK (X.509 also required)`. Una prueba ausente o incorrecta aborta el handshake.
+No se deben mezclar resultados producidos por commits o imágenes distintas. Antes de lanzar una campaña, siga su README, cree un directorio nuevo bajo `artifacts/results/`, ejecute los tests y el preflight, y compruebe las condiciones efectivas de red. Los smoke tests se almacenan separados y no forman parte del análisis principal.
 
-Se mantienen dos ejecutables: `/opt/openssl/bin/openssl` original y
-`/opt/openssl-mt/bin/openssl` con `s_client -merkle_root` y
-`s_server -merkle_proof`. El cliente Merkle exige `-verify_hostname` o
-`-verify_ip`, además de una CA válida y la raíz configurada fuera de banda.
+## Mediciones e interpretación
 
-Consultar [protocolo, formato y límites de TLS-MT](docs/tls-mt.md).
-Esta primera etapa mide el sobrecoste de añadir Merkle; la representación compacta
-que permita ahorrar bytes sigue pendiente.
+Las campañas distinguen:
+
+- bytes de los mensajes TLS observados por los BIO instrumentados;
+- tamaño de credenciales, pruebas, firmas y confianza predistribuida;
+- tiempo de pared del handshake y del proceso cliente;
+- CPU de cliente, servidor y preparación/validación de confianza;
+- mediana por campaña y diferencias emparejadas por ronda;
+- fallos, timeouts y contadores TCP cuando la campaña de red lo requiere.
+
+Los bytes TLS no equivalen a bytes Ethernet/IP/TCP. Las retransmisiones solo se atribuyen a nivel de campaña cuando no existe una medición fiable por conexión. La inferencia final utiliza campañas independientes como unidad de bootstrap y conserva los outliers como observaciones.
+
+## Documentación
+
+- [Laboratorio TLS-Merkle inicial](docs/tls-merkle-laboratory.md)
+- [Protocolo TLS-MT](docs/tls-mt.md)
+- [Protocolo Compact Merkle](docs/compact-protocol.md)
+- [Metodología MTC](docs/mtc-methodology.md)
+- [Resultados MTC](docs/mtc-results.md)
+- [Comparación MTC](docs/mtc-comparison.md)
+- [Validación](docs/validation.md)
+
+Este repositorio es un laboratorio de investigación. Las claves privadas y artefactos locales no deben publicarse ni incorporarse a commits.

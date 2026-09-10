@@ -2,7 +2,8 @@
 artifacts/
 __pycache__/
 *.key
+.env
 *.dSYM/
-C/merkle_tests
-C/mtc_tests
-C/merkle_mtc_tests
+codigoOriginal/C/merkle_tests
+codigoOriginal/C/mtc_tests
+codigoOriginal/C/merkle_mtc_tests

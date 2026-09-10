@@ -16,7 +16,7 @@ original y se construye otro con las opciones Merkle de cliente y servidor.
   raw public keys, modo avanzado y DANE, así como la exigencia de identidad.
 - Los dos escenarios Merkle completan conexiones HTTP verificadas entre los
   servicios cliente y servidor de Compose, con dos muestras funcionales cada uno.
-- `C/` y `Bash/` permanecen sin modificaciones respecto del contenido recibido.
+- `codigoOriginal/C/` y `codigoOriginal/Bash/` permanecen sin modificaciones respecto del contenido recibido.
   Las advertencias de funciones sin uso en los fuentes originales permanecen.
 
 Tamaños observados en las comprobaciones funcionales, usando los mismos

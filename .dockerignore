@@ -1,14 +1,15 @@
 **
-!Dockerfile
 !docker/
+!docker/Dockerfile
 !docker/openssl.cnf
 !scripts/
 !scripts/**
-!C/
-!C/*tests.c
-!C/crypto/
-!C/crypto/*.c
-!C/crypto/*.h
+!codigoOriginal/
+!codigoOriginal/C/
+!codigoOriginal/C/*tests.c
+!codigoOriginal/C/crypto/
+!codigoOriginal/C/crypto/*.c
+!codigoOriginal/C/crypto/*.h
 
 !integration/
 !integration/*.c

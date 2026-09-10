@@ -1,0 +1,32 @@
+name: mtbandwidth
+x-lab: &lab
+  image: mt-tls-network:latency
+  cap_add: [NET_ADMIN]
+  volumes:
+    - ../artifacts:/work:ro
+    - ../artifacts/results:/work/results
+    - ../campaigns/network_bandwidth:/opt/network-bandwidth:ro
+  environment:
+    COMPACT_BATCH: /work/compact/batch16
+    MTC_BATCH: /work/mtc/batch16-v2
+    PROFILE_DETAIL: "0"
+    PAPER_RUN_ROOT: ${PAPER_RUN_ROOT:?Set PAPER_RUN_ROOT}
+    PAPER_CAMPAIGN_ID: ${PAPER_CAMPAIGN_ID:?Set PAPER_CAMPAIGN_ID}
+    PAPER_SEED: ${PAPER_SEED:?Set PAPER_SEED}
+    NETWORK_HALF_DELAY_MS: ${NETWORK_HALF_DELAY_MS:?Set NETWORK_HALF_DELAY_MS}
+    NETWORK_RATE_MBIT: ${NETWORK_RATE_MBIT:?Set NETWORK_RATE_MBIT}
+    NETWORK_BURST_BYTES: ${NETWORK_BURST_BYTES:?Set NETWORK_BURST_BYTES}
+    NETWORK_QUEUE_LATENCY_MS: ${NETWORK_QUEUE_LATENCY_MS:-1000}
+services:
+  server:
+    <<: *lab
+    command: ["python3", "/opt/paper/serve.py"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/paper-ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  client:
+    <<: *lab
+    entrypoint: ["/opt/network-bandwidth/client.sh"]
+    command: []

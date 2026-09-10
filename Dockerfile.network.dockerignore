@@ -1,5 +1,0 @@
-**
-!Dockerfile.network
-!network_latency/
-!network_latency/*.py
-!network_latency/*.sh
