@@ -1,77 +1,88 @@
-# TLS 1.3 con autenticación poscuántica y árboles de Merkle
+# TLS 1.3 with post-quantum authentication and Merkle trees
 
-Laboratorio reproducible para estudiar el coste temporal y el tamaño de distintas representaciones de autenticación en TLS 1.3. El proyecto compara certificados X.509, certificados poscuánticos, claves públicas sin certificado y dos construcciones experimentales basadas en árboles de Merkle.
+This reproducible laboratory studies the time and size costs of different TLS
+1.3 server-authentication representations. It compares X.509 certificates,
+post-quantum certificates, raw public keys, Compact Merkle credentials, and an
+experimental implementation of Merkle Tree Certificates (MTC).
 
-El objetivo científico es determinar si Compact Merkle y MTC reducen los bytes de autenticación de certificados poscuánticos y cómo cambian los tiempos de conexión cuando se introducen latencia, ancho de banda limitado y pérdida de paquetes.
+The scientific objective is to determine whether Compact Merkle and MTC reduce
+post-quantum authentication bytes and how their connection times change under
+latency, bandwidth constraints, packet loss, and combined network conditions.
 
-## Variantes evaluadas
+## Evaluated variants
 
-La configuración controlada fija TLS 1.3, X25519, `TLS_AES_256_GCM_SHA384`, autenticación exclusiva del servidor y ausencia de tickets o reanudación. Los certificados clásicos usan ECDSA con la curva P-256 y los certificados poscuánticos usan ML-DSA-65. En ambos casos, la CA y el servidor se generan con el algoritmo correspondiente.
+The controlled configuration fixes TLS 1.3, X25519,
+`TLS_AES_256_GCM_SHA384`, server-only authentication, disabled tickets, and no
+resumption. Classic certificates use ECDSA P-256. Post-quantum certificates use
+ML-DSA-65. The CA and server use the corresponding signature algorithm.
 
-| Elemento criptográfico | Configuración | Papel |
+| Cryptographic element | Configuration | Role |
 |---|---|---|
-| Firma clásica de certificados | ECDSA P-256 | Firma de la CA, certificado del servidor y `CertificateVerify` clásico |
-| Firma poscuántica de certificados | ML-DSA-65 | Firma de la CA, certificado del servidor y `CertificateVerify` poscuántico |
-| Intercambio de claves TLS | X25519 | Acuerdo de la clave efímera de la conexión |
-| Suite TLS 1.3 | `TLS_AES_256_GCM_SHA384` | Cifrado simétrico e integridad del canal |
+| Classic certificate signature | ECDSA P-256 | Root CA, server certificate, and classic `CertificateVerify` |
+| Post-quantum certificate signature | ML-DSA-65 | Root CA, server certificate, and post-quantum `CertificateVerify` |
+| TLS key exchange | X25519 | Ephemeral connection key agreement |
+| TLS 1.3 cipher suite | `TLS_AES_256_GCM_SHA384` | Symmetric encryption and channel integrity |
 
-X25519 no es el algoritmo de firma del certificado. Se mantiene igual en todas
-las variantes para estudiar el coste de la autenticación sin introducir además
-un cambio en el intercambio de claves.
+X25519 is not a certificate-signature algorithm. It remains fixed so that the
+experiments isolate authentication representation rather than changing key
+exchange at the same time.
 
-| Familia | Escenario | Función |
+| Family | Scenario | Purpose |
 |---|---|---|
-| X.509 | `classic`, `pq` | Referencias clásica y poscuántica |
-| RPK | `pq-rpk` | Control del coste de representar únicamente la clave pública |
-| Compact Merkle | `pq-compact-warm`, `pq-compact-cold` | Credencial compacta y prueba Merkle, con confianza predistribuida o validada durante la conexión |
-| MTC | `pq-mtc-experimental-landmark`, `pq-mtc-experimental-standalone` | Implementación experimental de Merkle Tree Certificates |
+| X.509 | `classic`, `pq` | Classic and post-quantum references |
+| RPK | `pq-rpk` | Control for representing only the public key |
+| Compact Merkle | `pq-compact-warm`, `pq-compact-cold` | Compact credential and Merkle proof with predistributed or in-handshake trust |
+| MTC | `pq-mtc-experimental-landmark`, `pq-mtc-experimental-standalone` | Experimental Merkle Tree Certificate implementation |
 
-MTC se identifica siempre como **MTC-experimental** y tiene como objetivo `draft-ietf-plants-merkle-tree-certs-05`. Las comparaciones entre X.509, Compact y MTC son arquitectónicas; no implican que sus modelos de confianza y transparencia sean equivalentes.
+MTC is always identified as **MTC-experimental** and targets
+`draft-ietf-plants-merkle-tree-certs-05`. X.509, Compact, and MTC comparisons
+are architectural; their trust and transparency models are not equivalent.
 
-## Estado experimental
+## Experimental status
 
-| Fase | Estado | Finalidad |
+| Phase | Status | Purpose |
 |---|---|---|
-| Laboratorio TLS/X.509/PQ/Merkle inicial | Implementado y validado | Integración funcional con OpenSSL `s_client` y `s_server` |
-| Comparación controlada N=16 | Completada | Tamaño, wall time, CPU y costes de confianza |
-| Escalado de población Merkle | Completada | Tamaños de árbol 1, 4, 16, 64, 256 y 1024 |
-| Latencia controlada | Completada | RTT adicional de 0 a 200 ms |
-| Ancho de banda limitado | Infraestructura preparada | Campaña manual independiente |
-| Pérdida de paquetes | Infraestructura preparada | Campaña manual con fallos y timeouts contabilizados |
-| Condiciones de red combinadas | Infraestructura preparada | Perfiles baseline, WAN, constrained y adverse |
+| Initial TLS/X.509/PQ/Merkle laboratory | Implemented and validated | Functional OpenSSL `s_client` and `s_server` integration |
+| Controlled N=16 comparison | Completed | Size, wall time, CPU, and trust costs |
+| Merkle population scaling | Completed | Tree sizes 1, 4, 16, 64, 256, and 1024 |
+| Controlled latency | Completed | Additional RTT from 0 to 200 ms |
+| Bandwidth constrained | Infrastructure prepared | Independent manual campaign |
+| Packet loss | Infrastructure prepared | Campaign with explicit failures and timeouts |
+| Combined network conditions | Infrastructure prepared | Baseline, WAN, constrained, and adverse profiles |
 
-Los resultados generados viven en `artifacts/results/` y están excluidos de Git por su tamaño y porque el árbol de artefactos contiene material criptográfico local. Cada campaña conserva commit, estado Git, imagen, entorno, hashes, configuración efectiva y evidencia de validación.
+Generated data live under `artifacts/results/` and are excluded from Git.
+Campaigns record the commit, Git state, image, environment, hashes, effective
+configuration, and validation evidence.
 
-## Organización del repositorio
+## Repository layout
 
 ```text
 .
-├── campaigns/       campañas, análisis, validadores y documentación de ejecución
-├── docker/          Dockerfiles, Compose y configuración de OpenSSL
-├── artifacts/       certificados, claves, fixtures y resultados locales ignorados
-├── compact/         credencial Compact Merkle
-├── mtc/             implementación MTC-experimental
-├── integration/     formato wire e integración Merkle con OpenSSL
-├── profiling/       instrumentación temporal detallada
-├── codigoOriginal/  código C, scripts Bash y prototipo MTC recibidos
-├── tests/           pruebas de integración TLS
-├── scripts/         automatización común
-└── docs/            protocolo, metodología, resultados y laboratorio inicial
+├── campaigns/       campaign runners, analysis, validation, and instructions
+├── docker/          Dockerfiles, Compose definitions, and OpenSSL configuration
+├── artifacts/       local certificates, keys, fixtures, and results
+├── compact/         Compact Merkle credential implementation
+├── mtc/             MTC-experimental implementation
+├── integration/     Merkle wire format and OpenSSL integration
+├── profiling/       detailed timing instrumentation
+├── codigoOriginal/  received C, Bash, and MTC prototype sources
+├── tests/           TLS integration tests
+├── scripts/         shared laboratory automation
+└── docs/            protocol, methodology, validation, and result documents
 ```
 
-Los puntos de entrada de cada experimento están en [campaigns/](campaigns/README.md). Las imágenes y servicios disponibles se describen en [docker/](docker/README.md). La documentación del primer laboratorio se conserva en [docs/tls-merkle-laboratory.md](docs/tls-merkle-laboratory.md). `codigoOriginal/` se mantiene separado del desarrollo activo para conservar claramente la procedencia del código recibido.
+See [campaigns](campaigns/README.md) for experiment entry points,
+[Docker](docker/README.md) for images and services, and
+[the initial laboratory guide](docs/tls-merkle-laboratory.md) for the first
+implementation. `codigoOriginal/` remains separate to preserve provenance.
 
-## Requisitos para crear el laboratorio
+## Requirements
 
-- Git y Python 3 disponibles en el host.
-- Docker Desktop o Docker Engine con Compose v2.
-- Acceso a Internet durante la construcción inicial para descargar Debian,
-  OpenSSL, liboqs y oqs-provider.
-- Espacio suficiente para compilar y conservar la cadena de imágenes.
-- En campañas de red, capacidad `NET_ADMIN` dentro de los contenedores. Los
-  Compose ya declaran esta capacidad donde es necesaria.
-
-Compruebe el entorno desde la raíz del repositorio:
+- Git and Python 3 on the host.
+- Docker Desktop or Docker Engine with Compose v2.
+- Internet access during the initial build.
+- Enough storage for compiled image stages.
+- Container `NET_ADMIN` capability for network campaigns.
 
 ```sh
 git status --short
@@ -82,51 +93,41 @@ docker compose version
 docker info
 ```
 
-## Creación inicial paso a paso
+## Initial setup
 
-### Paso 1 — clonar y entrar en el proyecto
+### Step 1 — clone the repository
 
 ```sh
 git clone https://github.com/montenegro-montes/MTC-openssl.git
 cd MTC-openssl
-```
-
-Todos los comandos posteriores se ejecutan desde esta raíz. No ejecute los
-Compose desde `docker/`, porque la documentación y los scripts toman la raíz
-como directorio de trabajo.
-
-### Paso 2 — crear los directorios locales
-
-```sh
 mkdir -p artifacts/results
 ```
 
-`artifacts/` está ignorado por Git y contendrá claves privadas, certificados,
-fixtures y resultados. No copie claves desde `codigoOriginal/` al historial.
+Run every following command from the repository root. `artifacts/` contains
+private keys and local evidence and must remain outside Git.
 
-### Paso 3 — construir la imagen base
+### Step 2 — build the base image
 
 ```sh
 docker compose -f docker/compose.yaml build
 docker image inspect mt-tls-lab:local --format '{{.Id}}'
 ```
 
-Esta etapa compila OpenSSL 3.5.8, liboqs 0.14.0, oqs-provider 0.10.0, las pruebas
-C recibidas y la primera integración Merkle de `s_client`/`s_server`.
+This stage builds OpenSSL 3.5.8, liboqs 0.14.0, oqs-provider 0.10.0, received C
+tests, and the initial Merkle integration for `s_client` and `s_server`.
 
-### Paso 4 — generar certificados y fixtures Merkle iniciales
+### Step 3 — generate the original certificates and Merkle fixtures
 
 ```sh
 docker compose -f docker/compose.yaml run --rm setup
 find artifacts/certs artifacts/merkle -maxdepth 2 -type f -print
 ```
 
-El generador utiliza `umask 077` y conserva directorios existentes. Para una
-regeneración científica use un árbol de artefactos nuevo; no mezcle fixtures
-regeneradas con resultados anteriores.
+The generator uses `umask 077` and preserves existing directories. Use a new
+artifact tree for scientific regeneration; never mix regenerated fixtures with
+earlier results.
 
-Para preparar un algoritmo de firma adicional, asigne un nombre nuevo al perfil
-y pase el algoritmo junto con sus parámetros de OpenSSL:
+To create an additional signature profile:
 
 ```sh
 docker compose -f docker/compose.yaml run --rm setup \
@@ -139,22 +140,20 @@ docker compose -f docker/compose.yaml run --rm setup \
   --pkeyopt ec_paramgen_curve:P-384 --digest sha384
 ```
 
-`--pkeyopt` y `--sigopt` se pueden repetir; `--digest` y `--days` son
-opcionales. El comando crea la CA autofirmada, el certificado de servidor, el
-DER, `generation-parameters.txt` y la fixture Merkle bajo el mismo nombre. Use:
+`--pkeyopt` and `--sigopt` are repeatable. `--digest` and `--days` are
+optional. Each profile contains a self-signed root CA, a CA-signed server
+certificate, DER output, generation metadata, and a matching Merkle fixture.
 
 ```sh
 docker compose -f docker/compose.yaml run --rm setup \
   bash /opt/lab/generate-certs.sh --help
 ```
 
-La disponibilidad del algoritmo depende de la imagen. Compruébela con
-`openssl list -signature-algorithms` dentro de `mt-tls-lab:local`.
-La generación de un perfil no lo añade automáticamente a `scenario.sh` ni a
-las campañas congeladas; debe incorporarse en una campaña nueva para evitar
-alterar las comparaciones existentes.
+Algorithm availability depends on the image and can be inspected with
+`openssl list -signature-algorithms`. Generating a profile does not add it to
+`scenario.sh` or to frozen campaigns; use a new campaign for new algorithms.
 
-### Paso 5 — validar los cuatro escenarios iniciales
+### Step 4 — validate the original scenarios
 
 ```sh
 for SCENARIO in classic pq classic-mt pq-mt; do
@@ -167,33 +166,23 @@ done
 unset SCENARIO
 ```
 
-Cada cliente debe completar TLS 1.3 y verificar el servidor. Los escenarios
-`classic-mt` y `pq-mt` deben mostrar además la verificación Merkle esperada.
-Si una iteración falla, ejecute `docker compose -f docker/compose.yaml down`
-antes de diagnosticarla.
+Each client must complete TLS 1.3 and verify the server. The `*-mt` scenarios
+must also report successful Merkle verification.
 
-### Paso 6 — construir Compact Merkle y generar N=16
+### Step 5 — build Compact, profiling, and MTC
 
 ```sh
 docker compose -f docker/compose.compact.yaml build
 docker compose -f docker/compose.compact.yaml run --rm setup
-test -f artifacts/compact/batch16/classic/manifest.json
-test -f artifacts/compact/batch16/pq/manifest.json
-```
-
-### Paso 7 — construir profiling y MTC-experimental
-
-```sh
 docker compose -f docker/compose.profile.yaml build
 docker compose -f docker/compose.mtc.yaml build
 docker compose -f docker/compose.mtc.yaml run --rm setup
+test -f artifacts/compact/batch16/classic/manifest.json
+test -f artifacts/compact/batch16/pq/manifest.json
 test -d artifacts/mtc/batch16-v2
 ```
 
-Las imágenes dependen unas de otras; respete este orden. La generación MTC
-produce material local que permanece bajo `artifacts/`.
-
-### Paso 8 — construir y validar la imagen de medición
+### Step 6 — build and validate the controlled measurement image
 
 ```sh
 docker build -f docker/Dockerfile.paper \
@@ -205,15 +194,13 @@ docker run --rm --network none \
   mt-tls-paper:local sh /opt/paper/tests.sh
 ```
 
-La salida válida termina con:
+Do not continue unless the output ends with:
 
 ```text
 ALL REGRESSION AND NEGATIVE TESTS PASS
 ```
 
-No continúe con campañas si esta prueba falla.
-
-### Paso 9 — construir la imagen con herramientas de red
+### Step 7 — build the network image
 
 ```sh
 docker build -f docker/Dockerfile.network -t mt-tls-network:latency .
@@ -221,16 +208,15 @@ docker run --rm --network none mt-tls-network:latency sh -c \
   'command -v tc && command -v ping && command -v nstat && command -v iperf3'
 ```
 
-Esta última imagen añade herramientas de red sobre la imagen de medición; no
-recompila OpenSSL.
+The network image adds network tools and does not rebuild OpenSSL.
 
-### Paso 10 — elegir una campaña
+### Step 8 — choose a campaign
 
-Consulte [campaigns/](campaigns/README.md), respete el orden recomendado y use
-el README específico. Cada campaña crea un directorio fechado independiente,
-registra Git, imagen y hashes, y exige sus propios tests y gates.
+Follow [the campaign index](campaigns/README.md) and the package-specific README.
+Always use a new timestamped result directory and run the package tests and
+preflight before its full campaign.
 
-La cadena de imágenes experimentales se construye por etapas:
+## Image chain
 
 ```text
 mt-tls-lab:local
@@ -241,29 +227,28 @@ mt-tls-lab:local
                   └── mt-tls-network:latency
 ```
 
-No se deben mezclar resultados producidos por commits o imágenes distintas. Antes de lanzar una campaña, siga su README, cree un directorio nuevo bajo `artifacts/results/`, ejecute los tests y el preflight, y compruebe las condiciones efectivas de red. Los smoke tests se almacenan separados y no forman parte del análisis principal.
+Never combine results produced by different commits or images without recording
+that distinction. Smoke data remain separate from primary inference.
 
-## Mediciones e interpretación
+## Measurement interpretation
 
-Las campañas distinguen:
+Campaigns distinguish TLS BIO bytes, serialized credential/trust sizes,
+handshake and process wall time, client/server/setup CPU, campaign medians,
+paired-round effects, failures, timeouts, and campaign-level TCP counters.
 
-- bytes de los mensajes TLS observados por los BIO instrumentados;
-- tamaño de credenciales, pruebas, firmas y confianza predistribuida;
-- tiempo de pared del handshake y del proceso cliente;
-- CPU de cliente, servidor y preparación/validación de confianza;
-- mediana por campaña y diferencias emparejadas por ronda;
-- fallos, timeouts y contadores TCP cuando la campaña de red lo requiere.
+TLS BIO bytes are not Ethernet/IP/TCP bytes. Retransmissions are attributed only
+at campaign level when per-connection attribution is unavailable. Final
+bootstrap inference uses independent campaigns and retains outliers.
 
-Los bytes TLS no equivalen a bytes Ethernet/IP/TCP. Las retransmisiones solo se atribuyen a nivel de campaña cuando no existe una medición fiable por conexión. La inferencia final utiliza campañas independientes como unidad de bootstrap y conserva los outliers como observaciones.
+## Documentation
 
-## Documentación
+- [Initial TLS-Merkle laboratory](docs/tls-merkle-laboratory.md)
+- [TLS-MT protocol](docs/tls-mt.md)
+- [Compact Merkle protocol](docs/compact-protocol.md)
+- [MTC methodology](docs/mtc-methodology.md)
+- [MTC results](docs/mtc-results.md)
+- [MTC comparison](docs/mtc-comparison.md)
+- [Validation](docs/validation.md)
 
-- [Laboratorio TLS-Merkle inicial](docs/tls-merkle-laboratory.md)
-- [Protocolo TLS-MT](docs/tls-mt.md)
-- [Protocolo Compact Merkle](docs/compact-protocol.md)
-- [Metodología MTC](docs/mtc-methodology.md)
-- [Resultados MTC](docs/mtc-results.md)
-- [Comparación MTC](docs/mtc-comparison.md)
-- [Validación](docs/validation.md)
-
-Este repositorio es un laboratorio de investigación. Las claves privadas y artefactos locales no deben publicarse ni incorporarse a commits.
+This repository is a research laboratory. Never publish or commit private keys
+or local cryptographic artifacts.

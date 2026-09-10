@@ -1,57 +1,62 @@
-# Fase de perfilado TLS y control RPK
+# TLS profiling phase and RPK control
 
-Esta fase añade una imagen y bibliotecas independientes: `mt-tls-profile:local`.
-Conserva las fases [inicial](README.md) y [compacta](README.compact.md).
+This phase adds the independent `mt-tls-profile:local` image and instrumented
+libraries while preserving the initial and Compact phases.
 
-Compara los ocho escenarios anteriores y dos controles RPK con clave fijada
-(`classic-rpk`, `pq-rpk`). El control fija localmente `server → SHA256(SPKI)`
-mediante TLSA/DANE de OpenSSL, sin consultar DNS. No reproduce las propiedades
-completas de una PKI, ni la caducidad y autorización de las credenciales compactas.
-La verificación de `CertificateVerify` permanece activa.
+It compares the previous eight scenarios and two pinned-key RPK controls:
+`classic-rpk` and `pq-rpk`. The client locally pins
+`server -> SHA256(SPKI)` through OpenSSL TLSA/DANE handling without a DNS
+query. This control does not reproduce complete PKI, credential-expiration, or
+Compact authorization semantics. `CertificateVerify` remains active.
 
-## Ejecución
+## Run
 
-Requiere la imagen `mt-tls-compact:local` y los certificados y lote de 16 hojas
-preparados en la fase anterior. No se regeneran ni sobrescriben esos datos.
+The Compact image, original certificates, and N=16 batch must already exist.
+This phase never regenerates or overwrites them.
 
 ```sh
 docker compose -f docker/compose.profile.yaml build
-PROFILE_DETAIL=1 docker compose -f docker/compose.profile.yaml run --rm --no-deps client python3 /opt/profiling/test_tls.py
-docker compose -f docker/compose.profile.yaml run --rm --no-deps client sh /opt/profiling/test_timer.sh
 
-PROFILE_DETAIL=0 docker compose -f docker/compose.profile.yaml up -d --force-recreate --wait server
-PROFILE_DETAIL=0 docker compose -f docker/compose.profile.yaml run --rm client python3 /opt/profiling/benchmark.py --runs 30
+PROFILE_DETAIL=1 docker compose -f docker/compose.profile.yaml run --rm --no-deps client \
+  python3 /opt/profiling/test_tls.py
+docker compose -f docker/compose.profile.yaml run --rm --no-deps client \
+  sh /opt/profiling/test_timer.sh
 
-PROFILE_DETAIL=1 docker compose -f docker/compose.profile.yaml up -d --force-recreate --wait server
-PROFILE_DETAIL=1 docker compose -f docker/compose.profile.yaml run --rm client python3 /opt/profiling/benchmark.py --runs 30
+PROFILE_DETAIL=0 docker compose -f docker/compose.profile.yaml \
+  up -d --force-recreate --wait server
+PROFILE_DETAIL=0 docker compose -f docker/compose.profile.yaml run --rm client \
+  python3 /opt/profiling/benchmark.py --runs 30
+
+PROFILE_DETAIL=1 docker compose -f docker/compose.profile.yaml \
+  up -d --force-recreate --wait server
+PROFILE_DETAIL=1 docker compose -f docker/compose.profile.yaml run --rm client \
+  python3 /opt/profiling/benchmark.py --runs 30
 
 docker compose -f docker/compose.profile.yaml down
 ```
 
-Ambos extremos deben usar el mismo `PROFILE_DETAIL`. Cada ejecución crea un
-directorio nuevo bajo `artifacts/results/`; no elimina resultados anteriores.
-El ejecutable de esta fase es `/opt/profiling/openssl.sh`: su lanzador selecciona
-las bibliotecas instrumentadas únicamente para ese proceso.
+Both endpoints must use the same `PROFILE_DETAIL` value. Every run creates a
+new directory under `artifacts/results/`. The launcher
+`/opt/profiling/openssl.sh` selects instrumented libraries only for its process.
 
-## Medidas e interpretación
+## Measurements and interpretation
 
-- Tiempo de handshake y CPU de proceso en cliente y servidor. La suma de CPU
-  corresponde a los dos extremos de la misma conexión; no es tiempo transcurrido.
-- Correlación mediante el random público del ClientHello, sin añadir bytes TLS.
-- Bytes en los BIO de transporte durante el handshake; no incluyen cabeceras
-  Ethernet/IP/TCP ni retransmisiones. No son el tamaño de una captura de red.
-- Tiempos inclusivos de procesamiento de certificado/RPK, autenticación,
-  firma/verificación de CertificateVerify, construcción del certificado,
-  validación de identidad, SPKI, prueba Merkle y firma de raíz.
-  **No sumar categorías anidadas.**
-- En modo warm, la firma de la raíz se verifica antes del handshake y se registra
-  aparte. Cada muestra inicia un cliente nuevo: no implementa una caché persistente.
-- 3 rondas de calentamiento y 30 rondas medidas, orden aleatorio reproducible.
-  CSV de muestras, componentes, medianas y comparaciones con bootstrap por ronda.
+- Client and server handshake wall/process CPU time. Summed CPU covers both
+  endpoints and is not elapsed time.
+- Correlation through the public ClientHello random without extra TLS bytes.
+- TLS BIO transport bytes during the handshake, excluding Ethernet/IP/TCP
+  headers and retransmissions.
+- Inclusive timers for certificate/RPK processing, peer authentication,
+  `CertificateVerify`, certificate construction, identity validation, SPKI,
+  Merkle proofs, and root signatures. Nested categories must not be added.
+- Warm root-signature verification before TLS, recorded separately. Each sample
+  starts a new client and does not model a persistent cache.
+- Three warmup rounds and 30 measured rounds with reproducible random order,
+  sample/component CSVs, medians, and round-bootstrap comparisons.
 
-`PROFILE_DETAIL=0` mantiene las medidas globales y desactiva los temporizadores
-de componentes. Comparar las dos series ayuda a detectar perturbación, pero dos
-bloques sucesivos en Docker Desktop no aíslan por sí solos el coste instrumental.
-Son resultados exploratorios locales, sin emulación de latencia ni ancho de banda.
+`PROFILE_DETAIL=0` retains aggregate measurements and disables component
+timers. Comparing both series can reveal instrumentation disturbance, but
+successive Docker Desktop blocks do not isolate that cost causally. These are
+local exploratory results without latency or bandwidth emulation.
 
-El informe de cierre se encuentra en [docs/profile-results.md](docs/profile-results.md).
+See the [profiling results](../docs/profile-results.md).

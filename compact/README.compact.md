@@ -1,48 +1,45 @@
-# Fase 2: autenticación Merkle compacta y comparación TLS
+# Phase 2: Compact Merkle authentication and TLS comparison
 
-Esta fase se añade a las anteriores. No reemplaza `docker/Dockerfile`, `docker/compose.yaml`,
-`codigoOriginal/C/`, `codigoOriginal/Bash/`, `integration/`, `scripts/`, sus ejecutables ni sus resultados.
-El [README original](README.md) conserva las instrucciones de las fases iniciales.
+This phase extends the initial laboratory. It preserves the base Docker image,
+Compose definition, received code, integration, scripts, executables, and prior
+results. See the [root README](../README.md) for initial setup.
 
-La variante compacta transmite una clave pública RPK y una credencial Merkle de
-identidad/vigencia/clave. No transmite la cadena X.509. Mantiene TLS 1.3,
-CertificateVerify y Finished. La autoridad firma una raíz por lote; se estudia
-la raíz precargada y la raíz enviada durante cada handshake. Se trata de un
-protocolo experimental de laboratorio, no de una implementación de un estándar
-MTC ni de un reemplazo general de todas las funciones de una PKI X.509.
+The Compact variant sends an RPK and a Merkle credential containing identity,
+validity, and key data instead of an X.509 chain. TLS 1.3,
+`CertificateVerify`, and `Finished` remain present. The authority signs one
+root per batch. The experiment evaluates a predistributed root and a signed root
+sent during each handshake. This is an experimental laboratory protocol, not an
+MTC standard implementation or a replacement for every X.509 PKI function.
 
-## Construcción y preparación
+## Build and prepare
 
 ```sh
-# Imagen original, necesaria como base (se conserva):
+# Preserved base image and original fixtures:
 docker compose -f docker/compose.yaml build
-# Solo si faltan certificados/árboles originales:
 docker compose -f docker/compose.yaml run --rm setup
 
-# Imagen independiente: mt-tls-compact:local
+# Independent Compact image and a new N=16 batch:
 docker compose -f docker/compose.compact.yaml build
-# Solo para un lote nuevo; no sobrescribe un lote existente:
 docker compose -f docker/compose.compact.yaml run --rm setup
 ```
 
-El último paso crea `artifacts/compact/batch16/`, con 16 certificados válidos por
-familia y claves independientes para las 15 identidades adicionales. La hoja cero
-usa exactamente el certificado y la clave del servidor de la fase anterior.
-La misma población se utiliza para el árbol X.509 y el compacto. Los árboles
-originales de dos hojas permanecen en `artifacts/merkle/`.
+The final command creates `artifacts/compact/batch16/` with 16 valid
+certificates per family and independent keys for the 15 additional identities.
+Leaf zero uses the original server certificate and key. The X.509 and Compact
+trees use the same population. Original two-leaf trees remain unchanged.
 
-Para otro tamaño, usar un directorio nuevo:
+Create a different size in a new directory:
 
 ```sh
 docker compose -f docker/compose.compact.yaml run --rm setup \
-  python3 /opt/compact/prepare.py --both --leaves 64 --output /work/compact/batch64
+  python3 /opt/compact/prepare.py --both --leaves 64 \
+  --output /work/compact/batch64
 ```
 
-Admite entre 1 y 1024 hojas. Los ficheros de claves de laboratorio quedan en
-`artifacts/`, excluidos de las imágenes y de Git. Los certificados originales
-caducan a los 30 días; no se regeneran ni sustituyen automáticamente.
+Supported sizes range from 1 to 1024 leaves. Private keys remain under ignored
+`artifacts/`. Existing batches and certificates are never replaced.
 
-## Comparación
+## Run the comparison
 
 ```sh
 docker compose -f docker/compose.compact.yaml up -d --wait server
@@ -50,61 +47,51 @@ docker compose -f docker/compose.compact.yaml run --rm client
 docker compose -f docker/compose.compact.yaml down
 ```
 
-El servidor lanza ocho procesos s_server, uno por escenario. El cliente mide
-30 conexiones por escenario tras tres conexiones de calentamiento; aleatoriza
-el orden en cada ronda. Las conexiones atraviesan la red bridge de Docker entre
-dos contenedores. No se publican puertos del laboratorio compacto en el host.
+The server launches eight `s_server` processes. After three warmups, the client
+measures 30 connections per scenario with reproducibly randomized round order.
 
-| Escenario | Autenticación | Raíz Merkle en la conexión |
+| Scenario | Authentication | Merkle root |
 |---|---|---|
-| `classic` | X.509 ECDSA P-256 | No aplica |
-| `pq` | X.509 ML-DSA-65 | No aplica |
-| `classic-mt`, `pq-mt` | X.509 más Merkle, fase 1 | Precargada |
-| `classic-compact-warm`, `pq-compact-warm` | RPK y credencial compacta | Precargada y validada antes del handshake |
-| `classic-compact-cold`, `pq-compact-cold` | RPK y credencial compacta | Raíz firmada incluida y validada en el handshake |
+| `classic` | X.509 ECDSA P-256 | Not applicable |
+| `pq` | X.509 ML-DSA-65 | Not applicable |
+| `classic-mt`, `pq-mt` | X.509 plus phase-1 Merkle proof | Predistributed |
+| `*-compact-warm` | RPK plus Compact credential | Predistributed and validated before TLS |
+| `*-compact-cold` | RPK plus Compact credential | Signed root sent and validated in TLS |
 
-Todos los escenarios de este banco nuevo usan **el mismo ejecutable instrumentado**
-y las mismas bibliotecas, TLS 1.3, X25519 y TLS_AES_256_GCM_SHA384, sin reanudación.
-La PKI tiene una CA directa; no se envía su certificado raíz durante TLS.
-`classic-mt` y `pq-mt` usan aquí 16 hojas para igualar población con el compacto;
-los comandos originales de `docker/compose.yaml` siguen usando sus árboles originales.
+All scenarios use the same instrumented executable and libraries, TLS 1.3,
+X25519, `TLS_AES_256_GCM_SHA384`, and no resumption. The PKI has a direct root
+CA whose certificate is not sent in TLS.
 
-Para otro lote, pasar `COMPACT_BATCH` en ambos comandos:
+Select another batch consistently on both endpoints:
 
 ```sh
-COMPACT_BATCH=/work/compact/batch64 docker compose -f docker/compose.compact.yaml up -d --force-recreate --wait server
-COMPACT_BATCH=/work/compact/batch64 docker compose -f docker/compose.compact.yaml run --rm client \
+COMPACT_BATCH=/work/compact/batch64 \
+  docker compose -f docker/compose.compact.yaml up -d --force-recreate --wait server
+COMPACT_BATCH=/work/compact/batch64 \
+  docker compose -f docker/compose.compact.yaml run --rm client \
   python3 /opt/compact/benchmark.py --runs 60 --warmup 5 --seed 123
+docker compose -f docker/compose.compact.yaml down
 ```
 
-Cada ejecución crea un directorio nuevo en `artifacts/results/compact-<fecha>/`:
+Each run creates a new `artifacts/results/compact-<timestamp>/` directory with
+samples, summaries, paired comparisons, metadata, logs, and a report. An
+authentication failure aborts the run without creating a success summary; prior
+valid logs and samples remain available for diagnosis.
 
-- `samples.csv`: muestras individuales, incluyendo bytes de Certificate y CertificateVerify.
-- `summary.csv`: medianas y rangos por escenario.
-- `comparisons.csv`: diferencias emparejadas por ronda e intervalos bootstrap del 95 %.
-- `metadata.json`: versiones, hashes de código/entradas, recursos visibles y preparación del lote.
-- `logs/`: salida individual de cada conexión, incluidos calentamientos.
-- `report.md`: tabla de resultados exploratorios.
-
-Un fallo de autenticación aborta la ejecución sin generar un resumen de éxito.
-Se conservan los logs y las muestras válidas anteriores al fallo.
-
-## Pruebas
-
-Con certificados y lote preparados:
+## Tests
 
 ```sh
 docker compose -f docker/compose.compact.yaml run --rm client \
   /opt/compact/test_parser /work/compact/batch16/pq/bundle-0000.bin
-docker compose -f docker/compose.compact.yaml run --rm client python3 /opt/compact/test_tls.py
-# Regresión de la fase anterior, con sus binarios originales:
-docker compose -f docker/compose.compact.yaml run --rm client python3 /opt/mt/tests/test_tls.py
+docker compose -f docker/compose.compact.yaml run --rm client \
+  python3 /opt/compact/test_tls.py
+docker compose -f docker/compose.compact.yaml run --rm client \
+  python3 /opt/mt/tests/test_tls.py
 ```
 
-Los tests usan servidores temporales locales al contenedor y no necesitan el
-servicio `server` arrancado. La serie comparativa sí usa los dos contenedores.
+Tests start temporary local servers inside the container. The comparative run
+uses separate client and server containers.
 
-Detalles: [protocolo](docs/compact-protocol.md),
-[método y límites de comparación](docs/compact-methodology.md).
-
-Resultados de la ejecución inicial: [compact-results.md](docs/compact-results.md).
+See the [protocol](../docs/compact-protocol.md),
+[methodology](../docs/compact-methodology.md), and
+[initial results](../docs/compact-results.md).

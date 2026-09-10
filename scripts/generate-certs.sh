@@ -62,7 +62,7 @@ generate_profile() {
 
   local dest="$cert_root/$profile"
   if [[ -e $dest ]]; then
-    echo "Ya existe $dest; se conserva. Use otro nombre de perfil para regenerar." >&2
+    echo "$dest already exists and is preserved. Use a different profile name to regenerate." >&2
     bash "$merkle_script" "$profile"
     return
   fi
@@ -129,21 +129,21 @@ while (($#)); do
     --digest) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; digest=$2; shift 2 ;;
     --days) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; days=$2; shift 2 ;;
     -h|--help) usage; exit ;;
-    *) echo "Opción desconocida: $1" >&2; usage >&2; exit 2 ;;
+    *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
 [[ -n $profile && -n $algorithm ]] || {
-  echo '--profile y --algorithm son obligatorios en modo personalizado.' >&2
+  echo '--profile and --algorithm are required in custom mode.' >&2
   usage >&2
   exit 2
 }
 valid_profile "$profile" || {
-  echo 'Nombre de perfil no válido: use minúsculas, números, punto, guion o guion bajo.' >&2
+  echo 'Invalid profile name: use lowercase letters, digits, dots, hyphens, or underscores.' >&2
   exit 2
 }
 [[ $days =~ ^[1-9][0-9]*$ ]] || {
-  echo '--days debe ser un entero positivo.' >&2
+  echo '--days must be a positive integer.' >&2
   exit 2
 }
 

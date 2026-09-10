@@ -1,38 +1,43 @@
-# Código original recibido
+# Received original code
 
-Esta carpeta conserva material de partida separado de la implementación experimental activa:
+This directory preserves the starting material separately from the active
+experimental implementation:
 
-- `C/`: implementación Merkle/MTC original y programas de prueba en C.
-- `Bash/`: script original de generación de certificados.
-- `MTC/`: prototipo MTC independiente recibido, con su configuración, scripts y resultados locales.
+- `C/`: received Merkle/MTC implementation and C test programs.
+- `Bash/`: received certificate-generation script.
+- `MTC/`: independent received MTC prototype, configuration, scripts, and
+  local results.
 
-El laboratorio activo no modifica estos fuentes. Los Dockerfiles pueden compilar las pruebas C desde esta ubicación, mientras el desarrollo posterior vive en `integration/`, `compact/`, `profiling/` y `mtc/`.
+The active laboratory does not edit these sources. Dockerfiles compile the C
+tests from this location, while later development lives in `integration/`,
+`compact/`, `profiling/`, and `mtc/`.
 
-Los archivos `.env`, claves privadas, binarios compilados y símbolos de depuración permanecen excluidos de Git. El contenido de `MTC/output/` debe tratarse como evidencia local del prototipo y no como resultado de las campañas reproducibles actuales.
+`.env` files, private keys, compiled binaries, and debug symbols remain
+excluded from Git. Treat `MTC/output/` as local prototype evidence rather than
+results from the current reproducible campaigns.
 
-## Papel durante la creación del proyecto
+## Role in project setup
 
-No ejecute esta carpeta como punto de entrada del laboratorio actual. La imagen
-base copia `C/crypto/` y los programas `C/*tests.c`, los compila dentro del
-contenedor y conserva el material recibido sin editarlo:
+Do not use this directory as the entry point for the active laboratory. The base
+image copies `C/crypto/` and `C/*tests.c` and compiles them in the container:
 
 ```sh
 docker compose -f docker/compose.yaml build
 ```
 
-Después de construir, puede comprobar qué pruebas quedaron instaladas:
+After building, inspect the installed test programs with:
 
 ```sh
 docker run --rm --network none mt-tls-lab:local \
   sh -c 'ls -l /opt/mt/bin/merkle_tests /opt/mt/bin/mtc_tests /opt/mt/bin/merkle_mtc_tests'
 ```
 
-La integración activa se construye mediante [el README raíz](../README.md) y
-[las definiciones Docker](../docker/README.md). El prototipo de `MTC/` conserva
-su propio `README.TXT` solo como documentación histórica; sus comandos, imagen,
-algoritmos y resultados no sustituyen el flujo reproducible actual.
+Follow the [root README](../README.md) and
+[Docker instructions](../docker/README.md) for the active integration. The
+`MTC/README.TXT` file remains historical documentation and does not replace
+the current reproducible workflow.
 
-## Comprobación antes de publicar
+## Check before publication
 
 ```sh
 git status --short
@@ -41,6 +46,6 @@ git check-ignore codigoOriginal/MTC/config/.env
 git check-ignore codigoOriginal/C/certs/cert1.key
 ```
 
-Las dos últimas órdenes deben confirmar que el entorno local y las claves están
-ignorados. No añada `.DS_Store`, binarios locales, claves privadas ni nuevos
-resultados del prototipo.
+The final two commands must confirm that the local environment and private keys
+are ignored. Do not add `.DS_Store`, local binaries, private keys, or new
+prototype results.
