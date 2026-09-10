@@ -17,19 +17,46 @@ Ten campaigns, seeds 42–51, 14 scenarios, 5 warmup and 30 measured paired roun
 4200 measurements plus 700 warmups. A separate measurement preflight (28 + 14)
 and security tests are not counted as campaign observations. No scaling was run.
 
-## Reproduce
+## Step 1 — inspect the frozen inputs
 
-Use a new directory for every experiment. The existing driver deliberately refuses
+Run from the repository root. Use a new directory for every experiment. The existing driver deliberately refuses
 to overwrite a campaign or silently retry a failed campaign. The N=16 inputs are
 `artifacts/compact/batch16` and `artifacts/mtc/batch16-v2`. No fixture generation
 is part of this measurement workflow.
 
-1. Record Git commit/status, SHA-256 of tracked source and N=16 fixtures, and local
+```sh
+git status --short
+git rev-parse HEAD
+docker image inspect mt-tls-mtc:local --format '{{.Id}}'
+test -d artifacts/compact/batch16
+test -d artifacts/mtc/batch16-v2
+test -d artifacts/certs
+```
+
+## Step 2 — initialize the reproducibility metadata
+
+Choose a timestamped path and create the metadata using the schemas described
+below:
+
+```sh
+PAPER_ROOT="artifacts/results/paper-n16-$(date +%Y%m%d-%H%M%S)"
+echo "$PAPER_ROOT"
+mkdir "$PAPER_ROOT"
+```
+
+Record Git commit/status, SHA-256 of tracked source and N=16 fixtures, and local
    Docker image IDs/digests in the new experiment directory. The completed run's
    `baseline*.json`, `fixture-sha256.json` and `environment-before.json` show the
    schemas expected by the runner. Inventory private keys by hash only; never copy
    their contents into the result/source snapshot or Git.
-2. Build the measurement image on the recorded local MTC image. BuildKit uses a
+
+This historical campaign package has no `control.py init` command. The metadata
+files must exist before `run.py`; use the completed run as the canonical schema
+and do not copy its measurements into the new directory.
+
+## Step 3 — build the measurement image
+
+Build the measurement image on the recorded local MTC image. BuildKit uses a
    local tag rather than a raw image ID in FROM. Verify that the base tag points
    to the recorded ID before building:
 
@@ -37,27 +64,75 @@ is part of this measurement workflow.
    docker build -f docker/Dockerfile.paper --build-arg BASE_IMAGE=mt-tls-mtc:local -t mt-tls-paper:local .
    ```
 
-3. Run `sh /opt/paper/tests.sh` inside that image with `artifacts` mounted read-only
+## Step 4 — run and record the regression gate
+
+Run `sh /opt/paper/tests.sh` inside that image with `artifacts` mounted read-only
    at `/work`; capture its full output in `tests.log`. Save `tests-status.json`
    with `passed`, `exit_code` and the actual `image_id`. Any failure blocks the
    experiment. `measurement-image.json` stores that image's Id/RepoTags/RepoDigests.
    The original `mtc_tests` demo uses exit 1 for success; `test_legacy.py` verifies
    both that convention and its positive output instead of altering the demo.
-4. Run the measurement preflight, then the campaign runner. The root must be a new
+
+```sh
+docker run --rm --network none \
+  -v "$PWD/artifacts:/work:ro" \
+  mt-tls-paper:local sh /opt/paper/tests.sh \
+  >"$PAPER_ROOT/tests.log" 2>&1
+```
+
+Record the exit code and exact image ID in `tests-status.json`. Do not continue
+after a failed test.
+
+## Step 5 — run the measurement preflight
+
+The root must be a new
    initialized directory beneath `artifacts/results/`:
 
    ```sh
-   python3 campaigns/paper_campaign/run.py --root artifacts/results/paper-n16-NEW --preflight
-   python3 campaigns/paper_campaign/run.py --root artifacts/results/paper-n16-NEW
-   python3 campaigns/paper_campaign/test_analysis.py
-   python3 campaigns/paper_campaign/analyze.py artifacts/results/paper-n16-NEW
+   python3 campaigns/controlled_n16_campaign/run.py --root "$PAPER_ROOT" --preflight
+   cat "$PAPER_ROOT/measurement-preflight-status.json"
    ```
+
+## Step 6 — run the full campaign
+
+```sh
+python3 campaigns/controlled_n16_campaign/run.py --root "$PAPER_ROOT"
+```
 
 Each campaign recreates the server container but retains the same bridge throughout
 the ten campaigns. Resource settings and server container IDs are recorded and checked.
 Docker Desktop itself is not restarted. Servers persist across rounds; every sample
 starts a new client process. Source/fixture hash mismatches, repeated campaign directories,
 failed handshakes or incorrect counts/control fields abort the run. No automatic retries.
+
+## Step 7 — monitor from a second terminal
+
+```sh
+docker ps --filter label=com.docker.compose.project=papern16
+cat "$PAPER_ROOT/campaign-status.json"
+find "$PAPER_ROOT" -name driver.log -exec tail -n 3 {} \;
+du -sh "$PAPER_ROOT"
+```
+
+## Step 8 — test the analyzer and generate results
+
+```sh
+python3 campaigns/controlled_n16_campaign/test_analysis.py
+python3 campaigns/controlled_n16_campaign/analyze.py "$PAPER_ROOT"
+cat "$PAPER_ROOT/report.md"
+ls -lh "$PAPER_ROOT"/*.csv
+```
+
+## Step 9 — preserve the completed experiment
+
+```sh
+git status --short
+git rev-parse HEAD
+```
+
+Commit this experiment separately from scaling and network experiments. Record
+the resulting experiment commit in `metadata.json` and `report.md`. Keep raw
+results, snapshots and private keys under ignored `artifacts/`.
 
 ## Accounting and analysis
 

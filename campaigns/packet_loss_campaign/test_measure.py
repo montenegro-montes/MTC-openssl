@@ -2,7 +2,7 @@
 import ast
 from pathlib import Path
 
-paper=Path('campaigns/paper_campaign/measure.py').read_text()
+paper=Path('campaigns/controlled_n16_campaign/measure.py').read_text()
 benchmark=Path('mtc/benchmark.py').read_text()
 wrapper=Path('campaigns/packet_loss_campaign/measure.py').read_text()
 assert paper.count("source=Path('/opt/mtc/benchmark.py').read_text()") == 1

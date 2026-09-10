@@ -2,6 +2,6 @@
 !docker/
 !docker/Dockerfile.paper
 !campaigns/
-!campaigns/paper_campaign/
-!campaigns/paper_campaign/*.py
-!campaigns/paper_campaign/*.sh
+!campaigns/controlled_n16_campaign/
+!campaigns/controlled_n16_campaign/*.py
+!campaigns/controlled_n16_campaign/*.sh
