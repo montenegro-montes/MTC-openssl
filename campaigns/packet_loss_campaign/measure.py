@@ -19,13 +19,17 @@ def loss_run(args,request):
 source=Path('/opt/paper/measure.py').read_text()
 needle="source=Path('/opt/mtc/benchmark.py').read_text()"
 if source.count(needle)!=1:raise RuntimeError('Frozen paper driver drift')
-injection="""source=Path('/opt/mtc/benchmark.py').read_text()
-original_run=\"result=subprocess.run(client_args(scenario,a.host,4433+ALL_SCENARIOS.index(scenario)),input='GET / HTTP/1.0\\r\\n\\r\\n',text=True,capture_output=True,timeout=20)\"
-replacement=\"result=loss_run(client_args(scenario,a.host,4433+ALL_SCENARIOS.index(scenario)),'GET / HTTP/1.0\\r\\n\\r\\n')\"
+original_run="result=subprocess.run(client_args(scenario,a.host,4433+ALL_SCENARIOS.index(scenario)),input='GET / HTTP/1.0\\r\\n\\r\\n',text=True,capture_output=True,timeout=20)"
+run_replacement="result=loss_run(client_args(scenario,a.host,4433+ALL_SCENARIOS.index(scenario)),'GET / HTTP/1.0\\r\\n\\r\\n')"
+failure="if result.returncode or len(values)!=1 or 'HTTP/1.0 200' not in log:raise RuntimeError('Handshake failed: '+scenario)"
+failure_replacement="if result.returncode or len(values)!=1 or 'HTTP/1.0 200' not in log:\n        write_failure(scenario,round_number,order,warm,result);return"
+injection=f"""source=Path('/opt/mtc/benchmark.py').read_text()
+original_run={original_run!r}
+replacement={run_replacement!r}
 if source.count(original_run)!=1:raise RuntimeError('Frozen benchmark subprocess drift')
 source=source.replace(original_run,replacement)
-failure=\"if result.returncode or len(values)!=1 or 'HTTP/1.0 200' not in log:raise RuntimeError('Handshake failed: '+scenario)\"
-replacement=\"if result.returncode or len(values)!=1 or 'HTTP/1.0 200' not in log:\\n        write_failure(scenario,round_number,order,warm,result);return\"
+failure={failure!r}
+replacement={failure_replacement!r}
 if source.count(failure)!=1:raise RuntimeError('Frozen benchmark failure branch drift')
 source=source.replace(failure,replacement)"""
 source=source.replace(needle,injection)
