@@ -16,7 +16,15 @@ def validate_qdisc(text, profile):
     low=text.lower()
     if any(word in low for word in FORBIDDEN): raise ValueError("forbidden impairment configured")
     if "netem" not in low or f'delay {profile["half_delay_ms"]}ms' not in low: raise ValueError("delay mismatch")
-    if not re.search(r'loss(?: random)?\s+'+re.escape(profile["loss_percent"])+r'(?:0*)%',low): raise ValueError("loss mismatch")
+    # iproute2 omits the loss attribute when netem is configured with loss 0%.
+    # Accept omission only for the baseline; non-zero profiles must expose the
+    # exact configured percentage.
+    configured=[float(value) for value in re.findall(r'loss(?: random)?\s+([0-9.]+)%',low)]
+    expected=float(profile["loss_percent"])
+    if expected==0:
+        if any(value!=0 for value in configured): raise ValueError("loss mismatch")
+    elif not configured or not any(abs(value-expected)<1e-12 for value in configured):
+        raise ValueError("loss mismatch")
     limited=profile["rate_mbit"] is not None
     if limited != (" tbf " in " "+low+" "): raise ValueError("bandwidth hierarchy mismatch")
     if limited and ("parent 1:1" not in low or not re.search(r'rate\s+'+str(profile["rate_mbit"])+r'mbit',low)): raise ValueError("TBF rate/parent mismatch")
