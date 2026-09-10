@@ -2,7 +2,7 @@
 import argparse,csv,datetime,hashlib,json,os,re,subprocess
 from pathlib import Path
 from config import *
-from network import commands,parse_iperf,parse_ping,qdisc_kind_drops,section,validate_qdisc,validate_throughput
+from network import commands,own_tbf_drops,parse_iperf,parse_ping,qdisc_kind_drops,section,validate_qdisc,validate_throughput
 REPO=Path(__file__).resolve().parents[2]
 COMPOSE=['docker','compose','-f',str(REPO/'docker/compose.network-combined.yaml')]
 def load(p): return json.loads(p.read_text())
@@ -83,9 +83,10 @@ def execute(root,mode,selected):
         validate_attempts(directory,good+warm,failure,spec['measured_rounds'],spec['warmup_rounds'],spec['scenarios'])
         driver=(directory/'driver.log').read_text();client_after=section(driver,'QDISC_CLIENT_AFTER_BEGIN','QDISC_CLIENT_AFTER_END');validate_qdisc(client_after,profile);(directory/'client-qdisc-after.txt').write_text(client_after)
         after=subprocess.check_output(['docker','exec',container,'tc','-s','qdisc','show','dev','eth0'],text=True);validate_qdisc(after,profile);(directory/'server-qdisc-after.txt').write_text(after);server_drops=qdisc_kind_drops(after);client_drops=qdisc_kind_drops(client_after)
-        if server_drops.get('tbf',0) or client_drops.get('tbf',0):raise RuntimeError('unexpected TBF queue drops')
+        server_tbf_own=own_tbf_drops(server_drops);client_tbf_own=own_tbf_drops(client_drops)
+        if server_tbf_own or client_tbf_own:raise RuntimeError('unexpected TBF-own queue drops')
         tcp1=parse_nstat(subprocess.check_output(['docker','exec',container,'nstat','-az','TcpRetransSegs','TcpOutSegs','TcpInSegs'],text=True));save(directory/'tcp-counters.json',{k:tcp1[k]-tcp0[k] for k in tcp0})
-        save(directory/'validation.json',{'passed':True,'profile':name,**profile,**probe,'measured_bandwidth_mbit':throughput,'bandwidth_gate':'positive descriptive throughput' if profile['rate_mbit'] is None else 'positive and no more than 15% above configured cap','server_qdisc_drops_by_kind':server_drops,'client_qdisc_drops_by_kind':client_drops,'qdisc_configuration_authoritative_for_loss':True,'qdisc_configuration_authoritative_for_bandwidth_cap':True})
+        save(directory/'validation.json',{'passed':True,'profile':name,**profile,**probe,'measured_bandwidth_mbit':throughput,'bandwidth_gate':'positive descriptive throughput' if profile['rate_mbit'] is None else 'positive and no more than 15% above configured cap','server_qdisc_drops_by_kind':server_drops,'client_qdisc_drops_by_kind':client_drops,'server_tbf_own_drops':server_tbf_own,'client_tbf_own_drops':client_tbf_own,'tbf_parent_drop_accounting':'TBF raw total includes child netem drops; own=max(tbf-netem,0)','qdisc_configuration_authoritative_for_loss':True,'qdisc_configuration_authoritative_for_bandwidth_cap':True})
         rec.update(state='complete',measured_attempts=spec['measured_rounds']*len(spec['scenarios']),warmup_attempts=spec['warmup_rounds']*len(spec['scenarios']),successful_measured=len(good),failed_attempts=len(failure),**probe,measured_bandwidth_mbit=throughput);save(status_path,status)
       status['passed']=True;save(status_path,status);verify_hashes(root)
     except BaseException as e:

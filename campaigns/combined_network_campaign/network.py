@@ -57,3 +57,7 @@ def qdisc_kind_drops(text):
         kind=re.search(r'^qdisc\s+(\w+)',block); dropped=re.search(r'dropped\s+(\d+)',block)
         if kind and dropped: result[kind.group(1)]=result.get(kind.group(1),0)+int(dropped.group(1))
     return result
+def own_tbf_drops(drops):
+    # tc reports child netem drops in the parent TBF total as well. Subtract
+    # the child count so random-loss drops are not misclassified as queue loss.
+    return max(drops.get('tbf',0)-drops.get('netem',0),0)
