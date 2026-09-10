@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Packet-loss TLS experiment metadata",
+  "type": "object",
+  "required": ["experiment", "git_commit_before", "git_status_before", "base_image_id", "loss_conditions_percent", "configured_rtt_ms", "status"],
+  "properties": {
+    "experiment": {"const": "packet-loss-only"},
+    "git_commit_before": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "git_status_before": {"type": "string"},
+    "base_image_id": {"type": "string"},
+    "loss_conditions_percent": {"const": ["0", "0.1", "0.5", "1", "2", "5"]},
+    "configured_rtt_ms": {"const": 50},
+    "handshake_timeout_seconds": {"const": 30},
+    "status": {"enum": ["initialized", "complete"]},
+    "preparation_commit": {"type": ["string", "null"]},
+    "git_commit_after_experiment": {"type": ["string", "null"]}
+  },
+  "additionalProperties": true
+}
