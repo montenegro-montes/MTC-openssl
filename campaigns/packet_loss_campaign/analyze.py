@@ -36,6 +36,9 @@ def main(root):
                 x={int(r['round_id']):val(r,metric) for r in good if r['scenario']==left};y={int(r['round_id']):val(r,metric) for r in good if r['scenario']==right};common=sorted(set(x)&set(y))
                 paired.append({'loss_target_percent':rec['loss_target_percent'],'campaign_id':rec['campaign_id'],'scenario':left,'baseline':right,'metric':metric,'paired_successful_rounds':len(common),'paired_median_difference':st.median(x[k]-y[k] for k in common) if common else None})
     for name,rows in [('all-samples.csv',samples),('all-warmups.csv',warmups),('failures.csv',failures),('campaign-summary.csv',campaign),('paired-comparisons.csv',paired),('network-validation.csv',network),('retransmissions.csv',retrans),('outliers.csv',outliers)]:write(root/name,rows)
+    if not failures:
+        fields=['experiment','loss_target_percent','campaign_id','round_id','seed','scenario','order_in_round','is_warmup','success','failure_reason','timeout','TLS_error','returncode']
+        with (root/'failures.csv').open('w',newline='') as f:csv.DictWriter(f,fieldnames=fields).writeheader()
     (root/'qdisc-config.txt').write_text('\n\n'.join(qconfig)+'\n');(root/'qdisc-statistics.txt').write_text('\n\n'.join(qstats)+'\n')
     summary=[];effects=[]
     for loss in LOSSES:

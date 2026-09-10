@@ -8,7 +8,7 @@ def read(path):
     with path.open() as f:return list(csv.DictReader(f))
 def number(value):return float(value) if value not in ['',None,'NA'] else None
 def main(root):
-    out=root/'plots';out.mkdir();summary=read(root/'scenario-summary.csv');effects=read(root/'bootstrap-comparisons.csv');retrans=read(root/'retransmissions.csv');colors={'pq':'#333333','pq-compact-warm':'#0072B2','pq-mtc-experimental-landmark':'#D55E00'};labels={'pq':'X.509','pq-compact-warm':'Compact warm','pq-mtc-experimental-landmark':'MTC landmark'};plt.rcParams.update({'font.size':9,'axes.spines.top':False,'axes.spines.right':False,'pdf.fonttype':42,'svg.fonttype':'none'})
+    out=root/'plots';out.mkdir(exist_ok=True);summary=read(root/'scenario-summary.csv');effects=read(root/'bootstrap-comparisons.csv');retrans=read(root/'retransmissions.csv');colors={'pq':'#333333','pq-compact-warm':'#0072B2','pq-mtc-experimental-landmark':'#D55E00'};labels={'pq':'X.509','pq-compact-warm':'Compact warm','pq-mtc-experimental-landmark':'MTC landmark'};plt.rcParams.update({'font.size':9,'axes.spines.top':False,'axes.spines.right':False,'pdf.fonttype':42,'svg.fonttype':'none'})
     def save(fig,name):
         for ext in ['pdf','svg','png']:fig.savefig(out/f'{name}.{ext}',dpi=220,bbox_inches='tight')
         plt.close(fig)
