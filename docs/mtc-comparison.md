@@ -1,56 +1,57 @@
-# Comparación conceptual y alcance científico
+# Conceptual comparison and scientific scope
 
-MTC se basa en `draft-ietf-plants-merkle-tree-certs-05`. En este repositorio se mide
-un perfil **MTC-experimental**, con las desviaciones documentadas en
-[mtc-protocol.md](mtc-protocol.md). Las mediciones no representan una validación
-de conformidad ni un despliegue completo del borrador IETF.
+MTC is based on `draft-ietf-plants-merkle-tree-certs-05`. This repository
+measures an **MTC-experimental** profile, with deviations documented in
+[mtc-protocol.md](mtc-protocol.md). The measurements do not constitute
+conformance validation or a complete deployment of the IETF draft.
 
-| Esquema | Semántica X509 implementada | SPKI | Prueba Merkle | Firma CA en TLS, aparte de CertificateVerify | Confianza compartida | Estado |
+| Scheme | Implemented X.509 semantics | SPKI | Merkle proof | CA signature in TLS, apart from CertificateVerify | Shared trust | Status |
 |---|---|---|---|---|---|---|
-| X509 tradicional | Validación nativa del escenario, sin CT | Dentro de X509 | No | Firma individual de hoja | CA X509 | Mecanismo estándar |
-| RPK fijado | Asociación local identidad-clave | RPK | No | No | Clave fijada OOB | RFC RPK; control local experimental |
-| Compacto warm | DNS, vigencia, serverAuth mínimos | RPK, hash en credencial custom | Sí, formato previo | No | CA y raíz firmada precargada | Experimental propio |
-| Compacto cold | Igual que warm | Igual que warm | Sí | Firma de raíz compartida | CA precargada; raíz transmitida | Experimental propio |
-| MTC-experimental standalone | Campos X509 de hoja, validación de rutas limitada | Dentro de X509 | Inclusión de entrada TBSCertificateLogEntry | Firma de subárbol CA y un cosigner local | Claves/política CA y cosigner | Perfil del Internet-Draft -05, sin conformidad integral |
-| MTC-experimental landmark | Igual que standalone | Dentro de X509 | Inclusión al subárbol landmark | Ninguna en MTCProof | Claves/política y landmark autenticado OOB | Mismo perfil experimental |
+| Traditional X.509 | Native validation for the scenario, without CT | Inside X.509 | No | Individual leaf signature | X.509 CA | Standard mechanism |
+| Pinned RPK | Local identity-to-key association | RPK | No | No | Key pinned out of band | RFC RPK; experimental local control |
+| Compact warm | Minimal DNS, validity, and `serverAuth` | RPK, with hash in custom credential | Yes, earlier format | No | CA and signed root preloaded | Repository-specific experiment |
+| Compact cold | Same as warm | Same as warm | Yes | Shared-root signature | CA preloaded; root transmitted | Repository-specific experiment |
+| MTC-experimental standalone | X.509 leaf fields, limited path validation | Inside X.509 | Inclusion of `TBSCertificateLogEntry` | CA subtree signature and one local cosigner | CA/cosigner keys and policy | Internet-Draft -05 profile; no complete conformance |
+| MTC-experimental landmark | Same as standalone | Inside X.509 | Inclusion relative to landmark subtree | None in `MTCProof` | Keys/policy and authenticated landmark out of band | Same experimental profile |
 
-CertificateVerify y Finished permanecen en todos los escenarios. Ninguna fila
-elimina la prueba de posesión de la clave privada TLS.
+`CertificateVerify` and `Finished` remain in every scenario. No row removes
+proof of possession of the TLS private key.
 
-## Cómo separar los efectos
+## Separating the effects
 
-1. X509 frente a RPK cuantifica el efecto conjunto de contenedor y modelo de
-   autenticación; no es una comparación con propiedades de PKI equivalentes.
-2. RPK frente a compacto añade credencial mínima y prueba. Los tamaños publicados
-   por la fase de perfilado siguen disponibles; no se mezclan sus tiempos con la
-   campaña MTC como si fueran muestras emparejadas.
-3. X509 frente a MTC conserva el contenedor X509, cambia la autenticación CA y
-   agrega una prueba. En standalone también se exige una cosignatura adicional;
-   X509 base no lleva SCTs. El mayor tamaño de standalone no es evidencia de que
-   el diseño IETF sea ineficaz en una PKI con transparencia equivalente.
-4. Standalone frente a landmark desplaza firmas a material compartido fuera de
-   TLS. Deben contabilizarse distribución y validación previas, así como demora
-   de emisión, actualización y almacenamiento no representados por el handshake.
-5. Compacto frente a MTC compara arquitecturas. MTC mantiene atributos y
-   extensiones X509 más ricos; compacto omite, entre otras funciones, validación
-   general de cadenas, políticas, name constraints y mecanismos PKI extensibles.
-   Este perfil MTC tampoco implementa toda esa maquinaria de rutas: no se le
-   atribuyen las capacidades de una implementación IETF/PKIX completa.
+1. X.509 versus RPK measures the combined effect of the container and trust
+   model; the PKI properties are not equivalent.
+2. RPK versus Compact adds a minimal credential and proof. Published profiling
+   sizes remain available, but their timing samples are not mixed with the MTC
+   campaign as if they were paired.
+3. X.509 versus MTC retains the X.509 container, changes CA authentication, and
+   adds a proof. Standalone also requires an additional cosignature; the X.509
+   baseline carries no SCTs. A larger standalone representation does not show
+   that the IETF design is inefficient in a PKI with equivalent transparency.
+4. Standalone versus landmark moves signatures to shared state outside TLS.
+   Prior distribution and validation, issuance delay, updates, and storage must
+   be accounted for even though they are not represented by the handshake.
+5. Compact versus MTC compares architectures. MTC retains richer X.509
+   attributes and extensions. Compact omits general chain validation, policies,
+   name constraints, and extensible PKI mechanisms. This MTC profile also lacks
+   general path machinery and is not credited with the capabilities of a full
+   IETF/PKIX implementation.
 
-Las diferencias de CPU incluyen parser, proveedor criptográfico y forma de
-integración en OpenSSL. Las medidas por sí solas no aíslan el coste abstracto
-de un árbol Merkle. Las diferencias de tamaño distinguen DER, prueba, firmas,
-mensajes y registros. El estudio no considera P-256 y ML-DSA-65 niveles de
-seguridad nominal idénticos.
+CPU differences include parsing, the cryptographic provider, and the OpenSSL
+integration. Measurements alone do not isolate the abstract cost of a Merkle
+tree. Size measurements distinguish DER, proofs, signatures, messages, and
+records. The study does not treat P-256 and ML-DSA-65 as identical nominal
+security levels.
 
-## Amortización
+## Amortization
 
-Puede calcularse un umbral teórico `ceil(D / (B_standalone - B_landmark))`, donde
-D es el material distribuido una vez y B son bytes por handshake. Se reportan
-D completo y D incremental respecto a claves/política comunes. Para una política
-real también cuentan renovación, refresco, fallos y distribución de múltiples
-landmarks. Aquí cada muestra crea un proceso y vuelve a cargar/verificar el archivo:
-**no se observa una caché reutilizada ni amortización temporal real**.
+A theoretical threshold can be calculated as
+`ceil(D / (B_standalone - B_landmark))`, where D is the material distributed
+once and B is the byte count per handshake. Both complete D and incremental D
+relative to common keys/policy are reported. A real policy must also account for
+renewal, refresh, failures, and distribution of multiple landmarks. Each sample
+here creates a process and reloads and verifies the file, so **persistent cache
+reuse and real temporal amortization are not observed**.
 
-Los [resultados](mtc-results.md) responden con datos del perfil medido, distinguiendo
-la campaña principal del escalado exploratorio y las limitaciones pendientes.
+The [results](mtc-results.md) report the measured profile, distinguish the main
+campaign from exploratory scaling, and state the remaining limitations.

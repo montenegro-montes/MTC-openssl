@@ -1,62 +1,63 @@
-# Viabilidad: MTC -05 sobre OpenSSL 3.5.8
+# Feasibility: MTC -05 on OpenSSL 3.5.8
 
-Análisis previo a la implementación, 10 de septiembre de 2026. Base preservada:
-`v0.3.0-profile` (`dc152ad`). Inventario SHA-256: `mtc/preservation.json`.
-Se inspeccionaron las fases original, compacta y de perfilado, sus generadores,
-verificadores, métricas y el código real de OpenSSL dentro de la imagen.
+Pre-implementation analysis, 10 September 2026. Preserved baseline:
+`v0.3.0-profile` (`dc152ad`). SHA-256 inventory: `mtc/preservation.json`. The
+original, Compact, and profiling phases were inspected together with their
+generators, verifiers, metrics, and the OpenSSL source used inside the image.
 
-Referencias fijadas: [MTC -05](https://www.ietf.org/archive/id/draft-ietf-plants-merkle-tree-certs-05.txt)
-y su dependencia [trust-anchor-ids -04](https://www.ietf.org/archive/id/draft-ietf-tls-trust-anchor-ids-04.txt).
-No se sustituye la versión solicitada por una revisión posterior.
+Pinned references: [MTC -05](https://www.ietf.org/archive/id/draft-ietf-plants-merkle-tree-certs-05.txt)
+and its dependency [trust-anchor-ids -04](https://www.ietf.org/archive/id/draft-ietf-tls-trust-anchor-ids-04.txt).
+The requested revision is not replaced with a later draft.
 
-OpenSSL no implementa MTC ni `trust_anchors`. Sí procesa Certificate X509,
-CertificateVerify, Finished y extensiones TLS personalizadas. La fase compacta
-usa RPK y otro formato: no se reutilizará como si fuera MTC.
+OpenSSL implements neither MTC nor `trust_anchors`. It does process X.509
+`Certificate`, `CertificateVerify`, `Finished`, and custom TLS extensions. The
+Compact phase uses RPK and a different format and is not reused as if it were MTC.
 
-| Draft feature | Required by draft | OpenSSL support | Implementation plan | Exact / Approximation |
+| Draft feature | Draft requirement | OpenSSL support | Implementation | Exact / approximation |
 |---|---|---|---|---|
-| Issuance log | §5.2, entradas ordenadas append-only | No | Snapshot inicial inmutable, log 1, población compartida; reconstrucción completa antes de firmar | Perfil limitado; sin servicio público ni evolución operacional |
-| TBSCertificateLogEntry | §5.2.1 | No | DER conservando campos del TBS, sustitución SPKI por algoritmo y hash; omitir serial y signature | Formato exacto del perfil soportado |
-| Merkle tree | §4, RFC9162 | No | Árbol independiente, partición por mayor potencia de dos; no duplicar hojas impares | Exacto |
-| Inclusion proof | §4.3, §6.2 | No | Verificador separado con índices absolutos y subárbol alineado | Exacto |
-| Checkpoint | §5.2, §5.3 | No | Snapshot firmado, timestamp no nulo, hash de todas las entradas | Exacto para snapshot inicial |
-| Subtree signatures | §5.3.1, §6.3 | EVP firma/verifica | Mensaje separado por dominio, timestamp cero para certificados | Exacto |
-| Cosignatures | §7.3, política configurable | EVP | CA y un cosigner adicional local; ambos reconstruyen el snapshot; claves distintas | Criptografía exacta; no independencia operacional ni transparencia pública |
-| Standalone certificate | §6.2–6.3 | X509 contenedor sí, firma MTC no | MTCProof en signatureValue; dos subárboles de cobertura según §4.5 | Formato exacto; perfil experimental |
-| Landmark-relative certificate | §6.4 | No | Secuencia inicial [0,N], selección de subárbol, signatures vacío | Formato exacto; un landmark activo |
-| Landmark distribution | §7.4 | No | Configuración local autenticada con checkpoint y cobertura de sus subárboles; medir bytes y validación previa | Transporte OOB local; sin servicio de actualización ni caché persistente |
-| CA identification | §5.1 | OID/Name genéricos | Identificadores privados de documentación 32473.*, OID experimental que prescribe -05 | Exacto para experimentación |
-| Trust anchor identification | §5.1, §8 | No | IDs binarios RELATIVE-OID y landmark específico | Perfil limitado |
-| TLS negotiation/signalling | §8 y TAI -04 §4 | Custom extensions | Listas en CH/EE y confirmación vacía en CertificateEntry 0; código privado 0xffa7, coincidencia exacta, rechazo si falta | Experimental: no código IANA, grupos/retry/múltiples rutas no implementados |
-| Certificate message | §8 | Sí | Certificado X509 MTC íntegro, sin RPK ni encapsulación compacta | Exacto |
-| CertificateVerify | TLS 1.3 | Sí | Mantener firma nativa con la clave original del servidor | Exacto |
-| Finished | TLS 1.3 | Sí | Mantener procesamiento nativo | Exacto |
-| Hostname validation | X509/TLS | Sí | X509_check_host y validación nativa de hoja tras autenticación MTC | Perfil de hoja DNS servidor |
-| Validity validation | X509 | Sí | Fechas de hoja comprobadas durante TLS; trust snapshot autenticado previamente | Exacto para hoja |
-| Path validation | §7.2 reemplaza solo autenticación de firma | Parcial | Validar MTC y aplicar controles X509 de hoja; trust config directa §7.1, sin CA intermedia | Limitación explícita; no validador PKIX MTC general |
-| Revoked ranges | §7.5 | No para config MTC | Limitar seriales al log y rango emitido; rechazar fuera de rango | Snapshot estático; sin actualización de revocaciones |
-| CA certificate representation | §5.5 opcional como fuente de configuración | No | Configuración directa §7.1 con claves SPKI; no simular un certificado CA auto-firmado | Alternativa permitida; formato OOB de laboratorio |
+| Issuance log | §5.2, ordered append-only entries | No | Immutable initial snapshot, log 1, shared population; fully rebuilt before signing | Limited profile; no public service or operational evolution |
+| `TBSCertificateLogEntry` | §5.2.1 | No | DER retaining TBS fields, replacing SPKI with algorithm and hash; serial and signature omitted | Exact for supported profile |
+| Merkle tree | §4, RFC 9162 | No | Independent tree split at the largest power of two; odd leaves are not duplicated | Exact |
+| Inclusion proof | §4.3, §6.2 | No | Separate verifier with absolute indices and aligned subtree | Exact |
+| Checkpoint | §5.2, §5.3 | No | Signed snapshot, nonzero timestamp, hash of all entries | Exact for initial snapshot |
+| Subtree signatures | §5.3.1, §6.3 | EVP signing/verification | Domain-separated message, zero timestamp for certificates | Exact |
+| Cosignatures | §7.3, configurable policy | EVP | CA plus one local cosigner; both rebuild snapshot; distinct keys | Exact cryptography; no operational independence or public transparency |
+| Standalone certificate | §6.2–6.3 | X.509 container only | `MTCProof` in `signatureValue`; two covering subtrees under §4.5 | Exact format; experimental profile |
+| Landmark-relative certificate | §6.4 | No | Initial sequence [0,N], subtree selection, empty signatures | Exact format; one active landmark |
+| Landmark distribution | §7.4 | No | Local authenticated configuration with checkpoint and covering subtrees; bytes and prior validation measured | Local out-of-band transport; no update service or persistent cache |
+| CA identification | §5.1 | Generic OID/Name support | Documented private identifiers 32473.* and experimental OID prescribed by -05 | Exact for experimentation |
+| Trust-anchor identification | §5.1, §8 | No | Binary RELATIVE-OID IDs and specific landmark | Limited profile |
+| TLS negotiation/signaling | §8 and TAI -04 §4 | Custom extensions | Lists in CH/EE and empty confirmation in CertificateEntry 0; private code 0xffa7; exact match and rejection when absent | Experimental: no IANA code, groups/retry, or multiple paths |
+| Certificate message | §8 | Yes | Complete MTC X.509 certificate, without RPK or Compact encapsulation | Exact |
+| CertificateVerify | TLS 1.3 | Yes | Native signature with original server key | Exact |
+| Finished | TLS 1.3 | Yes | Native processing retained | Exact |
+| Hostname validation | X.509/TLS | Yes | `X509_check_host` and native leaf checks after MTC authentication | DNS server leaf profile |
+| Validity validation | X.509 | Yes | Leaf dates checked during TLS; trust snapshot authenticated beforehand | Exact for leaf |
+| Path validation | §7.2 replaces signature authentication only | Partial | Validate MTC, then apply X.509 leaf controls; direct §7.1 trust configuration, no intermediate CA | Explicit limitation; not a general MTC PKIX validator |
+| Revoked ranges | §7.5 | No for MTC configuration | Restrict serials to log and issued range; reject outside range | Static snapshot; no revocation updates |
+| CA certificate representation | Optional source under §5.5 | No | Direct §7.1 configuration with SPKI keys; no simulated self-signed CA certificate | Permitted alternative; laboratory out-of-band format |
 
-## Decisiones y límites de la comparación
+## Comparison decisions and limits
 
-La implementación se denominará **MTC-experimental**, incluso si los formatos
-centrales siguen -05. Los escenarios llevarán `mtc-experimental` en el nombre.
-No habrá afirmación de conformidad integral IETF, interoperabilidad ni despliegue
-Web PKI. Las limitaciones de negociación, ciclo de vida del log y validación de
-rutas no se ocultarán bajo flags de línea de comandos.
+The implementation is called **MTC-experimental** even where core encodings
+follow -05, and scenario names contain `mtc-experimental`. It makes no claim of
+complete IETF conformance, interoperability, or Web PKI deployment. Limitations
+in negotiation, log lifecycle, and path validation are not hidden behind command
+line flags.
 
-Las claves de CA MTC deben ser distintas de las CA X509 (§5.4). Se conservarán
-claves de servidor, nombres, fechas y población. Las extensiones de identificación
-de emisor que referencien la CA anterior requieren adaptación u omisión documentada.
-ECDSA P-256 y ML-DSA-65 son familias de continuidad experimental, no niveles de
-seguridad nominal idénticos. El intercambio se mantiene en X25519.
+MTC CA keys are distinct from X.509 CA keys as required by §5.4. Server keys,
+names, dates, and population remain fixed. Issuer-identification extensions that
+refer to the former CA require documented adaptation or omission. ECDSA P-256
+and ML-DSA-65 provide experimental continuity across families, not identical
+nominal security levels. Key exchange remains X25519.
 
-La política por defecto añade un cosigner local a la CA. X509 anterior no incluye
-SCTs: standalone con cosignatura y X509 sin CT no tienen propiedades equivalentes.
-Se desglosarán firmas y prueba. El modo landmark desplaza autenticación a la
-configuración previa, cuyo coste se contabilizará; no se presumirá amortización.
+The default policy adds one local cosigner to the CA. The earlier X.509 baseline
+has no SCTs, so standalone with a cosignature and X.509 without CT do not provide
+equivalent properties. Signatures and proofs are reported separately. Landmark
+mode moves authentication into prior configuration; its cost is counted and
+amortization is not assumed.
 
-La instrumentación se reutiliza en una copia independiente de la versión perfilada,
-con prefijo `/opt/openssl-mtc`. Se validarán primero fixtures/verificadores,
-después TLS negativo y regresiones, después smoke y campaña completa. Los tamaños
-de escalado se obtendrán de las codificaciones reales, no de una fórmula asumida.
+Instrumentation is reused in an independent copy of the profiled build under
+`/opt/openssl-mtc`. Fixtures and verifiers are validated first, followed by
+negative TLS cases and regressions, smoke, and the full campaign. Scaling sizes
+come from actual encodings rather than an assumed formula.

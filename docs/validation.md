@@ -1,42 +1,45 @@
-# Verificación local — 2026-09-09
+# Local verification — 2026-09-09
 
-Docker Desktop, contenedores Linux arm64. Imagen construida correctamente con
-OpenSSL 3.5.8, liboqs 0.14.0 y oqsprovider 0.10.0. Se conserva el ejecutable
-original y se construye otro con las opciones Merkle de cliente y servidor.
+Docker Desktop with Linux arm64 containers. The image was built successfully
+with OpenSSL 3.5.8, liboqs 0.14.0, and oqsprovider 0.10.0. The original
+executable is preserved and a separate executable is built with the Merkle
+client and server options.
 
-- Compose válido; sintaxis Bash y compilación Python correctas.
-- 153 rutas de prueba Merkle válidas (árboles de 1 a 17 hojas), junto a mutaciones,
-  truncaciones y entradas inválidas, pasan con AddressSanitizer y UBSan.
-- 50 comprobaciones TLS pasan sobre ECDSA P-256 y ML-DSA-65: conexión válida,
-  HelloRetryRequest, interoperabilidad normal y rechazo de raíz/prueba/hoja
-  incorrectas, CA/hostname incorrectos, expiración y prueba ausente.
-- Un peer exclusivo de pruebas envía por red versiones, índices, profundidades
-  y longitudes de prueba inválidos; el cliente rechaza todos los casos.
-- Se comprueba el rechazo de PSK, sesiones de entrada, reconnect, early data,
-  raw public keys, modo avanzado y DANE, así como la exigencia de identidad.
-- Los dos escenarios Merkle completan conexiones HTTP verificadas entre los
-  servicios cliente y servidor de Compose, con dos muestras funcionales cada uno.
-- `codigoOriginal/C/` y `codigoOriginal/Bash/` permanecen sin modificaciones respecto del contenido recibido.
-  Las advertencias de funciones sin uso en los fuentes originales permanecen.
+- The Compose configuration is valid; Bash syntax and Python compilation pass.
+- 153 valid Merkle proof paths for trees with 1 to 17 leaves, together with
+  mutations, truncations, and invalid inputs, pass under AddressSanitizer and
+  UBSan.
+- 50 TLS checks pass with ECDSA P-256 and ML-DSA-65: valid connection,
+  HelloRetryRequest, normal interoperability, and rejection of incorrect roots,
+  proofs, leaves, CAs, and hostnames, as well as expiration and missing proofs.
+- A test-only peer sends invalid versions, indices, depths, and proof lengths
+  over the network; the client rejects every case.
+- The tests verify rejection of PSK, input sessions, reconnect, early data, raw
+  public keys, advanced mode, and DANE, and enforce the identity requirement.
+- Both Merkle scenarios complete verified HTTP connections between the Compose
+  client and server services, with two functional samples each.
+- `codigoOriginal/C/` and `codigoOriginal/Bash/` remain unchanged from the
+  received content. Warnings about unused functions in the original sources
+  remain.
 
-Tamaños observados en las comprobaciones funcionales, usando los mismos
-certificados, X25519 y TLS_AES_256_GCM_SHA384:
+Sizes observed during the functional checks, using the same certificates,
+X25519, and `TLS_AES_256_GCM_SHA384`:
 
-| Escenario | Hoja DER (bytes) | Handshake leído por cliente (bytes) | Escrito (bytes) |
+| Scenario | DER leaf (bytes) | Handshake read by client (bytes) | Written (bytes) |
 |---|---:|---:|---:|
 | ECDSA P-256 | 444 | 815–816 | 400 |
 | ECDSA P-256 + Merkle | 444 | 897 | 405 |
-| ML-DSA-65 | 5563 | 9172 | 400 |
-| ML-DSA-65 + Merkle | 5563 | 9253 | 405 |
+| ML-DSA-65 | 5,563 | 9,172 | 400 |
+| ML-DSA-65 + Merkle | 5,563 | 9,253 | 405 |
 
-El árbol de demostración tiene dos hojas: payload de prueba de 77 bytes, más
-4 bytes de cabecera de extensión. La oferta del cliente ocupa 1 + 4 bytes.
-Las firmas ECDSA tienen longitud variable. Los valores son contadores de
-s_client, no bytes de Ethernet/IP/TCP.
+The demonstration tree has two leaves: a 77-byte proof payload plus a 4-byte
+extension header. The client offer occupies 1 + 4 bytes. ECDSA signatures have
+variable length. These values are `s_client` counters, not Ethernet/IP/TCP wire
+bytes.
 
-Solo son muestras funcionales; no permiten concluir diferencias de rendimiento.
-Los CSV y logs están en `artifacts/results/`. Las muestras Merkle registran el
-hash del parche concreto usado; después se añadió también la exclusión de DANE
-y se repitió la suite completa. No se ha ejecutado un estudio estadístico ni
-probado el grupo híbrido opcional. El ahorro de tamaño mediante certificados
-compactos sigue sin implementar: esta etapa añade comprobación y bytes a X.509.
+These are functional samples only and do not support performance conclusions.
+CSVs and logs are under `artifacts/results/`. The Merkle samples record the hash
+of the specific patch used; DANE exclusion was subsequently added and the full
+suite was repeated. No statistical study has been run and the optional hybrid
+group has not been tested. Compact-certificate size reduction was not implemented
+in this phase: this stage adds verification and bytes to X.509.
