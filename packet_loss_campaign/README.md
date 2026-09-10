@@ -1,6 +1,6 @@
 # Controlled packet-loss TLS campaign
 
-Preparation commit: `PENDING_PREPARATION_COMMIT`
+Preparation commit: `ef9305e02f72f0888d775e74cbdd47f795016895`
 
 This directory prepares a manual packet-loss-only experiment. It reuses the
 validated N=16 authentication implementation and `/opt/paper/measure.py` metric
