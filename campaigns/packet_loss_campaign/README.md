@@ -49,7 +49,7 @@ their completed source separately before initializing this experiment.
 Choose one new result path and reuse it in every following command:
 
 ```sh
-LOSS_ROOT=artifacts/results/network-loss-YYYYMMDD-HHMMSS
+LOSS_ROOT="artifacts/results/network-loss-$(date +%Y%m%d-%H%M%S)"
 python3 campaigns/packet_loss_campaign/control.py init "$LOSS_ROOT"
 ```
 
