@@ -1,0 +1,28 @@
+name: papern16
+x-lab: &lab
+  image: mt-tls-paper:local
+  build:
+    context: .
+    dockerfile: Dockerfile.paper
+  volumes:
+    - ./artifacts:/work:ro
+    - ./artifacts/results:/work/results
+  environment:
+    COMPACT_BATCH: /work/compact/batch16
+    MTC_BATCH: /work/mtc/batch16-v2
+    PROFILE_DETAIL: "0"
+    PAPER_RUN_ROOT: ${PAPER_RUN_ROOT:?Set PAPER_RUN_ROOT to the new experiment directory}
+    PAPER_CAMPAIGN_ID: ${PAPER_CAMPAIGN_ID:-campaign-01}
+    PAPER_SEED: ${PAPER_SEED:-42}
+services:
+  server:
+    <<: *lab
+    command: ["python3", "/opt/paper/serve.py"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/paper-ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  client:
+    <<: *lab
+    command: ["python3", "/opt/paper/measure.py"]

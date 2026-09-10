@@ -1,0 +1,11 @@
+ARG BASE_IMAGE=mt-tls-mtc:local
+FROM ${BASE_IMAGE}
+COPY paper_campaign/patch_setup.py /opt/paper/
+RUN cp -a /opt/src/openssl-mtc /opt/src/openssl-paper && \
+    python3 /opt/paper/patch_setup.py /opt/src/openssl-paper && \
+    cd /opt/src/openssl-paper && make -j2 apps/openssl && \
+    mkdir -p /opt/openssl-paper/bin && cp apps/openssl /opt/openssl-paper/bin/openssl && \
+    cp PAPER_MEASUREMENT_SHA256 /opt/openssl-paper/
+COPY paper_campaign /opt/paper
+RUN chmod +x /opt/paper/openssl.sh
+WORKDIR /work
