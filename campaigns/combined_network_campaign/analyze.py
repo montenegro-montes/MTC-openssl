@@ -4,11 +4,12 @@ from pathlib import Path
 from config import PAIRS,PROFILES,SCENARIOS
 TIMING=['handshake_wall_ms','handshake_client_cpu_ms','handshake_server_cpu_ms','handshake_total_cpu_ms']
 METRICS=TIMING+['transport_total_bytes','setup_wall_ms','setup_cpu_ms','trust_validation_ms','predistributed_bytes']
+FAILURE_FIELDS=['experiment','network_profile','configured_loss_percent','campaign_id','round_id','seed','scenario','order_in_round','is_warmup','success','failure_reason','timeout','TLS_error','returncode']
 def read(p):
  with p.open() as f:return list(csv.DictReader(f))
-def write(p,data):
- if not data:return
- fields=list(dict.fromkeys(k for r in data for k in r))
+def write(p,data,fields=None):
+ if not data and fields is None:return
+ fields=fields or list(dict.fromkeys(k for r in data for k in r))
  with p.open('w',newline='') as f:w=csv.DictWriter(f,fieldnames=fields);w.writeheader();w.writerows(data)
 def value(r,k):return float(r[k]) if r.get(k) not in ('',None) else None
 def quantile(v,p):
@@ -35,7 +36,8 @@ def main(a):
   for left,right in PAIRS:
    for metric in TIMING+['transport_total_bytes']:
     x={r['round_id']:value(r,metric) for r in good if r['scenario']==left};y={r['round_id']:value(r,metric) for r in good if r['scenario']==right};common=set(x)&set(y);paired.append({'profile':rec['profile'],'campaign_id':rec['campaign_id'],'scenario':left,'baseline':right,'metric':metric,'paired_successful_rounds':len(common),'paired_median_difference':st.median(x[k]-y[k] for k in common) if common else None})
- for name,data in [('all-samples.csv',samples),('all-warmups.csv',warmups),('failures.csv',failures),('campaign-summary.csv',campaign),('paired-comparisons.csv',paired),('network-telemetry.csv',network),('campaign-tcp-counters.csv',tcp)]:write(root/name,data)
+ for name,data in [('all-samples.csv',samples),('all-warmups.csv',warmups),('campaign-summary.csv',campaign),('paired-comparisons.csv',paired),('network-telemetry.csv',network),('campaign-tcp-counters.csv',tcp)]:write(root/name,data)
+ write(root/'failures.csv',failures,FAILURE_FIELDS)
  summary=[];effects=[]
  for profile in PROFILES:
   for scenario in SCENARIOS:

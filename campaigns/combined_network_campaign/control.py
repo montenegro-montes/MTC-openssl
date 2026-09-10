@@ -25,7 +25,14 @@ def main():
  else:
   for name in ['tests-status.json','preflight-status.json','smoke-status.json','campaign-status.json','analysis-status.json']:
    if not load(root/name)['passed']:raise SystemExit(name+' incomplete')
-  verify(root);snap=root/'source';snap.mkdir();shutil.copytree(REPO/'campaigns/combined_network_campaign',snap/'campaigns/combined_network_campaign',ignore=shutil.ignore_patterns('__pycache__'));(snap/'docker').mkdir();shutil.copyfile(REPO/'docker/compose.network-combined.yaml',snap/'docker/compose.network-combined.yaml');save(root/'source-sha256.json',{str(f.relative_to(snap)):sha(f) for f in snap.rglob('*') if f.is_file()});active=subprocess.check_output(['docker','ps','--filter','label=com.docker.compose.project=mtcombined','--format','{{.ID}}'],text=True).strip()
+  verify(root);snap=root/'source'
+  if snap.exists():
+   if not (root/'source-sha256.json').is_file():raise RuntimeError('source snapshot exists without source-sha256.json')
+   for path,digest in load(root/'source-sha256.json').items():
+    if sha(snap/path)!=digest:raise RuntimeError('source snapshot mismatch: '+path)
+  else:
+   snap.mkdir();shutil.copytree(REPO/'campaigns/combined_network_campaign',snap/'campaigns/combined_network_campaign',ignore=shutil.ignore_patterns('__pycache__'));(snap/'docker').mkdir();shutil.copyfile(REPO/'docker/compose.network-combined.yaml',snap/'docker/compose.network-combined.yaml');save(root/'source-sha256.json',{str(f.relative_to(snap)):sha(f) for f in snap.rglob('*') if f.is_file()})
+  active=subprocess.check_output(['docker','ps','--filter','label=com.docker.compose.project=mtcombined','--format','{{.ID}}'],text=True).strip()
   if active:raise RuntimeError('containers remain active')
   m=load(root/'metadata.json');m.update(status='complete',authentication_or_protocol_source_changed=False,completed_utc=datetime.datetime.now(datetime.timezone.utc).isoformat());save(root/'metadata.json',m)
  print(a.stage,'PASS',root)
