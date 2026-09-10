@@ -1,0 +1,20 @@
+{
+  "docker/compose.network-combined.yaml": "0f87e8b971589c0e9b8fb8db3af83561e64ccdedd863f02a731a00f57d92ad24",
+  "campaigns/combined_network_campaign/measure.py": "bfd81708f96feb8c0b8c724c5e90321a1d6d4f701edb0bac1645d1aa86736303",
+  "campaigns/combined_network_campaign/run.py": "aa81ba77b0e7e4b85e56146f12315529eb520d1173b8ce5e4460f5550522c2d3",
+  "campaigns/combined_network_campaign/config.py": "3037549161ff067718c2603fbd48ad772c22c623bc2230c6e614c60f103e092a",
+  "campaigns/combined_network_campaign/control.py": "0159ee82adcd4884bca5b0fd4e5ca2ff15cd9556380163b345fb77005ab40790",
+  "campaigns/combined_network_campaign/test_analysis.py": "7f007d943d0356fbdfcc0a2ed3dde42f9b49f777ccd901f549ed2666c7d6f281",
+  "campaigns/combined_network_campaign/README.md": "7f0defbdc3f86476a86c918746fad226733d7e19ca00433c5bb56a837d32b384",
+  "campaigns/combined_network_campaign/apply_network.py": "197171158fa7ccd068f7768fb2dfb698cc98e8506193ecd0866c8c8f06ab5931",
+  "campaigns/combined_network_campaign/validate.py": "a64b20d414c9e156c0fd1752699a64465b833b4800d9aaaace5f2f2eb2312461",
+  "campaigns/combined_network_campaign/plots.py": "5a9405ba838bd36def8f536bd718992772b1e35c606352e21c2b3729a8c86681",
+  "campaigns/combined_network_campaign/test_network.py": "27292f139ac57961dd6d5b71fc23b30f155cef636ffb7655bf4f118d9faabd67",
+  "campaigns/combined_network_campaign/requirements-plots.txt": "be923c642695914a2c78b1fe8cd465496994e45d41c89ae86b5962883f01eb27",
+  "campaigns/combined_network_campaign/record_commit.py": "4853c935dc6d387417f66ab4fccf2ccf36a54c183aa183cfc107014bb7b4833b",
+  "campaigns/combined_network_campaign/network.py": "03a1917682e754314dc107a1c9ff98bcc25b6a491391b30cbef9d7cd5b2f1f89",
+  "campaigns/combined_network_campaign/client.sh": "8fd08619ed5595e711118b803f32357531d666e16aeabdd42449c33c8e1ddf34",
+  "campaigns/combined_network_campaign/cleanup.sh": "734fa784d4059fbb0adb2db31e2cec39559ccb1cea77cdd27ca5f8b2028d39fe",
+  "campaigns/combined_network_campaign/analyze.py": "21248a136d1e92c18db52bdfecea1415999fe5e6aeb776f975b84c6b992a141e",
+  "campaigns/combined_network_campaign/schemas/metadata-schema.json": "ceeaa1d6f419d11e6c9549cd601647bfc8528d2633c9e03382ab38a7b7ea5dad"
+}
