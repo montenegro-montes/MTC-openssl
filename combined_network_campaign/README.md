@@ -2,7 +2,7 @@
 
 This directory prepares the final controlled N=16 campaign combining RTT, bandwidth and independent symmetric per-egress random loss. It does not change the authentication implementations. MTC remains **MTC-experimental**, targeting `draft-ietf-plants-merkle-tree-certs-05`.
 
-Preparation commit: `PENDING_PREPARATION_COMMIT`
+Preparation commit: `9b7ec5a3ed7bd5a8f406d95cd7b9d69f85e4832a`
 
 ## Frozen design
 
