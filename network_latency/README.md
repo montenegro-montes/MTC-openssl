@@ -16,14 +16,15 @@ inference resamples five campaign effects at fixed RTT 10,000 times.
 Reproduction uses a new output directory:
 
 ```sh
-python3 network_latency/control.py init artifacts/results/network-latency-NEW
+FINAL="artifacts/results/network-latency-final-$(date +%Y%m%d-%H%M%S)"
+python3 network_latency/control.py init "$FINAL"
 docker build -f Dockerfile.network -t mt-tls-network:latency .
-python3 network_latency/control.py tests artifacts/results/network-latency-NEW
-python3 network_latency/run.py artifacts/results/network-latency-NEW --smoke
-python3 network_latency/run.py artifacts/results/network-latency-NEW
-python3 network_latency/analyze.py artifacts/results/network-latency-NEW
-python3 network_latency/plots.py artifacts/results/network-latency-NEW
-python3 network_latency/control.py audit artifacts/results/network-latency-NEW
+python3 network_latency/control.py tests "$FINAL"
+python3 network_latency/run.py "$FINAL" --smoke
+python3 network_latency/run.py "$FINAL"
+python3 network_latency/analyze.py "$FINAL"
+python3 network_latency/plots.py "$FINAL"
+python3 network_latency/control.py audit "$FINAL"
 ```
 
 Smoke data are stored separately and excluded. The driver refuses to overwrite
