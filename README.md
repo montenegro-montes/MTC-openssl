@@ -47,12 +47,33 @@ are architectural; their trust and transparency models are not equivalent.
 | Merkle population scaling | Completed | Tree sizes 1, 4, 16, 64, 256, and 1024 |
 | Controlled latency | Completed | Additional RTT from 0 to 200 ms |
 | Bandwidth constrained | Infrastructure prepared | Independent manual campaign |
-| Packet loss | Infrastructure prepared | Campaign with explicit failures and timeouts |
+| Packet loss | Completed | Six loss levels at 50 ms RTT; latency, reliability, and TCP retransmission activity |
 | Combined network conditions | Infrastructure prepared | Baseline, WAN, constrained, and adverse profiles |
 
 Generated data live under `artifacts/results/` and are excluded from Git.
 Campaigns record the commit, Git state, image, environment, hashes, effective
 configuration, and validation evidence.
+
+### Completed packet-loss campaign
+
+The packet-loss-only experiment completed 30 independent campaigns across
+per-egress loss settings 0%, 0.1%, 0.5%, 1%, 2%, and 5%, with a fixed additional
+50 ms RTT. It contains 5,400 measured TLS handshakes and 900 warmups over the six
+post-quantum X.509, RPK, Compact, and MTC scenarios. All 5,400 measured attempts
+completed successfully; the zero observed TLS-failure rate is specific to these
+controlled runs and must not be generalized to other networks or timeout
+policies.
+
+The experiment records successful-handshake wall time and CPU, TLS BIO bytes,
+configured and observed loss, qdisc evidence, campaign-level TCP counters,
+paired round effects, and campaign-level bootstrap intervals. TCP
+retransmissions cannot be assigned reliably to individual handshakes, and TLS
+BIO bytes are not network-wire bytes.
+
+- Execution and reproduction: [packet-loss campaign](campaigns/packet_loss_campaign/README.md)
+- Validated experiment commit: `d6b98c7faf728e7627c6b7292a198548c38f9de4`
+- Postprocessing idempotency fix: `795c553d1d877b6f6d55b1131255592183b7e6a4`
+- Local result directory: `artifacts/results/network-loss-20260910-212643/`
 
 ## Repository layout
 

@@ -149,7 +149,7 @@ du -sh "$LOSS_ROOT"
 
 ```sh
 python3 campaigns/packet_loss_campaign/analyze.py "$LOSS_ROOT"
-/tmp/mt-scaling-plots-venv/bin/python campaigns/packet_loss_campaign/plots.py "$LOSS_ROOT"
+python3 campaigns/packet_loss_campaign/plots.py "$LOSS_ROOT"
 python3 campaigns/packet_loss_campaign/validate.py "$LOSS_ROOT"
 python3 campaigns/packet_loss_campaign/control.py audit "$LOSS_ROOT"
 ```
