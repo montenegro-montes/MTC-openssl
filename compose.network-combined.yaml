@@ -1,0 +1,33 @@
+name: mtcombined
+x-lab: &lab
+  image: mt-tls-network:latency
+  cap_add: [NET_ADMIN]
+  volumes:
+    - ./artifacts:/work:ro
+    - ./artifacts/results:/work/results
+    - ./combined_network_campaign:/opt/network-combined:ro
+    - ./packet_loss_campaign:/opt/network-loss:ro
+  environment:
+    COMPACT_BATCH: /work/compact/batch16
+    MTC_BATCH: /work/mtc/batch16-v2
+    PROFILE_DETAIL: "0"
+    PAPER_RUN_ROOT: ${PAPER_RUN_ROOT:?Set PAPER_RUN_ROOT}
+    PAPER_CAMPAIGN_ID: ${PAPER_CAMPAIGN_ID:?Set PAPER_CAMPAIGN_ID}
+    PAPER_SEED: ${PAPER_SEED:?Set PAPER_SEED}
+    NETWORK_PROFILE_JSON: ${NETWORK_PROFILE_JSON:?Set NETWORK_PROFILE_JSON}
+    LOSS_TARGET_PERCENT: ${LOSS_TARGET_PERCENT:-0}
+    PROBE_PACKETS: ${PROBE_PACKETS:-200}
+    HANDSHAKE_TIMEOUT_SECONDS: ${HANDSHAKE_TIMEOUT_SECONDS:-30}
+services:
+  server:
+    <<: *lab
+    command: ["sh", "-c", "python3 /opt/network-combined/apply_network.py && iperf3 -s -D && python3 /opt/paper/serve.py"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/paper-ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  client:
+    <<: *lab
+    entrypoint: ["/opt/network-combined/client.sh"]
+    command: []

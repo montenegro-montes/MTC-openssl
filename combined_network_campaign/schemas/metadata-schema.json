@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["experiment","preparation_commit","git_commit_before","git_status_before","profiles","scenarios","N","TLS","status"],"properties":{"experiment":{"const":"combined-network"},"N":{"const":16},"status":{"enum":["initialized","complete"]}},"additionalProperties":true}
