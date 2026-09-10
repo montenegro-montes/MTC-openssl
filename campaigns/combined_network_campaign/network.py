@@ -40,6 +40,13 @@ def parse_iperf(text):
     if not matches: raise ValueError("missing iperf throughput")
     value,unit=matches[-1]
     return float(value)*{"K":0.001,"M":1.0,"G":1000.0}[unit]
+def validate_throughput(measured_mbit, configured_mbit):
+    if measured_mbit <= 0: raise ValueError("non-positive throughput")
+    # With RTT and random loss, TCP may legitimately remain below the TBF rate.
+    # The validated qdisc is authoritative for the configured cap; iperf must
+    # only demonstrate traffic and must not exceed that cap beyond tolerance.
+    if configured_mbit is not None and measured_mbit > configured_mbit*1.15:
+        raise ValueError("throughput exceeds configured cap by more than 15%")
 def section(text,start,end):
     m=re.search(re.escape(start)+r'\n(.*?)'+re.escape(end),text,re.S)
     if not m: raise ValueError("missing section "+start)

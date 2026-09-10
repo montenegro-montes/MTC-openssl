@@ -2,7 +2,7 @@
 import argparse,csv,datetime,hashlib,json,os,re,subprocess
 from pathlib import Path
 from config import *
-from network import commands,parse_iperf,parse_ping,qdisc_kind_drops,section,validate_qdisc
+from network import commands,parse_iperf,parse_ping,qdisc_kind_drops,section,validate_qdisc,validate_throughput
 REPO=Path(__file__).resolve().parents[2]
 COMPOSE=['docker','compose','-f',str(REPO/'docker/compose.network-combined.yaml')]
 def load(p): return json.loads(p.read_text())
@@ -57,8 +57,10 @@ def execute(root,mode,selected):
     if not gate['passed'] or gate['image_id']!=image:raise SystemExit('ABORT: tested image mismatch')
     if mode!='preflight' and not load(root/'preflight-status.json')['passed']:raise SystemExit('ABORT: preflight required')
     if mode=='full' and not load(root/'smoke-status.json')['passed']:raise SystemExit('ABORT: smoke required')
-    verify_hashes(root); out=root/('campaigns' if mode=='full' else mode); out.mkdir(); status_path=root/('campaign-status.json' if mode=='full' else mode+'-status.json')
+    verify_hashes(root); out=root/('campaigns' if mode=='full' else mode); status_path=root/('campaign-status.json' if mode=='full' else mode+'-status.json')
     if status_path.exists():raise SystemExit('refusing overwrite/retry')
+    if out.exists():raise SystemExit('refusing existing output directory: '+str(out))
+    out.mkdir()
     status={'experiment':'combined-network','passed':False,'failed_campaign':None,'expected':spec,'campaigns':[]};save(status_path,status)
     env=os.environ.copy(); campaigns=range(1,6) if mode=='full' else [1]
     try:
@@ -73,7 +75,7 @@ def execute(root,mode,selected):
         tcp0=parse_nstat(subprocess.check_output(['docker','exec',container,'nstat','-az','TcpRetransSegs','TcpOutSegs','TcpInSegs'],text=True))
         probe_run=subprocess.run(COMPOSE+['run','--rm','client','probe'],env=env,text=True,capture_output=True,check=True);probe_text=probe_run.stdout+probe_run.stderr;(directory/'network-validation.log').write_text(probe_text);validate_qdisc(section(probe_text,'QDISC_CLIENT_BEGIN','QDISC_CLIENT_END'),profile);probe=parse_ping(probe_text,spec['probe_packets']);throughput=parse_iperf(probe_text)
         if abs(probe['measured_rtt_median_ms']-profile['rtt_ms'])>10:raise RuntimeError('RTT outside +/-10 ms gate')
-        if profile['rate_mbit'] is not None and abs(throughput-profile['rate_mbit'])/profile['rate_mbit']>.15:raise RuntimeError('throughput outside +/-15% gate')
+        validate_throughput(throughput,profile['rate_mbit'])
         with (directory/'driver.log').open('w') as log:subprocess.run(COMPOSE+['run','--rm','client','measure','--runs',str(spec['measured_rounds']),'--warmup',str(spec['warmup_rounds']),'--seed',str(s),'--image-id',image,'--scenarios',*spec['scenarios']],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
         ensure_failures(directory/'failures.csv');failure=add_fields(directory/'failures.csv',{'experiment':'combined-network','network_profile':name,'configured_loss_percent':profile['loss_percent']});good=add_fields(directory/'samples.csv',{'experiment':'combined-network','network_profile':name,'is_warmup':'0','configured_rtt_ms':profile['rtt_ms'],'configured_bandwidth_mbit':profile['rate_mbit'] if profile['rate_mbit'] is not None else 'unconstrained','configured_loss_percent':profile['loss_percent'],'measured_rtt_ms':probe['measured_rtt_median_ms'],'measured_bandwidth_mbit':throughput});warm=add_fields(directory/'warmups.csv',{'experiment':'combined-network','network_profile':name,'is_warmup':'1'})
         expected=(spec['measured_rounds']+spec['warmup_rounds'])*len(spec['scenarios'])
@@ -83,7 +85,7 @@ def execute(root,mode,selected):
         after=subprocess.check_output(['docker','exec',container,'tc','-s','qdisc','show','dev','eth0'],text=True);validate_qdisc(after,profile);(directory/'server-qdisc-after.txt').write_text(after);server_drops=qdisc_kind_drops(after);client_drops=qdisc_kind_drops(client_after)
         if server_drops.get('tbf',0) or client_drops.get('tbf',0):raise RuntimeError('unexpected TBF queue drops')
         tcp1=parse_nstat(subprocess.check_output(['docker','exec',container,'nstat','-az','TcpRetransSegs','TcpOutSegs','TcpInSegs'],text=True));save(directory/'tcp-counters.json',{k:tcp1[k]-tcp0[k] for k in tcp0})
-        save(directory/'validation.json',{'passed':True,'profile':name,**profile,**probe,'measured_bandwidth_mbit':throughput,'bandwidth_gate':'unconstrained descriptive' if profile['rate_mbit'] is None else '+/-15%','server_qdisc_drops_by_kind':server_drops,'client_qdisc_drops_by_kind':client_drops,'qdisc_configuration_authoritative_for_loss':True})
+        save(directory/'validation.json',{'passed':True,'profile':name,**profile,**probe,'measured_bandwidth_mbit':throughput,'bandwidth_gate':'positive descriptive throughput' if profile['rate_mbit'] is None else 'positive and no more than 15% above configured cap','server_qdisc_drops_by_kind':server_drops,'client_qdisc_drops_by_kind':client_drops,'qdisc_configuration_authoritative_for_loss':True,'qdisc_configuration_authoritative_for_bandwidth_cap':True})
         rec.update(state='complete',measured_attempts=spec['measured_rounds']*len(spec['scenarios']),warmup_attempts=spec['warmup_rounds']*len(spec['scenarios']),successful_measured=len(good),failed_attempts=len(failure),**probe,measured_bandwidth_mbit=throughput);save(status_path,status)
       status['passed']=True;save(status_path,status);verify_hashes(root)
     except BaseException as e:
