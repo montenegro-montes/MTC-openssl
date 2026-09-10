@@ -4,7 +4,15 @@ RATE_QDISCS=('tbf','htb','hfsc','cake')
 def validate_qdisc(text,loss):
     lower=text.lower()
     if 'netem' not in lower or 'delay 25ms' not in lower:raise ValueError('Expected netem delay 25ms')
-    if not re.search(r'loss(?: random)?\s+'+re.escape(loss)+r'(?:0*)%',lower):raise ValueError('Configured loss mismatch')
+    # iproute2 omits the loss attribute when netem is configured with loss 0%.
+    # Accept omission only for the zero-loss control; every non-zero condition
+    # must remain visible and equal to the requested value.
+    configured=[float(value) for value in re.findall(r'loss(?: random)?\s+([0-9.]+)%',lower)]
+    expected=float(loss)
+    if expected==0:
+        if any(value!=0 for value in configured):raise ValueError('Configured loss mismatch')
+    elif not configured or not any(abs(value-expected)<1e-12 for value in configured):
+        raise ValueError('Configured loss mismatch')
     if any(name in lower for name in RATE_QDISCS):raise ValueError('Unexpected bandwidth limiter')
 def parse_ping(text,sent):
     match=re.search(r'(\d+) packets transmitted, (\d+) received, ([0-9.]+)% packet loss',text)

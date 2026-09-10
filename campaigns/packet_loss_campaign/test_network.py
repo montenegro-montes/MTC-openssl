@@ -2,6 +2,12 @@ import json
 from network import validate_qdisc,parse_ping,section,counters,delta,qdisc_drops
 q='qdisc netem 1: root refcnt 2 limit 1000 delay 25ms loss 0.1%\n Sent 1 bytes 1 pkt (dropped 2, overlimits 0 requeues 0)'
 validate_qdisc(q,'0.1');assert qdisc_drops(q)==2
+validate_qdisc('qdisc netem 1: root refcnt 2 limit 1000 delay 25ms','0')
+validate_qdisc('qdisc netem 1: root refcnt 2 limit 1000 delay 25ms loss 0%','0')
+for actual,expected in [('loss 0.1%','0'),('', '0.1'),('loss 1%','0.5')]:
+    try:validate_qdisc('qdisc netem 1: root refcnt 2 limit 1000 delay 25ms '+actual,expected)
+    except ValueError:pass
+    else:raise AssertionError((actual,expected,'mismatched loss accepted'))
 try:validate_qdisc(q+' qdisc tbf','0.1')
 except ValueError:pass
 else:raise AssertionError('TBF accepted')
