@@ -6,6 +6,7 @@ REPO=Path(__file__).resolve().parents[2]
 RTTS=[10,50,100];RATES=[100,20,10,5,1]
 SCENARIOS=['pq','pq-rpk','pq-compact-warm','pq-compact-cold','pq-mtc-experimental-landmark','pq-mtc-experimental-standalone']
 COMPOSE=['docker','compose','-f',str(REPO/'docker/compose.network-bandwidth.yaml')]
+GOODPUT_MIN_RATIO=.80;GOODPUT_MAX_RATIO=1.05
 def load(path):return json.loads(path.read_text())
 def save(path,value):path.write_text(json.dumps(value,indent=2)+'\n')
 def burst(rate):return max(1600,int(rate*1_000_000/8/1000))
@@ -24,7 +25,8 @@ def parse_probe(text,target):
     ping=parse_ping(text);objects=[iperf_result(text,'FORWARD'),iperf_result(text,'REVERSE')]
     rates=[o['end']['sum_received']['bits_per_second']/1e6 for o in objects];retrans=[o['end'].get('sum_sent',{}).get('retransmits',0) for o in objects]
     result={**ping,'bandwidth_forward_mbps':rates[0],'bandwidth_reverse_mbps':rates[1],'bandwidth_measured_mbps':min(rates),'iperf_retransmits_forward':retrans[0],'iperf_retransmits_reverse':retrans[1]}
-    if any(abs(v-target)/target>.15 for v in rates):raise RuntimeError(f'Throughput outside predeclared ±15% tolerance: {rates}')
+    ratios=[v/target for v in rates]
+    if any(not GOODPUT_MIN_RATIO<=v<=GOODPUT_MAX_RATIO for v in ratios):raise RuntimeError(f'Goodput outside predeclared 80%-105% of configured TBF rate: rates={rates}, ratios={ratios}')
     if any(retrans):raise RuntimeError(f'Unexpected iperf retransmissions: {retrans}')
     return result
 def drops(text):return sum(int(x) for x in re.findall(r'dropped\s+(\d+)',text))
@@ -55,7 +57,7 @@ def validate(directory,seed,rtt,rate,runs,warmups,probe):
             if 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' not in log or 'Peer Temp Key: X25519' not in log or 'no client certificate available' not in log or float(row['certificate_verify_bytes'])<=0:raise RuntimeError('TLS control failure')
             if '-compact-' in row['scenario'] and 'Compact verification: OK' not in log:raise RuntimeError('Compact failure/fallback')
             if '-mtc-experimental-' in row['scenario'] and 'MTC verification: OK' not in log:raise RuntimeError('MTC failure/fallback')
-    save(directory/'validation.json',{'passed':True,'seed':seed,'rtt_target_ms':rtt,'bandwidth_target_mbps':rate,**probe,'qdisc_drops':0,'throughput_tolerance_percent':15})
+    save(directory/'validation.json',{'passed':True,'seed':seed,'rtt_target_ms':rtt,'bandwidth_target_mbps':rate,**probe,'qdisc_drops':0,'goodput_acceptance_ratio':[GOODPUT_MIN_RATIO,GOODPUT_MAX_RATIO]})
 def main():
     p=argparse.ArgumentParser();p.add_argument('root',type=Path);p.add_argument('--smoke',action='store_true');a=p.parse_args();root=a.root.resolve();gate=load(root/'tests-status.json')
     if not gate['passed']:raise SystemExit('ABORT: regression gate failed')

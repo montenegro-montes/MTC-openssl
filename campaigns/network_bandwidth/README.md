@@ -24,9 +24,18 @@ a token burst; do not interpret the analytical byte/rate value as the exact
 measured delay of a short TLS flight.
 
 Before each campaign, twenty pings and forward/reverse four-second iperf3 probes
-validate the new namespaces. Both directions must be within the predeclared
-±15% tolerance. Any ping loss, iperf retransmission or qdisc drop stops the run
-and marks that campaign invalid. There is no automatic retry.
+validate the new namespaces. TCP payload goodput in both directions must be
+80%–105% of the configured TBF rate. This accounts for protocol overhead and
+short-flow dynamics while still rejecting a materially incorrect limiter. The
+configured TBF rate defines the condition; measured goodput is recorded as
+validation evidence and a covariate. Any ping loss, iperf retransmission or
+qdisc drop stops the run and marks that campaign invalid. There is no automatic
+retry.
+
+This acceptance interval was frozen before the definitive experiment after
+excluded smoke diagnostics showed that valid 5 Mbit/s TCP goodput could fall
+just below the former symmetric 15% boundary. Those failed smoke directories
+remain excluded and are never pooled with results produced under this protocol.
 
 ## Step 1 — inspect the environment
 
