@@ -35,13 +35,12 @@ test -d artifacts/certs
 
 ## Step 2 — initialize the reproducibility metadata
 
-Choose a timestamped path and create the metadata using the schemas described
-below:
+Choose a timestamped path and initialize its reproducibility metadata:
 
 ```sh
 N16_ROOT="artifacts/results/controlled-n16-$(date +%Y%m%d-%H%M%S)"
 echo "$N16_ROOT"
-mkdir "$N16_ROOT"
+python3 campaigns/controlled_n16_campaign/control.py init "$N16_ROOT"
 ```
 
 Record Git commit/status, SHA-256 of tracked source and N=16 fixtures, and local
@@ -50,9 +49,10 @@ Record Git commit/status, SHA-256 of tracked source and N=16 fixtures, and local
    schemas expected by the runner. Inventory private keys by hash only; never copy
    their contents into the result/source snapshot or Git.
 
-This historical campaign package has no `control.py init` command. The metadata
-files must exist before `run.py`; use the completed run as the canonical schema
-and do not copy its measurements into the new directory.
+The initializer records the current Git commit/status, measurement image,
+environment, source hashes and N=16 fixture hashes. It accepts an existing empty
+directory so a failed setup attempt can be recovered, but refuses any directory
+that already contains campaign data. It never copies historical measurements.
 
 ## Step 3 — build the measurement image
 
@@ -66,18 +66,15 @@ Build the measurement image on the recorded local MTC image. BuildKit uses a
 
 ## Step 4 — run and record the regression gate
 
-Run `sh /opt/measurement/tests.sh` inside that image with `artifacts` mounted read-only
-   at `/work`; capture its full output in `tests.log`. Save `tests-status.json`
-   with `passed`, `exit_code` and the actual `image_id`. Any failure blocks the
-   experiment. `measurement-image.json` stores that image's Id/RepoTags/RepoDigests.
+Run the regression gate through the campaign control command. It executes
+`sh /opt/measurement/tests.sh` inside that image with `artifacts` mounted
+read-only at `/work`, captures `tests.log`, and saves `tests-status.json` with
+the exit code and actual image ID. Any failure blocks the experiment.
    The original `mtc_tests` demo uses exit 1 for success; `test_legacy.py` verifies
    both that convention and its positive output instead of altering the demo.
 
 ```sh
-docker run --rm --network none \
-  -v "$PWD/artifacts:/work:ro" \
-  mt-tls-measurement:local sh /opt/measurement/tests.sh \
-  >"$N16_ROOT/tests.log" 2>&1
+python3 campaigns/controlled_n16_campaign/control.py tests "$N16_ROOT"
 ```
 
 Record the exit code and exact image ID in `tests-status.json`. Do not continue

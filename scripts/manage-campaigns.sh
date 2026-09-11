@@ -16,7 +16,7 @@ STEPS='00.doctor
 06.mtc-fixtures
 07.measurement-image
 08.network-image
-10.n16-manual-metadata
+10.n16-init
 11.n16-preflight
 12.n16-run
 13.n16-analysis
@@ -98,7 +98,7 @@ description() {
     03.compact-build) echo "Build Compact image";; 04.compact-fixtures) echo "Generate Compact N=16 fixtures";;
     05.mtc-build) echo "Build profiling and MTC images";; 06.mtc-fixtures) echo "Generate MTC N=16 fixtures";;
     07.measurement-image) echo "Build and test controlled measurement image";; 08.network-image) echo "Build and inspect network image";;
-    10.n16-manual-metadata) echo "Create/review historical N=16 metadata (manual gate)";; 11.n16-preflight) echo "N=16 preflight";; 12.n16-run) echo "N=16 full campaign";; 13.n16-analysis) echo "N=16 analysis";;
+    10.n16-init) echo "Initialize N=16 metadata and run regression tests";; 11.n16-preflight) echo "N=16 preflight";; 12.n16-run) echo "N=16 full campaign";; 13.n16-analysis) echo "N=16 analysis";;
     20.scaling-init) echo "Initialize scaling";; 21.scaling-tests-before) echo "Scaling regression gate";; 22.scaling-generate) echo "Generate/validate scaling fixtures";; 23.scaling-preflight) echo "Scaling preflight";; 24.scaling-run) echo "Scaling full campaign";; 25.scaling-tests-after) echo "Scaling post-run tests";; 26.scaling-analysis) echo "Scaling analysis, plots and audit";;
     30.latency-init) echo "Initialize latency campaign";; 31.latency-tests) echo "Latency tests";; 32.latency-smoke) echo "Latency smoke";; 33.latency-run) echo "Latency full campaign";; 34.latency-analysis) echo "Latency analysis and audit";;
     40.bandwidth-init) echo "Initialize bandwidth campaign";; 41.bandwidth-tests) echo "Bandwidth tests";; 42.bandwidth-smoke) echo "Bandwidth smoke";; 43.bandwidth-run) echo "Bandwidth full campaign";; 44.bandwidth-analysis) echo "Bandwidth analysis and audit";;
@@ -112,7 +112,13 @@ description() {
   esac
 }
 
-require_state() { [ -f "$STATE_FILE" ] && [ -f "$ROOTS_FILE" ] || { echo "No battery state. Run: $0 init" >&2; exit 2; }; }
+require_state() {
+  [ -f "$STATE_FILE" ] && [ -f "$ROOTS_FILE" ] || { echo "No battery state. Run: $0 init" >&2; exit 2; }
+  if grep -q '^10\.n16-manual-metadata[[:space:]]' "$STATE_FILE"; then
+    sed 's/^10\.n16-manual-metadata/10.n16-init/' "$STATE_FILE" > "$STATE_FILE.tmp"
+    mv "$STATE_FILE.tmp" "$STATE_FILE"
+  fi
+}
 load_roots() { require_state; set -a; . "$ROOTS_FILE"; set +a; }
 has_step() { printf '%s\n' "$STEPS" | grep -Fx "$1" >/dev/null; }
 get_status() { awk -F '\t' -v id="$1" '$1==id {print $2}' "$STATE_FILE"; }
@@ -160,7 +166,7 @@ command_for() {
     06.mtc-fixtures) echo "docker compose -f docker/compose.mtc.yaml run --rm setup";;
     07.measurement-image) echo "docker build -f docker/Dockerfile.measurement --build-arg BASE_IMAGE=mt-tls-mtc:local -t mt-tls-measurement:local . && docker run --rm --network none -v \"$REPO/artifacts:/work:ro\" mt-tls-measurement:local sh /opt/measurement/tests.sh";;
     08.network-image) echo "python3 -m campaigns.common.image_chain network";;
-    10.n16-manual-metadata) echo "mkdir -p \"$N16_ROOT\"; echo 'Historical N=16 has no automatic metadata initializer. Complete the schema described in campaigns/controlled_n16_campaign/README.md, then mark this step completed.'; exit 3";;
+    10.n16-init) echo "python3 campaigns/controlled_n16_campaign/control.py init \"$N16_ROOT\" && python3 campaigns/controlled_n16_campaign/control.py tests \"$N16_ROOT\"";;
     11.n16-preflight) echo "python3 campaigns/controlled_n16_campaign/run.py --root \"$N16_ROOT\" --preflight";;
     12.n16-run) echo "python3 campaigns/controlled_n16_campaign/run.py --root \"$N16_ROOT\"";;
     13.n16-analysis) echo "python3 campaigns/controlled_n16_campaign/test_analysis.py && python3 campaigns/controlled_n16_campaign/analyze.py \"$N16_ROOT\"";;
