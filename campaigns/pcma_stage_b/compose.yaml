@@ -1,0 +1,12 @@
+x-endpoint: &endpoint
+  image: ${PCMA_IMAGE:-mt-tls-pcma:stage-b-v1}
+  cap_add: [NET_ADMIN, NET_RAW]
+  volumes:
+    - ../../artifacts:/work:ro
+    - ../../artifacts/results:/work/results
+  command: ["sleep", "infinity"]
+services:
+  server:
+    <<: *endpoint
+  client:
+    <<: *endpoint

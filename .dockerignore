@@ -4,6 +4,7 @@
 !docker/openssl.cnf
 !scripts/
 !scripts/**
+
 !codigoOriginal/
 !codigoOriginal/C/
 !codigoOriginal/C/*tests.c
@@ -11,11 +12,26 @@
 !codigoOriginal/C/crypto/*.c
 !codigoOriginal/C/crypto/*.h
 
+!compact/
+!compact/**
+
 !integration/
 !integration/*.c
 !integration/*.h
 !integration/*.py
+
+!campaigns/
+!campaigns/pcma/
+!campaigns/pcma/**
+!campaigns/pcma_stage_a2/
+!campaigns/pcma_stage_a2/**
+!campaigns/pcma_stage_b/
+!campaigns/pcma_stage_b/**
+!campaigns/combined_network_campaign/
+!campaigns/combined_network_campaign/**
+
 !tests/
 !tests/*.c
 !tests/*.py
+
 **/__pycache__/
