@@ -7,6 +7,7 @@ RTTS=[10,50,100];RATES=[100,20,10,5,1]
 SCENARIOS=['pq','pq-rpk','pq-compact-warm','pq-compact-cold','pq-mtc-experimental-landmark','pq-mtc-experimental-standalone']
 COMPOSE=['docker','compose','-f',str(REPO/'docker/compose.network-bandwidth.yaml')]
 GOODPUT_MIN_RATIO=.80;GOODPUT_MAX_RATIO=1.05
+RTT_ABSOLUTE_TOLERANCE_MS=5.0
 def load(path):return json.loads(path.read_text())
 def save(path,value):path.write_text(json.dumps(value,indent=2)+'\n')
 def burst(rate):return max(1600,int(rate*1_000_000/8/100))
@@ -85,7 +86,8 @@ def main():
                 server_probe=subprocess.check_output(['docker','exec',container,'tc','-s','qdisc','show','dev','eth0'],text=True);(directory/'server-qdisc-probe-after.txt').write_text(server_probe)
                 if drops(probe_text)+drops(server_probe):raise RuntimeError('Probe qdisc drop; inspect client network-validation.log and server-qdisc-probe-after.txt')
                 probe=parse_probe(probe_text,rate)
-                if abs(probe['measured_rtt_median_ms']-rtt)>max(4,rtt*.15):raise RuntimeError('Measured RTT outside tolerance')
+                rtt_tolerance=max(RTT_ABSOLUTE_TOLERANCE_MS,rtt*.15)
+                if abs(probe['measured_rtt_median_ms']-rtt)>rtt_tolerance:raise RuntimeError(f'Measured RTT outside tolerance: target={rtt}, median={probe["measured_rtt_median_ms"]}, tolerance={rtt_tolerance}')
                 with (directory/'driver.log').open('w') as log:subprocess.run(COMPOSE+['run','--rm','client','measure','--runs',str(runs),'--warmup',str(warmups),'--seed',str(seed),'--image-id',image,'--scenarios',*SCENARIOS],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
                 driver=(directory/'driver.log').read_text();server_after=subprocess.check_output(['docker','exec',container,'tc','-s','qdisc','show','dev','eth0'],text=True);(directory/'server-qdisc-after.txt').write_text(server_after);match=re.search(r'QDISC_CLIENT_AFTER_BEGIN\n(.*?)QDISC_CLIENT_AFTER_END',driver,re.S)
                 if not match:raise RuntimeError('Missing client qdisc statistics')

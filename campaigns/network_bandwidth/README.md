@@ -36,6 +36,12 @@ goodput is retained as validation evidence and a covariate. Any ping loss,
 iperf retransmission or qdisc drop stops the run and marks that campaign
 invalid. There is no automatic retry.
 
+The RTT operational gate is an absolute target error no greater than
+`max(5 ms, 15% of target)`, matching the validated latency-only campaign. The
+fixed allowance covers Docker bridge and qdisc scheduling overhead, which is
+material relative to the 10 ms condition. The target and measured RTT are both
+retained; analysis uses the measured median.
+
 Client and server qdisc counters are captured immediately after each iperf
 probe. Any drop on either endpoint invalidates the condition before TLS
 measurements begin.
