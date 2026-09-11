@@ -17,4 +17,4 @@ elif suite=='profile':
     scenarios.SCENARIOS=scenarios.previous.previous.SCENARIOS
     source=Path('/opt/profiling/test_tls.py').read_text()
 else:raise SystemExit('unknown suite')
-exec(compile(source,'saved-'+suite+'-suite-on-paper-binary','exec'))
+exec(compile(source,'saved-'+suite+'-suite-on-measurement-binary','exec'))

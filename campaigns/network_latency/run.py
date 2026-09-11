@@ -62,14 +62,14 @@ def main():
     if status_path.exists(): raise SystemExit('Refusing to overwrite/retry')
     output=root/('smoke' if args.smoke else 'campaigns');output.mkdir()
     status={'experiment':'latency-only','image_id':image,'passed':False,'failed_campaign':None,'campaigns':[]};save(status_path,status)
-    env=os.environ.copy();env['PAPER_RUN_ROOT']='/work/'+str(output.relative_to(REPO/'artifacts'))
+    env=os.environ.copy();env['MEASUREMENT_RUN_ROOT']='/work/'+str(output.relative_to(REPO/'artifacts'))
     rtts=[0,50,100] if args.smoke else RTTS;campaigns=[1] if args.smoke else range(1,6);runs,warmups=(5,3) if args.smoke else (30,5)
     resources0=network0=None;containers=set()
     try:
         for rtt in rtts:
             for index in campaigns:
                 seed=100000+rtt*100+index;cid=f'latency-rtt{rtt}-c{index}';directory=output/cid;directory.mkdir()
-                env.update(PAPER_CAMPAIGN_ID=cid,PAPER_SEED=str(seed),NETWORK_HALF_DELAY_MS=str(rtt/2))
+                env.update(MEASUREMENT_CAMPAIGN_ID=cid,MEASUREMENT_SEED=str(seed),NETWORK_HALF_DELAY_MS=str(rtt/2))
                 record={'campaign_id':cid,'rtt_target_ms':rtt,'seed':seed,'state':'starting','started_utc':datetime.datetime.now(datetime.timezone.utc).isoformat()};status['campaigns'].append(record);save(status_path,status)
                 with (directory/'server-start.log').open('w') as log: subprocess.run(COMPOSE+['up','-d','--force-recreate','--wait','server'],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
                 container=subprocess.check_output(COMPOSE+['ps','-q','server'],env=env,text=True).strip();cfg=json.loads(subprocess.check_output(['docker','inspect',container],text=True))[0]

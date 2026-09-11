@@ -23,7 +23,7 @@ docker/Dockerfile          -> mt-tls-lab:local
 docker/Dockerfile.compact  -> mt-tls-compact:local
 docker/Dockerfile.profile  -> mt-tls-profile:local
 docker/Dockerfile.mtc      -> mt-tls-mtc:local
-docker/Dockerfile.paper    -> mt-tls-paper:local
+docker/Dockerfile.measurement    -> mt-tls-measurement:local
 docker/Dockerfile.network  -> mt-tls-network:latency
 ```
 
@@ -69,16 +69,16 @@ docker compose -f docker/compose.mtc.yaml run --rm setup
 
 The MTC setup creates `artifacts/mtc/batch16-v2/`.
 
-## Step 5 — build and test the paper image
+## Step 5 — build and test the study image
 
 ```sh
-docker build -f docker/Dockerfile.paper \
+docker build -f docker/Dockerfile.measurement \
   --build-arg BASE_IMAGE=mt-tls-mtc:local \
-  -t mt-tls-paper:local .
+  -t mt-tls-measurement:local .
 
 docker run --rm --network none \
   -v "$PWD/artifacts:/work:ro" \
-  mt-tls-paper:local sh /opt/paper/tests.sh
+  mt-tls-measurement:local sh /opt/measurement/tests.sh
 ```
 
 Do not use the image for measurements unless the output contains
@@ -93,7 +93,7 @@ docker run --rm --network none mt-tls-network:latency sh -c \
 ```
 
 The network stage only installs `iproute2`, `iputils-ping` and `iperf3`.
-It retains the OpenSSL binary from `mt-tls-paper:local`.
+It retains the OpenSSL binary from `mt-tls-measurement:local`.
 
 ## Compose inventory
 
@@ -103,7 +103,7 @@ It retains the OpenSSL binary from `mt-tls-paper:local`.
 | `compose.compact.yaml` | `mtcompact` | Compact Merkle fixtures and benchmark |
 | `compose.profile.yaml` | `mtprofile` | Detailed timing instrumentation |
 | `compose.mtc.yaml` | `mtclab` | Experimental MTC implementation |
-| `compose.paper.yaml` | `papern16` | Controlled N=16 measurements |
+| `compose.measurement.yaml` | `controlledn16` | Controlled N=16 measurements |
 | `compose.scaling.yaml` | `mtscaling` | Tree-population scaling |
 | `compose.network-latency.yaml` | `mtlatency` | Latency-only campaign |
 | `compose.network-bandwidth.yaml` | `mtbandwidth` | Bandwidth-limited campaign |

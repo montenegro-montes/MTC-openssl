@@ -34,7 +34,7 @@ for n in [1,4,16,64,256,1024]:
  for family,(files,keys) in families.items():
   old.compact_snapshot(compact/family,family,files,keys,n)
   path=compact/family/'manifest.json';m=json.loads(path.read_text());cert=core.from_pem(files[0].read_bytes());spki=core.certificate_parts(cert)[1][6][2]
-  m.update(leaf0_spki_bytes=len(spki),leaf0_der_bytes=len(cert),leaf0_x509_sha256=sha(files[0]),authority_spki_sha256=core.H(core.certificate_parts(core.from_pem((Path('/work/certs')/family/'ca.pem').read_bytes()))[1][6][2]).hex(),input_sha256={str(f):sha(f) for f in files[:n]},metadata_correction='actual serialized server SPKI DER length required by frozen paper driver')
+  m.update(leaf0_spki_bytes=len(spki),leaf0_der_bytes=len(cert),leaf0_x509_sha256=sha(files[0]),authority_spki_sha256=core.H(core.certificate_parts(core.from_pem((Path('/work/certs')/family/'ca.pem').read_bytes()))[1][6][2]).hex(),input_sha256={str(f):sha(f) for f in files[:n]},metadata_correction='actual serialized server SPKI DER length required by frozen controlled measurement driver')
   path.write_text(json.dumps(m,indent=2)+'\n');prepare.prepare(mtc/family,compact,family,n)
   assert len(list((mtc/family/'log').glob('*.entry')))==n
   assert len({(compact/family/f'credential-{i:04d}.bin').read_bytes() for i in range(n)})==n

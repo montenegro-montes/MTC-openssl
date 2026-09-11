@@ -1,0 +1,28 @@
+name: controlledn16
+x-lab: &lab
+  image: mt-tls-measurement:local
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile.measurement
+  volumes:
+    - ../artifacts:/work:ro
+    - ../artifacts/results:/work/results
+  environment:
+    COMPACT_BATCH: /work/compact/batch16
+    MTC_BATCH: /work/mtc/batch16-v2
+    PROFILE_DETAIL: "0"
+    MEASUREMENT_RUN_ROOT: ${MEASUREMENT_RUN_ROOT:?Set MEASUREMENT_RUN_ROOT to the new experiment directory}
+    MEASUREMENT_CAMPAIGN_ID: ${MEASUREMENT_CAMPAIGN_ID:-campaign-01}
+    MEASUREMENT_SEED: ${MEASUREMENT_SEED:-42}
+services:
+  server:
+    <<: *lab
+    command: ["python3", "/opt/measurement/serve.py"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/measurement-ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  client:
+    <<: *lab
+    command: ["python3", "/opt/measurement/measure.py"]

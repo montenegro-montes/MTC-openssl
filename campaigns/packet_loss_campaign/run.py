@@ -63,11 +63,11 @@ def execute(root,mode):
     status_path=root/(mode+'-status.json' if mode!='full' else 'campaign-status.json')
     if status_path.exists():raise SystemExit('Refusing to overwrite or retry')
     output=root/(mode if mode!='full' else 'campaigns');output.mkdir();status={'experiment':'packet-loss-only','mode':mode,'passed':False,'image_id':image,'failed_campaign':None,'campaigns':[],'expected':spec};save(status_path,status)
-    env=os.environ.copy();env['PAPER_RUN_ROOT']='/work/'+str(output.relative_to(REPO/'artifacts'));env['LOSS_PROBE_PACKETS']=str(probe_packets);env['HANDSHAKE_TIMEOUT_SECONDS']=str(HANDSHAKE_TIMEOUT_SECONDS);resources0=network0=None;containers=set()
+    env=os.environ.copy();env['MEASUREMENT_RUN_ROOT']='/work/'+str(output.relative_to(REPO/'artifacts'));env['LOSS_PROBE_PACKETS']=str(probe_packets);env['HANDSHAKE_TIMEOUT_SECONDS']=str(HANDSHAKE_TIMEOUT_SECONDS);resources0=network0=None;containers=set()
     try:
         for loss in losses:
             for index in campaign_ids:
-                campaign_seed=seed(loss,index);slug=loss.replace('.','p');cid=f'loss-{slug}-c{index}';directory=output/cid;directory.mkdir();env.update(PAPER_CAMPAIGN_ID=cid,PAPER_SEED=str(campaign_seed),LOSS_TARGET_PERCENT=loss)
+                campaign_seed=seed(loss,index);slug=loss.replace('.','p');cid=f'loss-{slug}-c{index}';directory=output/cid;directory.mkdir();env.update(MEASUREMENT_CAMPAIGN_ID=cid,MEASUREMENT_SEED=str(campaign_seed),LOSS_TARGET_PERCENT=loss)
                 rec={'campaign_id':cid,'loss_target_percent':loss,'loss_code':LOSS_CODES[loss],'configured_rtt_ms':RTT_MS,'client_egress_loss_percent':loss,'server_egress_loss_percent':loss,'loss_scope':'independent per-direction netem probability; not end-to-end probability','seed':campaign_seed,'state':'starting','started_utc':datetime.datetime.now(datetime.timezone.utc).isoformat()};status['campaigns'].append(rec);save(status_path,status)
                 with (directory/'server-start.log').open('w') as log:subprocess.run(COMPOSE+['up','-d','--force-recreate','--wait','server'],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
                 container=subprocess.check_output(COMPOSE+['ps','-q','server'],env=env,text=True).strip();cfg=json.loads(subprocess.check_output(['docker','inspect',container],text=True))[0]

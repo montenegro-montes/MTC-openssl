@@ -67,11 +67,11 @@ def main():
     hashes(root);status_path=root/('smoke-status.json' if a.smoke else 'campaign-status.json')
     if status_path.exists():raise SystemExit('Refusing to overwrite/retry')
     output=root/('smoke' if a.smoke else 'campaigns');output.mkdir();status={'experiment':'bandwidth-limited','passed':False,'image_id':image,'failed_campaign':None,'campaigns':[]};save(status_path,status)
-    conditions=[(50,x) for x in [20,5,1]] if a.smoke else [(r,b) for r in RTTS for b in RATES];campaigns=[1] if a.smoke else range(1,6);runs,warmups=(5,3) if a.smoke else (30,5);env=os.environ.copy();env['PAPER_RUN_ROOT']='/work/'+str(output.relative_to(REPO/'artifacts'));resources0=network0=None;containers=set()
+    conditions=[(50,x) for x in [20,5,1]] if a.smoke else [(r,b) for r in RTTS for b in RATES];campaigns=[1] if a.smoke else range(1,6);runs,warmups=(5,3) if a.smoke else (30,5);env=os.environ.copy();env['MEASUREMENT_RUN_ROOT']='/work/'+str(output.relative_to(REPO/'artifacts'));resources0=network0=None;containers=set()
     try:
         for rtt,rate in conditions:
             for index in campaigns:
-                code=RATES.index(rate)+1;seed=200000+rtt*1000+code*10+index;cid=f'bandwidth-rtt{rtt}-bw{rate}-c{index}';directory=output/cid;directory.mkdir();env.update(PAPER_CAMPAIGN_ID=cid,PAPER_SEED=str(seed),NETWORK_HALF_DELAY_MS=str(rtt/2),NETWORK_RATE_MBIT=str(rate),NETWORK_BURST_BYTES=str(burst(rate)),NETWORK_QUEUE_LATENCY_MS='1000')
+                code=RATES.index(rate)+1;seed=200000+rtt*1000+code*10+index;cid=f'bandwidth-rtt{rtt}-bw{rate}-c{index}';directory=output/cid;directory.mkdir();env.update(MEASUREMENT_CAMPAIGN_ID=cid,MEASUREMENT_SEED=str(seed),NETWORK_HALF_DELAY_MS=str(rtt/2),NETWORK_RATE_MBIT=str(rate),NETWORK_BURST_BYTES=str(burst(rate)),NETWORK_QUEUE_LATENCY_MS='1000')
                 rec={'campaign_id':cid,'rtt_target_ms':rtt,'bandwidth_target_mbps':rate,'rate_scope':'per direction','burst_bytes':burst(rate),'queue_latency_ms':1000,'seed':seed,'state':'starting','started_utc':datetime.datetime.now(datetime.timezone.utc).isoformat()};status['campaigns'].append(rec);save(status_path,status)
                 with (directory/'server-start.log').open('w') as log:subprocess.run(COMPOSE+['up','-d','--force-recreate','--wait','server'],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
                 container=subprocess.check_output(COMPOSE+['ps','-q','server'],env=env,text=True).strip();cfg=json.loads(subprocess.check_output(['docker','inspect',container],text=True))[0]

@@ -58,7 +58,7 @@ separar el coste de representación de clave, parser, política y prueba Merkle.
 Los enlaces a artifacts apuntan a resultados locales excluidos de Git; este
 documento conserva las cifras principales. Se conservaron las ejecuciones
 preliminares en otros directorios, pero no se mezclaron con esta serie.
-Para una réplica del paper hay que congelar imágenes y entradas públicas,
+For a reproducible study, images and public inputs must be frozen,
 repetir en ejecuciones independientes y medir otras condiciones de red.
 
 ## Validación de implementación

@@ -27,7 +27,7 @@ def main():
         save(root/'metadata.json',{'experiment':'bandwidth-limited','git_commit_before':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip(),'git_status_before':subprocess.check_output(['git','status','--short'],cwd=REPO,text=True),'base_image_id':BASE,'rtt_targets_ms':[10,50,100],'bandwidth_targets_mbps':[100,20,10,5,1],'throughput_tolerance_percent':15,'rate_scope':'per direction; same TBF rate on client and server egress','queue_latency_ms':1000,'status':'initialized','git_commit_after_experiment':None})
     elif a.stage=='tests':
         image=json.loads(subprocess.check_output(['docker','image','inspect',IMAGE],text=True))[0]
-        with (root/'tests.log').open('w') as log:r=subprocess.run(['docker','run','--rm','--network','none','-v',str(REPO/'artifacts')+':/work:ro',image['Id'],'sh','/opt/paper/tests.sh'],stdout=log,stderr=subprocess.STDOUT)
+        with (root/'tests.log').open('w') as log:r=subprocess.run(['docker','run','--rm','--network','none','-v',str(REPO/'artifacts')+':/work:ro',image['Id'],'sh','/opt/measurement/tests.sh'],stdout=log,stderr=subprocess.STDOUT)
         save(root/'tests-status.json',{'passed':r.returncode==0,'exit_code':r.returncode,'image_id':image['Id'],'base_image_id':BASE});save(root/'images.json',{'network_image':image,'base_image':json.loads(subprocess.check_output(['docker','image','inspect',BASE],text=True))[0]});(root/'environment.json').write_text(subprocess.check_output(['docker','info','--format','{{json .}}'],text=True));verify(root)
         if r.returncode:raise SystemExit('Regression failure')
     else:

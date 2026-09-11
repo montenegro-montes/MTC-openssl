@@ -17,7 +17,7 @@ Both client and server receive the same egress configuration. The two half delay
 
 For `wan`, `constrained`, and `adverse`, a root TBF applies the rate before a child netem applies delay and loss. The burst is `max(1600, rate_bit_s / 8 / 1000)` bytes and the TBF queue latency is 1000 ms, matching the bandwidth-only policy. `baseline` has only a root netem and therefore no artificial rate cap. `tc qdisc replace` removes a stale root hierarchy before each namespace is used.
 
-The six scenarios are `pq`, `pq-rpk`, `pq-compact-warm`, `pq-compact-cold`, `pq-mtc-experimental-landmark`, and `pq-mtc-experimental-standalone`. The primary paper comparison is PQ X.509 versus Compact warm versus MTC landmark. TLS 1.3, X25519, `TLS_AES_256_GCM_SHA384`, server-only authentication, disabled tickets/resumption, fixtures, keys, trust material, OpenSSL images and the Docker bridge remain fixed.
+The six scenarios are `pq`, `pq-rpk`, `pq-compact-warm`, `pq-compact-cold`, `pq-mtc-experimental-landmark`, and `pq-mtc-experimental-standalone`. The primary study comparison is PQ X.509 versus Compact warm versus MTC landmark. TLS 1.3, X25519, `TLS_AES_256_GCM_SHA384`, server-only authentication, disabled tickets/resumption, fixtures, keys, trust material, OpenSSL images and the Docker bridge remain fixed.
 
 The full design contains 4 profiles × 5 campaigns × 30 rounds × 6 scenarios = **3,600 measured attempts**, plus **600 warmups**. Seeds are `400000 + profile_code*1000 + campaign`, with codes baseline=0, wan=1, constrained=2 and adverse=3. The default scenario order is shuffled reproducibly by the frozen measurement driver. No automatic retry occurs; timeouts and TLS errors are observations.
 
@@ -47,7 +47,7 @@ python3 campaigns/combined_network_campaign/run.py --root "$COMBINED_ROOT" --dry
 python3 campaigns/combined_network_campaign/control.py init "$COMBINED_ROOT"
 ```
 
-`init` records `git rev-parse HEAD` and `git status --short` in `metadata.json`, hashes all tracked source plus N=16 fixtures, and refuses to overwrite a directory. Inspect the dry-run JSON: full mode must show 20 campaigns, 3,600 measured attempts and 600 warmups. Optional `--scenarios ...` filtering is intended for diagnosis; filtered output is not the final paper design.
+`init` records `git rev-parse HEAD` and `git status --short` in `metadata.json`, hashes all tracked source plus N=16 fixtures, and refuses to overwrite a directory. Inspect the dry-run JSON: full mode must show 20 campaigns, 3,600 measured attempts and 600 warmups. Optional `--scenarios ...` filtering is intended for diagnosis; filtered output is not the final study design.
 
 ## Step 3 — build the image if necessary
 

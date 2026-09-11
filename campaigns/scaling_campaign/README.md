@@ -22,7 +22,7 @@ comparisons. This totals 10,800 primary handshakes plus 1,800 warmups.
 
 Thirty separate detail campaigns run the four PQ Merkle scenarios with the same
 round policy, totaling 3,600 measurements plus 600 warmups. They enable existing
-PROFILE_DETAIL=1 timers in the same binary. The primary `/opt/paper/measure.py`
+PROFILE_DETAIL=1 timers in the same binary. The primary `/opt/measurement/measure.py`
 remains unchanged; `detail_measure.py` changes only the separate collector's
 expected detail flag. MTC inclusion-proof-only CPU is not instrumented and is
 reported as unavailable; generic peer_auth is not relabelled as proof CPU.

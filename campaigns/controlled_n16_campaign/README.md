@@ -8,11 +8,11 @@ The only native-code addition is a pair of wrappers around `compact_client()` an
 `mtc_client()` in an isolated s_client. They measure wall/process CPU before TLS
 and return exactly the original result. The original libraries and sources stay
 unchanged. Setup includes configuration loading, validation and callback registration,
-including nested diagnostic logging; the new PAPER_SETUP output is outside its timer.
+including nested diagnostic logging; the new MEASUREMENT_SETUP output is outside its timer.
 
 ## Completed run
 
-See [the report](../../artifacts/results/paper-n16-20260910T050955152797Z/report.md).
+See [the validated N=16 report](../../artifacts/results/paper-n16-20260910T050955152797Z/report.md). The directory retains its legacy name because it is immutable experiment evidence.
 Ten campaigns, seeds 42–51, 14 scenarios, 5 warmup and 30 measured paired rounds:
 4200 measurements plus 700 warmups. A separate measurement preflight (28 + 14)
 and security tests are not counted as campaign observations. No scaling was run.
@@ -39,9 +39,9 @@ Choose a timestamped path and create the metadata using the schemas described
 below:
 
 ```sh
-PAPER_ROOT="artifacts/results/paper-n16-$(date +%Y%m%d-%H%M%S)"
-echo "$PAPER_ROOT"
-mkdir "$PAPER_ROOT"
+N16_ROOT="artifacts/results/controlled-n16-$(date +%Y%m%d-%H%M%S)"
+echo "$N16_ROOT"
+mkdir "$N16_ROOT"
 ```
 
 Record Git commit/status, SHA-256 of tracked source and N=16 fixtures, and local
@@ -61,12 +61,12 @@ Build the measurement image on the recorded local MTC image. BuildKit uses a
    to the recorded ID before building:
 
    ```sh
-   docker build -f docker/Dockerfile.paper --build-arg BASE_IMAGE=mt-tls-mtc:local -t mt-tls-paper:local .
+   docker build -f docker/Dockerfile.measurement --build-arg BASE_IMAGE=mt-tls-mtc:local -t mt-tls-measurement:local .
    ```
 
 ## Step 4 — run and record the regression gate
 
-Run `sh /opt/paper/tests.sh` inside that image with `artifacts` mounted read-only
+Run `sh /opt/measurement/tests.sh` inside that image with `artifacts` mounted read-only
    at `/work`; capture its full output in `tests.log`. Save `tests-status.json`
    with `passed`, `exit_code` and the actual `image_id`. Any failure blocks the
    experiment. `measurement-image.json` stores that image's Id/RepoTags/RepoDigests.
@@ -76,8 +76,8 @@ Run `sh /opt/paper/tests.sh` inside that image with `artifacts` mounted read-onl
 ```sh
 docker run --rm --network none \
   -v "$PWD/artifacts:/work:ro" \
-  mt-tls-paper:local sh /opt/paper/tests.sh \
-  >"$PAPER_ROOT/tests.log" 2>&1
+  mt-tls-measurement:local sh /opt/measurement/tests.sh \
+  >"$N16_ROOT/tests.log" 2>&1
 ```
 
 Record the exit code and exact image ID in `tests-status.json`. Do not continue
@@ -89,14 +89,14 @@ The root must be a new
    initialized directory beneath `artifacts/results/`:
 
    ```sh
-   python3 campaigns/controlled_n16_campaign/run.py --root "$PAPER_ROOT" --preflight
-   cat "$PAPER_ROOT/measurement-preflight-status.json"
+   python3 campaigns/controlled_n16_campaign/run.py --root "$N16_ROOT" --preflight
+   cat "$N16_ROOT/measurement-preflight-status.json"
    ```
 
 ## Step 6 — run the full campaign
 
 ```sh
-python3 campaigns/controlled_n16_campaign/run.py --root "$PAPER_ROOT"
+python3 campaigns/controlled_n16_campaign/run.py --root "$N16_ROOT"
 ```
 
 Each campaign recreates the server container but retains the same bridge throughout
@@ -108,19 +108,19 @@ failed handshakes or incorrect counts/control fields abort the run. No automatic
 ## Step 7 — monitor from a second terminal
 
 ```sh
-docker ps --filter label=com.docker.compose.project=papern16
-cat "$PAPER_ROOT/campaign-status.json"
-find "$PAPER_ROOT" -name driver.log -exec tail -n 3 {} \;
-du -sh "$PAPER_ROOT"
+docker ps --filter label=com.docker.compose.project=controlledn16
+cat "$N16_ROOT/campaign-status.json"
+find "$N16_ROOT" -name driver.log -exec tail -n 3 {} \;
+du -sh "$N16_ROOT"
 ```
 
 ## Step 8 — test the analyzer and generate results
 
 ```sh
 python3 campaigns/controlled_n16_campaign/test_analysis.py
-python3 campaigns/controlled_n16_campaign/analyze.py "$PAPER_ROOT"
-cat "$PAPER_ROOT/report.md"
-ls -lh "$PAPER_ROOT"/*.csv
+python3 campaigns/controlled_n16_campaign/analyze.py "$N16_ROOT"
+cat "$N16_ROOT/report.md"
+ls -lh "$N16_ROOT"/*.csv
 ```
 
 ## Step 9 — preserve the completed experiment

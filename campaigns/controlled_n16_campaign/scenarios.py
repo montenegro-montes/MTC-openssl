@@ -2,7 +2,7 @@
 import importlib.util
 spec=importlib.util.spec_from_file_location('mtc_scenarios','/opt/mtc/scenarios.py')
 previous=importlib.util.module_from_spec(spec);spec.loader.exec_module(previous)
-OPENSSL='/opt/paper/openssl.sh'
+OPENSSL='/opt/measurement/openssl.sh'
 previous.OPENSSL=OPENSSL
 previous.previous.OPENSSL=OPENSSL
 previous.previous.previous.OPENSSL=OPENSSL

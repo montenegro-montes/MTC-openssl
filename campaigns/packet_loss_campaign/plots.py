@@ -1,4 +1,4 @@
-"""Paper figures from analyzed CSVs; skips unsupported per-connection retransmission plot."""
+"""Study figures from analyzed CSVs; skips unsupported per-connection retransmission plot."""
 import csv,os,sys
 from pathlib import Path
 os.environ.setdefault('MPLCONFIGDIR','/tmp/mt-network-plots')

@@ -31,7 +31,7 @@ def main():
         image=json.loads(subprocess.check_output(['docker','image','inspect',IMAGE],text=True))[0];base=json.loads(subprocess.check_output(['docker','image','inspect',BASE_IMAGE_ID],text=True))[0]
         for command in ['tc','ping','nstat']:
             subprocess.run(['docker','run','--rm','--network','none',image['Id'],'sh','-c','command -v "$1"','sh',command],check=True,capture_output=True)
-        with (root/'tests.log').open('w') as log:result=subprocess.run(['docker','run','--rm','--network','none','-v',str(REPO/'artifacts')+':/work:ro','-v',str(REPO/'campaigns/packet_loss_campaign')+':/opt/network-loss:ro',image['Id'],'sh','/opt/paper/tests.sh'],stdout=log,stderr=subprocess.STDOUT)
+        with (root/'tests.log').open('w') as log:result=subprocess.run(['docker','run','--rm','--network','none','-v',str(REPO/'artifacts')+':/work:ro','-v',str(REPO/'campaigns/packet_loss_campaign')+':/opt/network-loss:ro',image['Id'],'sh','/opt/measurement/tests.sh'],stdout=log,stderr=subprocess.STDOUT)
         save(root/'tests-status.json',{'passed':result.returncode==0,'exit_code':result.returncode,'image_id':image['Id'],'base_image_id':base['Id'],'required_tools':['tc','ping','nstat']});save(root/'images.json',{'network_image':image,'base_image':base});(root/'environment.json').write_text(subprocess.check_output(['docker','info','--format','{{json .}}'],text=True));verify(root)
         if result.returncode:raise SystemExit('Regression failure; do not continue')
     else:

@@ -19,7 +19,7 @@ def main():
  elif a.stage=='tests':
   image=json.loads(subprocess.check_output(['docker','image','inspect',IMAGE],text=True))[0]
   for tool in ['tc','ping','nstat','iperf3']:subprocess.run(['docker','run','--rm','--network','none',image['Id'],'sh','-c','command -v "$1"','sh',tool],check=True,capture_output=True)
-  with (root/'tests.log').open('w') as log:r=subprocess.run(['docker','run','--rm','--network','none','-v',str(REPO/'artifacts')+':/work:ro',image['Id'],'sh','/opt/paper/tests.sh'],stdout=log,stderr=subprocess.STDOUT)
+  with (root/'tests.log').open('w') as log:r=subprocess.run(['docker','run','--rm','--network','none','-v',str(REPO/'artifacts')+':/work:ro',image['Id'],'sh','/opt/measurement/tests.sh'],stdout=log,stderr=subprocess.STDOUT)
   save(root/'tests-status.json',{'passed':r.returncode==0,'image_id':image['Id'],'required_tools':['tc','ping','nstat','iperf3']});save(root/'images.json',{'network_image':image});(root/'environment.json').write_text(subprocess.check_output(['docker','info','--format','{{json .}}'],text=True));verify(root)
   if r.returncode:raise SystemExit('regression failure')
  else:

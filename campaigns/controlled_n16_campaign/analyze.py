@@ -159,7 +159,7 @@ def analyze(root):
         'replication_unit':'campaign; shared Docker Desktop session, new server containers, same bridge, same resource configuration',
         'statistics':{'point_estimate':'median of ten campaign medians; contrasts: median of ten within-campaign paired median differences','bootstrap_unit':'ten campaign effects','bootstrap_resamples':10000,'bootstrap_seed':20260910,'interval':'percentile with linear interpolation','within_campaign_bootstrap':'2000 resamples retained as secondary in campaign-*/comparisons.csv','instability':'at least two positive and two negative campaign effects','outliers':'Tukey 1.5 IQR within each campaign/scenario; none removed','cv':'sample SD / mean of ten campaign medians, percent','null_hypothesis_tests':False},
         'implementation_changes':'Only isolated s_client setup wall/CPU wrappers; original protocol sources, fixtures and libraries unchanged',
-        'setup_scope':'compact_client or mtc_client, including configuration load, prior validation and callback registration; before SSL_new/handshake; nested setup logging included; PAPER_SETUP output itself excluded',
+        'setup_scope':'compact_client or mtc_client, including configuration load, prior validation and callback registration; before SSL_new/handshake; nested setup logging included; MEASUREMENT_SETUP output itself excluded',
         'byte_definitions':natives[0]['byte_definitions'],
         'additional_accounting':{'predistributed_bytes':'total local trust configuration file bytes, including CA material; PEM for compact/X509, binary MCF1 for MTC; not network transport',
             'predistributed_incremental_bytes':'signed root for compact warm; trust.bin minus authority.bin for MTC landmark',

@@ -1,6 +1,6 @@
 **
 !docker/
-!docker/Dockerfile.paper
+!docker/Dockerfile.measurement
 !campaigns/
 !campaigns/controlled_n16_campaign/
 !campaigns/controlled_n16_campaign/*.py

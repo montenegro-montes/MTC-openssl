@@ -68,7 +68,7 @@ def execute(root,mode,selected):
        profile=PROFILES[name]
        for campaign in campaigns:
         cid=f'{name}-c{campaign}'; directory=out/cid;directory.mkdir(); s=seed(name,campaign)
-        env.update(PAPER_RUN_ROOT='/work/'+str(out.relative_to(REPO/'artifacts')),PAPER_CAMPAIGN_ID=cid,PAPER_SEED=str(s),NETWORK_PROFILE_JSON=json.dumps(profile),LOSS_TARGET_PERCENT=profile['loss_percent'],PROBE_PACKETS=str(spec['probe_packets']),HANDSHAKE_TIMEOUT_SECONDS=str(TIMEOUT_SECONDS))
+        env.update(MEASUREMENT_RUN_ROOT='/work/'+str(out.relative_to(REPO/'artifacts')),MEASUREMENT_CAMPAIGN_ID=cid,MEASUREMENT_SEED=str(s),NETWORK_PROFILE_JSON=json.dumps(profile),LOSS_TARGET_PERCENT=profile['loss_percent'],PROBE_PACKETS=str(spec['probe_packets']),HANDSHAKE_TIMEOUT_SECONDS=str(TIMEOUT_SECONDS))
         rec={'campaign_id':cid,'profile':name,**profile,'seed':s,'state':'starting','started_utc':datetime.datetime.now(datetime.timezone.utc).isoformat()};status['campaigns'].append(rec);save(status_path,status)
         with (directory/'server-start.log').open('w') as log:subprocess.run(COMPOSE+['up','-d','--force-recreate','--wait','server'],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
         container=subprocess.check_output(COMPOSE+['ps','-q','server'],env=env,text=True).strip(); before=subprocess.check_output(['docker','exec',container,'tc','-s','qdisc','show','dev','eth0'],text=True);validate_qdisc(before,profile);(directory/'server-qdisc-before.txt').write_text(before)

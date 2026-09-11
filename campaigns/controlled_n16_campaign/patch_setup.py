@@ -8,38 +8,38 @@ def once(a,b):
     s=s.replace(a,b,1)
 wrapper=r'''
 #include <time.h>
-static double paper_clock(clockid_t id)
+static double measurement_clock(clockid_t id)
 {
     struct timespec t;
     if (clock_gettime(id, &t) != 0) return -1;
     return t.tv_sec * 1000.0 + t.tv_nsec / 1e6;
 }
-static void paper_setup_emit(const char *scheme, double wall, double cpu)
+static void measurement_setup_emit(const char *scheme, double wall, double cpu)
 {
-    double end_wall = paper_clock(CLOCK_MONOTONIC);
-    double end_cpu = paper_clock(CLOCK_PROCESS_CPUTIME_ID);
-    fprintf(stderr, "PAPER_SETUP {\"scheme\":\"%s\",\"setup_wall_ms\":%.6f,\"setup_cpu_ms\":%.6f}\n",
+    double end_wall = measurement_clock(CLOCK_MONOTONIC);
+    double end_cpu = measurement_clock(CLOCK_PROCESS_CPUTIME_ID);
+    fprintf(stderr, "MEASUREMENT_SETUP {\"scheme\":\"%s\",\"setup_wall_ms\":%.6f,\"setup_cpu_ms\":%.6f}\n",
             scheme, end_wall - wall, end_cpu - cpu);
 }
-static int paper_compact_client(SSL_CTX *ctx, const char *authority, const char *cached_root)
+static int measurement_compact_client(SSL_CTX *ctx, const char *authority, const char *cached_root)
 {
-    double wall = paper_clock(CLOCK_MONOTONIC);
-    double cpu = paper_clock(CLOCK_PROCESS_CPUTIME_ID);
+    double wall = measurement_clock(CLOCK_MONOTONIC);
+    double cpu = measurement_clock(CLOCK_PROCESS_CPUTIME_ID);
     int result = compact_client(ctx, authority, cached_root);
-    if (result) paper_setup_emit("compact", wall, cpu);
+    if (result) measurement_setup_emit("compact", wall, cpu);
     return result;
 }
-static int paper_mtc_client(SSL_CTX *ctx, const char *path, int landmark)
+static int measurement_mtc_client(SSL_CTX *ctx, const char *path, int landmark)
 {
-    double wall = paper_clock(CLOCK_MONOTONIC);
-    double cpu = paper_clock(CLOCK_PROCESS_CPUTIME_ID);
+    double wall = measurement_clock(CLOCK_MONOTONIC);
+    double cpu = measurement_clock(CLOCK_PROCESS_CPUTIME_ID);
     int result = mtc_client(ctx, path, landmark);
-    if (result) paper_setup_emit("MTC-experimental", wall, cpu);
+    if (result) measurement_setup_emit("MTC-experimental", wall, cpu);
     return result;
 }
 '''
 once('#include "mtc.h"','#include "mtc.h"\n'+wrapper)
-once('!compact_client(ctx, compact_a, compact_b)','!paper_compact_client(ctx, compact_a, compact_b)')
-once('!mtc_client(ctx,mtc_file,mtc_landmark_mode)','!paper_mtc_client(ctx,mtc_file,mtc_landmark_mode)')
+once('!compact_client(ctx, compact_a, compact_b)','!measurement_compact_client(ctx, compact_a, compact_b)')
+once('!mtc_client(ctx,mtc_file,mtc_landmark_mode)','!measurement_mtc_client(ctx,mtc_file,mtc_landmark_mode)')
 p.write_text(s)
-(root/'PAPER_MEASUREMENT_SHA256').write_text(hashlib.sha256(Path(__file__).read_bytes()).hexdigest()+'\n')
+(root/'CONTROLLED_MEASUREMENT_SHA256').write_text(hashlib.sha256(Path(__file__).read_bytes()).hexdigest()+'\n')

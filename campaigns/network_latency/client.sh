@@ -16,7 +16,7 @@ measure)
     echo QDISC_CLIENT_BEFORE_BEGIN
     tc qdisc show dev eth0
     echo QDISC_CLIENT_BEFORE_END
-    python3 /opt/paper/measure.py "$@"
+    python3 /opt/measurement/measure.py "$@"
     echo QDISC_CLIENT_AFTER_BEGIN
     tc -s qdisc show dev eth0
     echo QDISC_CLIENT_AFTER_END

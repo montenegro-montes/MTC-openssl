@@ -3,7 +3,7 @@
 Preparation commit: `ef9305e02f72f0888d775e74cbdd47f795016895`
 
 This directory prepares a manual packet-loss-only experiment. It reuses the
-validated N=16 authentication implementation and `/opt/paper/measure.py` metric
+validated N=16 authentication implementation and `/opt/measurement/measure.py` metric
 definitions. `measure.py` only adds explicit failure/timeout accounting around
 the saved driver. No OpenSSL, Compact, MTC, encoding or cryptographic source is
 changed. MTC remains experimental draft-ietf-plants-merkle-tree-certs-05.
@@ -23,7 +23,7 @@ below and disabled by default.
 
 - Repository containing commit `b4a4b33286037a385f27e770fd23c1d741b197bc`
   or its documented successors.
-- Docker image `mt-tls-network:latency`, derived from the exact validated paper
+- Docker image `mt-tls-network:latency`, derived from the exact validated controlled measurement
   image and containing `tc`, `ping`, `nstat` and the frozen OpenSSL executable.
 - Fixtures `artifacts/compact/batch16`, `artifacts/mtc/batch16-v2` and
   `artifacts/certs`.

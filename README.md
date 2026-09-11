@@ -234,13 +234,13 @@ test -d artifacts/mtc/batch16-v2
 ### Step 6 — build and validate the controlled measurement image
 
 ```sh
-docker build -f docker/Dockerfile.paper \
+docker build -f docker/Dockerfile.measurement \
   --build-arg BASE_IMAGE=mt-tls-mtc:local \
-  -t mt-tls-paper:local .
+  -t mt-tls-measurement:local .
 
 docker run --rm --network none \
   -v "$PWD/artifacts:/work:ro" \
-  mt-tls-paper:local sh /opt/paper/tests.sh
+  mt-tls-measurement:local sh /opt/measurement/tests.sh
 ```
 
 Do not continue unless the output ends with:
@@ -272,7 +272,7 @@ mt-tls-lab:local
   └── mt-tls-compact:local
       └── mt-tls-profile:local
           └── mt-tls-mtc:local
-              └── mt-tls-paper:local
+              └── mt-tls-measurement:local
                   └── mt-tls-network:latency
 ```
 

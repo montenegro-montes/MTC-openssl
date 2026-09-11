@@ -51,7 +51,7 @@ def main():
  statepath=root/('preflight-status.json' if a.preflight else 'campaign-status.json');assert not statepath.exists()
  state={'passed':False,'image_id':image,'campaigns':[],'failed_campaign':None};dump(statepath,state)
  base=['docker','compose','-f',str(REPO/'docker/compose.scaling.yaml')];env=os.environ.copy();env['SCALING_FIXTURES']=read(root/'fixture-location.json')['container']
- output=root/('preflight' if a.preflight else 'campaigns');output.mkdir();env['PAPER_RUN_ROOT']='/work/'+str(output.relative_to(REPO/'artifacts'))
+ output=root/('preflight' if a.preflight else 'campaigns');output.mkdir();env['MEASUREMENT_RUN_ROOT']='/work/'+str(output.relative_to(REPO/'artifacts'))
  resources0=None;network0=None;containers=set()
  try:
   for detail in [0,1]:
@@ -59,7 +59,7 @@ def main():
    for n in ([1,16,1024] if a.preflight else SIZES):
     for index in ([1] if a.preflight else range(1,6)):
      seed=1000*index+n;cid=f'{"detail" if detail else "primary"}-n{n}-c{index}';directory=output/cid;assert not directory.exists();directory.mkdir()
-     env.update(TREE_SIZE=str(n),SCALING_DETAIL=str(detail),PAPER_CAMPAIGN_ID=cid,PAPER_SEED=str(seed))
+     env.update(TREE_SIZE=str(n),SCALING_DETAIL=str(detail),MEASUREMENT_CAMPAIGN_ID=cid,MEASUREMENT_SEED=str(seed))
      record={'campaign_id':cid,'tree_size':n,'seed':seed,'detail':detail,'state':'starting','started_utc':datetime.datetime.now(datetime.timezone.utc).isoformat()};state['campaigns'].append(record);dump(statepath,state)
      with (directory/'server-start.log').open('w') as log:subprocess.run(base+['up','-d','--force-recreate','--wait','server'],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
      container=subprocess.check_output(base+['ps','-q','server'],env=env,text=True).strip();assert container not in containers;containers.add(container)
@@ -69,7 +69,7 @@ def main():
      assert resources==resources0 and network==network0
      dump(directory/'environment.json',{'container_id':container,'resources':resources,'network':network,'image_id':cfg['Image'],'started_at':cfg['State']['StartedAt']});assert cfg['Image']==image
      runs,warmups=(2,1) if a.preflight else (30,5)
-     with (directory/'driver.log').open('w') as log:subprocess.run(base+['run','--rm','client','python3','/opt/scaling/detail_measure.py' if detail else '/opt/paper/measure.py','--runs',str(runs),'--warmup',str(warmups),'--seed',str(seed),'--image-id',image,'--scenarios',*scenarios],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
+     with (directory/'driver.log').open('w') as log:subprocess.run(base+['run','--rm','client','python3','/opt/scaling/detail_measure.py' if detail else '/opt/measurement/measure.py','--runs',str(runs),'--warmup',str(warmups),'--seed',str(seed),'--image-id',image,'--scenarios',*scenarios],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
      count,warm=validate(directory,scenarios,seed,n,detail,runs,warmups);record.update(state='complete',measured_handshakes=count,warmup_handshakes=warm,finished_utc=datetime.datetime.now(datetime.timezone.utc).isoformat());dump(statepath,state)
      print(cid,'PASS',count,'measured',warm,'warmup',flush=True)
   state['passed']=True;dump(statepath,state)

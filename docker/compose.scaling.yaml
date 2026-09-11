@@ -9,18 +9,18 @@ x-lab: &lab
     COMPACT_BATCH: ${SCALING_FIXTURES:?Set SCALING_FIXTURES}/batch${TREE_SIZE:?Set TREE_SIZE}/compact
     MTC_BATCH: ${SCALING_FIXTURES}/batch${TREE_SIZE}/mtc
     PROFILE_DETAIL: ${SCALING_DETAIL:-0}
-    PAPER_RUN_ROOT: ${PAPER_RUN_ROOT:?Set PAPER_RUN_ROOT}
-    PAPER_CAMPAIGN_ID: ${PAPER_CAMPAIGN_ID:?Set PAPER_CAMPAIGN_ID}
-    PAPER_SEED: ${PAPER_SEED:?Set PAPER_SEED}
+    MEASUREMENT_RUN_ROOT: ${MEASUREMENT_RUN_ROOT:?Set MEASUREMENT_RUN_ROOT}
+    MEASUREMENT_CAMPAIGN_ID: ${MEASUREMENT_CAMPAIGN_ID:?Set MEASUREMENT_CAMPAIGN_ID}
+    MEASUREMENT_SEED: ${MEASUREMENT_SEED:?Set MEASUREMENT_SEED}
 services:
   server:
     <<: *lab
-    command: ["python3", "/opt/paper/serve.py"]
+    command: ["python3", "/opt/measurement/serve.py"]
     healthcheck:
-      test: ["CMD", "test", "-f", "/tmp/paper-ready"]
+      test: ["CMD", "test", "-f", "/tmp/measurement-ready"]
       interval: 2s
       timeout: 2s
       retries: 30
   client:
     <<: *lab
-    command: ["python3", "/opt/paper/measure.py"]
+    command: ["python3", "/opt/measurement/measure.py"]

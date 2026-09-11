@@ -104,7 +104,7 @@ for scenario in SCENARIOS[2:]:
                            'paired_delta_median': statistics.median(deltas), 'bootstrap95_low': boot[49], 'bootstrap95_high': boot[1949]})
 with (output/'comparisons.csv').open('w', newline='') as stream:
     writer = csv.DictWriter(stream, fieldnames=list(comparison[0])); writer.writeheader(); writer.writerows(comparison)
-report = ['# Exploratory comparison', '', 'One local Docker run; not a final paper result. Negative paired deltas favor the variant.', '',
+report = ['# Exploratory comparison', '', 'One local Docker run; not a final study result. Negative paired deltas favor the variant.', '',
           '| Scenario | TLS bytes (median) | Handshake wall ms | Client handshake CPU ms | Full client + HTTP ms |',
           '|---|---:|---:|---:|---:|']
 for row in summary:

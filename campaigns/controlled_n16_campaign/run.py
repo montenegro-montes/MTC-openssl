@@ -4,14 +4,14 @@ from pathlib import Path
 REPO=Path(__file__).resolve().parents[2]
 p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);p.add_argument('--preflight',action='store_true');a=p.parse_args();root=a.root.resolve()
 if not root.is_relative_to(REPO/'artifacts/results'):p.error('root must be under artifacts/results')
-base=['docker','compose','-f',str(REPO/'docker/compose.paper.yaml')]
-image=json.loads(subprocess.check_output(['docker','image','inspect','mt-tls-paper:local'],text=True))[0]
+base=['docker','compose','-f',str(REPO/'docker/compose.measurement.yaml')]
+image=json.loads(subprocess.check_output(['docker','image','inspect','mt-tls-measurement:local'],text=True))[0]
 tests=json.loads((root/'tests-status.json').read_text())
 if not tests['passed'] or tests['image_id']!=image['Id']:raise SystemExit('ABORT: current image has not passed tests')
 if not a.preflight:
     gate=json.loads((root/'measurement-preflight-status.json').read_text())
     if not gate['passed'] or gate['image_id']!=image['Id']:raise SystemExit('ABORT: measurement preflight has not passed')
-env=os.environ.copy();env['PAPER_RUN_ROOT']='/work/'+str(root.relative_to(REPO/'artifacts'))
+env=os.environ.copy();env['MEASUREMENT_RUN_ROOT']='/work/'+str(root.relative_to(REPO/'artifacts'))
 status_path=root/('preflight-run-status.json' if a.preflight else 'campaign-status.json')
 if status_path.exists():raise SystemExit('Output status already exists; never silently repeat a campaign')
 status={'image_id':image['Id'],'campaigns':[],'shared_docker_desktop_session':True,'failed_campaign':None}
@@ -28,7 +28,7 @@ try:
         cid='measurement-preflight' if a.preflight else f'campaign-{index:02d}'
         directory=root/cid
         if directory.exists():raise RuntimeError('Directory already exists: '+cid)
-        directory.mkdir();env.update(PAPER_CAMPAIGN_ID=cid,PAPER_SEED=str(seed))
+        directory.mkdir();env.update(MEASUREMENT_CAMPAIGN_ID=cid,MEASUREMENT_SEED=str(seed))
         record={'campaign_id':cid,'seed':seed,'started_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'state':'starting'}
         status['campaigns'].append(record);save()
         with (directory/'server-start.log').open('w') as log:
@@ -45,7 +45,7 @@ try:
         record.update(server_container_id=container,server_started_at=current['State']['StartedAt'],resources=resources,networks=networks,state='measuring')
         (directory/'server-environment.json').write_text(json.dumps(record,indent=2)+'\n');save()
         with (directory/'driver.log').open('w') as log:
-            subprocess.run(base+['run','--rm','client','python3','/opt/paper/measure.py','--runs','2' if a.preflight else '30','--warmup','1' if a.preflight else '5','--seed',str(seed),'--image-id',image['Id']],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
+            subprocess.run(base+['run','--rm','client','python3','/opt/measurement/measure.py','--runs','2' if a.preflight else '30','--warmup','1' if a.preflight else '5','--seed',str(seed),'--image-id',image['Id']],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
         import csv
         rows=list(csv.DictReader((directory/'samples.csv').open()));warm=list(csv.DictReader((directory/'warmups.csv').open()))
         expected=2 if a.preflight else 30;warming=1 if a.preflight else 5

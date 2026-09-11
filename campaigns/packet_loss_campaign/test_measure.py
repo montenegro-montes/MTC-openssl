@@ -2,15 +2,15 @@
 import ast
 from pathlib import Path
 
-paper=Path('campaigns/controlled_n16_campaign/measure.py').read_text()
+measurement=Path('campaigns/controlled_n16_campaign/measure.py').read_text()
 benchmark=Path('mtc/benchmark.py').read_text()
 wrapper=Path('campaigns/packet_loss_campaign/measure.py').read_text()
-assert paper.count("source=Path('/opt/mtc/benchmark.py').read_text()") == 1
+assert measurement.count("source=Path('/opt/mtc/benchmark.py').read_text()") == 1
 assert benchmark.count("timeout=20") == 1
 assert benchmark.count("Handshake failed: '+scenario") == 1
 assert "HANDSHAKE_TIMEOUT_SECONDS" in wrapper
-assert "PAPER_DIR='/opt/paper'" in wrapper
-assert "sys.path.insert(0,PAPER_DIR)" in wrapper
+assert "MEASUREMENT_DIR='/opt/measurement'" in wrapper
+assert "sys.path.insert(0,MEASUREMENT_DIR)" in wrapper
 
 tree=ast.parse(wrapper)
 constants={}

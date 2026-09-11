@@ -1,7 +1,7 @@
 # Latency-only network experiment
 
 This campaign uses the frozen N=16 implementation and measurement driver.
-`docker/Dockerfile.network` derives from `mt-tls-paper:local` and adds only the
+`docker/Dockerfile.network` derives from `mt-tls-measurement:local` and adds only the
 network tools; it does not rebuild OpenSSL.
 
 The client and server independently apply `netem delay RTT/2` to `eth0` egress.
@@ -17,7 +17,7 @@ shell variable through all steps.
 ```sh
 git status --short
 git rev-parse HEAD
-docker image inspect mt-tls-paper:local --format '{{.Id}}'
+docker image inspect mt-tls-measurement:local --format '{{.Id}}'
 docker ps
 test -d artifacts/compact/batch16
 test -d artifacts/mtc/batch16-v2

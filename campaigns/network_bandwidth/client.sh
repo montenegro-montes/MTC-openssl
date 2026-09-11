@@ -31,7 +31,7 @@ measure)
     echo QDISC_CLIENT_BEFORE_BEGIN
     show_qdisc
     echo QDISC_CLIENT_BEFORE_END
-    python3 /opt/paper/measure.py "$@"
+    python3 /opt/measurement/measure.py "$@"
     echo QDISC_CLIENT_AFTER_BEGIN
     show_qdisc
     echo QDISC_CLIENT_AFTER_END

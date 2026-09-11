@@ -16,7 +16,7 @@ def enrich(row,log,scenario):
     root_file=scenarios.BATCH/family/'root.signed'
     ca_file=Path('/work/certs')/family/'ca.pem'
     directory=scenarios.MTC_BATCH/family
-    row.update(campaign_id=os.environ['PAPER_CAMPAIGN_ID'],round_id=row['round']+1,seed=int(os.environ['PAPER_SEED']),
+    row.update(campaign_id=os.environ['MEASUREMENT_CAMPAIGN_ID'],round_id=row['round']+1,seed=int(os.environ['MEASUREMENT_SEED']),
                order_in_round=row['order']+1,scenario_order=row['order']+1,
                rpk_spki_bytes=cf['leaf0_spki_bytes'] if compact or scenario.endswith('-rpk') else 0,
                compact_credential_bytes=cf['credential0_bytes'] if compact else 0,
@@ -29,7 +29,7 @@ def enrich(row,log,scenario):
                mtc_checkpoint_oob_bytes=0,trust_base_bytes=None,predistributed_bytes=None,predistributed_incremental_bytes=0,
                trust_cache='none; new process',trust_validation_scope='not measured')
     if compact or mtc:
-        matches=re.findall(r'^PAPER_SETUP (\{.*\})$',log,re.M)
+        matches=re.findall(r'^MEASUREMENT_SETUP (\{.*\})$',log,re.M)
         if len(matches)!=1:raise RuntimeError('Missing setup CPU/wall instrumentation')
         setup=json.loads(matches[0])
         if setup['scheme']!=('compact' if compact else 'MTC-experimental'):raise RuntimeError('Setup scheme mismatch')
@@ -68,7 +68,7 @@ def once(a,b):
     if source.count(a)!=1:raise ValueError('Measurement source drift: '+a)
     source=source.replace(a,b,1)
 start="out=Path('/work/results')/('mtc-'+datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'));out.mkdir();(out/'logs').mkdir();(out/'server-metrics').mkdir()"
-once(start,"out=Path(os.environ['PAPER_RUN_ROOT'])/os.environ['PAPER_CAMPAIGN_ID'];out.mkdir(exist_ok=True);(out/'logs').mkdir();(out/'server-metrics').mkdir()")
+once(start,"out=Path(os.environ['MEASUREMENT_RUN_ROOT'])/os.environ['MEASUREMENT_CAMPAIGN_ID'];out.mkdir(exist_ok=True);(out/'logs').mkdir();(out/'server-metrics').mkdir()")
 once("Path('/work/results').glob('mtc-server-*/'+key+'.json')","out.glob('server-*/'+key+'.json')")
 once("    if not warm:rows.append(row);write_csv(out/'samples.csv',rows)","    row=enrich(row,log,scenario)\n    row['is_warmup']=int(warm)\n    if warm:warmup_rows.append(row);write_csv(out/'warmups.csv',warmup_rows)\n    else:rows.append(row);write_csv(out/'samples.csv',rows)")
 once("k not in ['round','order','tree_size']","k not in ['round','order','tree_size','seed','round_id','order_in_round','scenario_order','is_warmup']")
@@ -77,4 +77,4 @@ once("k not in ['round','order','tree_size']","k not in ['round','order','tree_s
 # campaign-level analyzer instead of coercing missing values to zero.
 once("values=[r[metric] for r in group]","values=[r[metric] for r in group if r[metric] is not None]\n        if not values:continue")
 once("write_csv(out/'summary.csv',summary)","write_csv(out/'summary.csv',[{k:r.get(k,'') for k in sorted({k for q in summary for k in q})} for r in summary])")
-exec(compile(source,'saved-mtc-benchmark-with-paper-accounting','exec'))
+exec(compile(source,'saved-mtc-benchmark-with-measurement-accounting','exec'))

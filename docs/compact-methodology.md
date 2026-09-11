@@ -1,4 +1,4 @@
-# Método de comparación para el paper
+# Compact authentication comparison method
 
 ## Factores controlados
 
