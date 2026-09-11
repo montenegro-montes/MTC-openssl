@@ -1,5 +1,5 @@
 """Initialize, gate and audit one bandwidth-only result directory."""
-import argparse,datetime,hashlib,json,shutil,subprocess,sys
+import argparse,datetime,hashlib,json,os,shutil,subprocess,sys
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parents[2]
@@ -29,6 +29,7 @@ def main():
         save(root/'metadata.json',{'experiment':'bandwidth-limited','git_commit_before':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip(),'git_status_before':subprocess.check_output(['git','status','--short'],cwd=REPO,text=True),'base_image_ref':BASE,'base_image_id':None,'rtt_targets_ms':[10,50,100],'bandwidth_targets_mbps':[100,20,10,5,1],'throughput_tolerance_percent':15,'rate_scope':'per direction; same TBF rate on client and server egress','queue_latency_ms':1000,'status':'initialized','git_commit_after_experiment':None})
     elif a.stage=='tests':
         save(root/'tests-status.json',{'passed':False,'state':'running','image_ref':IMAGE,'base_image_ref':BASE})
+        if not os.access(REPO/'campaigns/network_bandwidth/client.sh',os.X_OK):raise RuntimeError('campaigns/network_bandwidth/client.sh is not executable')
         resolved=ensure('network');image=resolved['target'];base=resolved['images']['measurement']
         with (root/'tests.log').open('w') as log:r=subprocess.run(['docker','run','--rm','--network','none','-v',str(REPO/'artifacts')+':/work:ro',image['Id'],'sh','/opt/measurement/tests.sh'],stdout=log,stderr=subprocess.STDOUT)
         if r.returncode:

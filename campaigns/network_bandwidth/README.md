@@ -80,6 +80,10 @@ discard that unstarted result directory and initialize a new timestamped path.
 The source inventory in the old directory belongs to the earlier commit and
 must not be silently updated.
 
+The gate also verifies that the bind-mounted `client.sh` is executable. Probe
+stdout and stderr are always saved to the condition's `network-validation.log`
+before a nonzero exit aborts the smoke run.
+
 ## Step 5 — run and inspect the smoke test
 
 ```sh
