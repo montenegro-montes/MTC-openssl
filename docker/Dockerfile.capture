@@ -1,0 +1,9 @@
+FROM mt-tls-measurement:local
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+       tcpdump tshark \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY campaigns/handshake_capture /opt/handshake-capture
+WORKDIR /work
