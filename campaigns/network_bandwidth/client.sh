@@ -21,13 +21,13 @@ probe)
     echo QDISC_CLIENT_END
     ping -n -c 20 -i 0.05 -W 3 server
     echo IPERF_FORWARD_BEGIN
-    iperf3 -c server -t 4 -O 1 -J
+    iperf3 -c server -t 4 -O 4 -J
     echo IPERF_FORWARD_END
     # Allow the shaped control connection and queued packets to close before
     # opening the reverse-direction iperf session.
     sleep 2
     echo IPERF_REVERSE_BEGIN
-    iperf3 -c server -t 4 -O 1 -R -J
+    iperf3 -c server -t 4 -O 4 -R -J
     echo IPERF_REVERSE_END
     echo QDISC_CLIENT_PROBE_AFTER_BEGIN
     show_qdisc

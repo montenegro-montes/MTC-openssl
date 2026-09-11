@@ -8,7 +8,9 @@ assert iperf_result(text,'FORWARD')==valid
 assert GOODPUT_MIN_RATIO==.80 and GOODPUT_MAX_RATIO==1.05
 ping='\n'.join(f'64 bytes from server: icmp_seq={i} ttl=64 time=50.0 ms' for i in range(1,21))
 both=ping+'\nIPERF_FORWARD_BEGIN\n'+json.dumps(valid)+'\nIPERF_FORWARD_END\nIPERF_REVERSE_BEGIN\n'+json.dumps(valid)+'\nIPERF_REVERSE_END\n'
-probe=parse_probe(both,20);assert probe['bandwidth_forward_mbps']==14 and probe['bandwidth_forward_steady_mbps']==19.5 and probe['bandwidth_measured_mbps']==19.5
+try:parse_probe(both,20)
+except RuntimeError as error:assert 'Received goodput' in str(error)
+else:raise AssertionError('out-of-range received goodput was accepted')
 failed={'error':'unable to receive control message: Connection reset by peer','end':{}}
 text='IPERF_REVERSE_BEGIN\n'+json.dumps(failed)+'\nIPERF_REVERSE_END\n'
 try:iperf_result(text,'REVERSE')

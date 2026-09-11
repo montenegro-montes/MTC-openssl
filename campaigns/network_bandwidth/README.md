@@ -26,12 +26,12 @@ qdisc reported no drops. The value is recorded per campaign. TBF necessarily
 has a token burst; do not interpret the analytical byte/rate value as the exact
 measured delay of a short TLS flight.
 
-Before each campaign, twenty pings and forward/reverse four-second iperf3 probes
-validate the new namespaces. The mean TCP payload rate over the final two
-non-omitted one-second intervals in both directions must be 80%–105% of the
-configured TBF rate. This checks steady TBF capacity without treating TCP
-slow-start as a limiter failure. Whole-run goodput is recorded separately as a
-short-flow diagnostic. The configured TBF rate defines the condition; steady
+Before each campaign, twenty pings and forward/reverse iperf3 probes validate
+the new namespaces. Each direction sends four omitted preconditioning seconds
+before measuring receiver TCP payload goodput for four seconds. Both received
+averages must be 80%–105% of the configured TBF rate. This lets the TCP window
+grow before measurement and avoids using sender intervals that may include
+bytes still queued by TBF. The configured rate defines the condition; received
 goodput is retained as validation evidence and a covariate. Any ping loss,
 iperf retransmission or qdisc drop stops the run and marks that campaign
 invalid. There is no automatic retry.
@@ -51,12 +51,14 @@ with the two-millisecond policy delivered only 78.7%--79.7% of the configured
 to the earlier source commit and must not be combined with a run created under
 this policy.
 
-The steady-interval gate was frozen after another excluded full-run attempt.
+The four-second preconditioning policy was frozen after excluded attempts.
 At RTT 50 ms and 100 Mbit/s, one reverse probe progressed through approximately
 26, 68, 96 and 96 Mbit/s with zero loss, retransmissions and qdisc drops. Its
 71% whole-run average measured TCP window growth, while the final intervals
-showed that TBF reached the configured capacity. Results from that earlier
-source commit remain excluded.
+showed that TBF reached the configured capacity. A subsequent two-interval
+method was also rejected because sender intervals included queued bursts (for
+example 25 Mbit/s under a correctly received 19.1 Mbit/s condition). Results
+from both earlier source commits remain excluded.
 
 ## Step 1 — inspect the environment
 

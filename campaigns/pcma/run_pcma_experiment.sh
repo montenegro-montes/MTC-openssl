@@ -3,11 +3,11 @@ set -eu
 usage() {
   cat <<'EOF'
 Usage:
-  ./run_pcma_experiment.sh --validate --fixtures MANIFEST
-  ./run_pcma_experiment.sh --diagnostic --fixtures MANIFEST --output NEW_DIR [--seed N]
-  ./run_pcma_experiment.sh --stage-a --fixtures MANIFEST --output NEW_DIR [run.py options]
-  ./run_pcma_experiment.sh --full-stage-a --fixtures MANIFEST --output NEW_DIR [--accesses N] [--seed N]
-  ./run_pcma_experiment.sh --analyze --output RESULT_DIR
+  ./campaigns/pcma/run_pcma_experiment.sh --validate --fixtures MANIFEST
+  ./campaigns/pcma/run_pcma_experiment.sh --diagnostic --fixtures MANIFEST --output NEW_DIR [--seed N]
+  ./campaigns/pcma/run_pcma_experiment.sh --stage-a --fixtures MANIFEST --output NEW_DIR [run.py options]
+  ./campaigns/pcma/run_pcma_experiment.sh --full-stage-a --fixtures MANIFEST --output NEW_DIR [--accesses N] [--seed N]
+  ./campaigns/pcma/run_pcma_experiment.sh --analyze --output RESULT_DIR
 
 No mode is selected by default. --full-stage-a is potentially expensive and
 must be invoked explicitly. Stage B TLS integration is not implemented.

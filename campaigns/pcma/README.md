@@ -92,7 +92,7 @@ No Docker image is needed for Stage A.
 git status --short
 git rev-parse HEAD
 python3 campaigns/pcma/test_pcma.py
-./run_pcma_experiment.sh --help
+./campaigns/pcma/run_pcma_experiment.sh --help
 ```
 
 These are inexpensive local checks and do not execute an experiment.
@@ -116,7 +116,7 @@ python3 campaigns/pcma/validate.py --fixtures "$PCMA_FIXTURES/fixtures.json"
 ```sh
 # MANUAL EXECUTION — small diagnostic
 PCMA_DIAGNOSTIC="artifacts/results/pcma-diagnostic-$(date +%Y%m%d-%H%M%S)"
-./run_pcma_experiment.sh --diagnostic \
+./campaigns/pcma/run_pcma_experiment.sh --diagnostic \
   --fixtures "$PCMA_FIXTURES/fixtures.json" \
   --output "$PCMA_DIAGNOSTIC" \
   --seed 20260911
@@ -131,7 +131,7 @@ full matrix.
 ```sh
 # MANUAL EXECUTION
 PCMA_RUN="artifacts/results/pcma-run-$(date +%Y%m%d-%H%M%S)"
-./run_pcma_experiment.sh --stage-a \
+./campaigns/pcma/run_pcma_experiment.sh --stage-a \
   --fixtures "$PCMA_FIXTURES/fixtures.json" \
   --output "$PCMA_RUN" \
   --tree-size 256 \
@@ -147,7 +147,7 @@ PCMA_RUN="artifacts/results/pcma-run-$(date +%Y%m%d-%H%M%S)"
 ```sh
 # MANUAL EXECUTION — potentially expensive
 PCMA_ROOT="artifacts/results/pcma-stage-a-$(date +%Y%m%d-%H%M%S)"
-./run_pcma_experiment.sh --full-stage-a \
+./campaigns/pcma/run_pcma_experiment.sh --full-stage-a \
   --fixtures "$PCMA_FIXTURES/fixtures.json" \
   --output "$PCMA_ROOT" \
   --accesses 1000 \
@@ -166,7 +166,7 @@ inspect the diagnostic before choosing the full access count. Use
 ```sh
 python3 campaigns/pcma/analyze.py "$PCMA_ROOT"
 # or
-./run_pcma_experiment.sh --analyze --output "$PCMA_ROOT"
+./campaigns/pcma/run_pcma_experiment.sh --analyze --output "$PCMA_ROOT"
 ```
 
 If `observations.csv` is absent, analysis exits with an explanatory error.
