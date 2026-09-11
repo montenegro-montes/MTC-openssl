@@ -84,6 +84,11 @@ The gate also verifies that the bind-mounted `client.sh` is executable. Probe
 stdout and stderr are always saved to the condition's `network-validation.log`
 before a nonzero exit aborts the smoke run.
 
+Forward and reverse iperf sessions are delimited separately. A fixed two-second
+settling interval between them exceeds the configured one-second TBF queue
+latency, preventing the second control connection from racing queued teardown
+traffic. Any iperf JSON error is reported verbatim in the campaign status.
+
 The driver uses one deterministic random stream: warmup shuffles consume the
 first values and measured rounds continue from that state. Validation recreates
 that sequence independently for each CSV.

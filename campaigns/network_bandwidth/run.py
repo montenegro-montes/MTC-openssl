@@ -13,19 +13,15 @@ def parse_ping(text):
     values=sorted(float(x) for x in re.findall(r'time=([0-9.]+) ms',text))
     if len(values)!=20:raise RuntimeError('RTT probe loss/failure')
     return {'measured_rtt_min_ms':values[0],'measured_rtt_median_ms':(values[9]+values[10])/2,'measured_rtt_max_ms':values[-1],'ping_loss_percent':0.0}
-def json_objects(text):
-    decoder=json.JSONDecoder();objects=[];offset=0
-    while True:
-        start=text.find('{',offset)
-        if start<0:break
-        try:value,end=decoder.raw_decode(text[start:])
-        except json.JSONDecodeError:offset=start+1;continue
-        if isinstance(value,dict) and 'end' in value and 'sum_received' in value['end']:objects.append(value)
-        offset=start+end
-    return objects
+def iperf_result(text,direction):
+    match=re.search(rf'IPERF_{direction}_BEGIN\n(.*?)\nIPERF_{direction}_END',text,re.S)
+    if not match:raise RuntimeError(f'Missing {direction.lower()} iperf output markers')
+    value=json.loads(match.group(1))
+    if value.get('error'):raise RuntimeError(f'{direction.lower()} iperf failed: {value["error"]}')
+    if 'sum_received' not in value.get('end',{}):raise RuntimeError(f'Incomplete {direction.lower()} iperf result')
+    return value
 def parse_probe(text,target):
-    ping=parse_ping(text);objects=json_objects(text)
-    if len(objects)!=2:raise RuntimeError('Expected forward and reverse iperf JSON')
+    ping=parse_ping(text);objects=[iperf_result(text,'FORWARD'),iperf_result(text,'REVERSE')]
     rates=[o['end']['sum_received']['bits_per_second']/1e6 for o in objects];retrans=[o['end'].get('sum_sent',{}).get('retransmits',0) for o in objects]
     result={**ping,'bandwidth_forward_mbps':rates[0],'bandwidth_reverse_mbps':rates[1],'bandwidth_measured_mbps':min(rates),'iperf_retransmits_forward':retrans[0],'iperf_retransmits_reverse':retrans[1]}
     if any(abs(v-target)/target>.15 for v in rates):raise RuntimeError(f'Throughput outside predeclared ±15% tolerance: {rates}')
