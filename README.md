@@ -45,6 +45,7 @@ are architectural; their trust and transparency models are not equivalent.
 | Initial TLS/X.509/PQ/Merkle laboratory | Implemented and validated | Functional OpenSSL `s_client` and `s_server` integration |
 | Controlled N=16 comparison | Completed | Size, wall time, CPU, and trust costs |
 | Merkle population scaling | Completed | Tree sizes 1, 4, 16, 64, 256, and 1024 |
+| Progressive Compact Merkle Authentication (PCMA) | Prepared, not executed | Stage-A proof/cache simulator using actual Compact fixtures; no TLS integration yet |
 | Controlled latency | Completed | Additional RTT from 0 to 200 ms |
 | Bandwidth constrained | Infrastructure prepared | Independent manual campaign |
 | Packet loss | Completed | Six loss levels at 50 ms RTT; latency, reliability, and TCP retransmission activity |
@@ -315,6 +316,7 @@ bootstrap inference uses independent campaigns and retains outliers.
 - [Initial TLS-Merkle laboratory](docs/tls-merkle-laboratory.md)
 - [TLS-MT protocol](docs/tls-mt.md)
 - [Compact Merkle protocol](docs/compact-protocol.md)
+- [PCMA Stage-A laboratory](campaigns/pcma/README.md)
 - [MTC methodology](docs/mtc-methodology.md)
 - [MTC results](docs/mtc-results.md)
 - [MTC comparison](docs/mtc-comparison.md)

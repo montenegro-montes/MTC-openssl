@@ -10,6 +10,7 @@ This directory contains the executable, reproducible campaign packages. Run ever
 | `network_bandwidth/` | Bandwidth-limited campaign |
 | `packet_loss_campaign/` | Packet-loss-only campaign |
 | `combined_network_campaign/` | Representative combined network profiles |
+| `pcma/` | Progressive cross-credential Compact proof/cache simulation (prepared, not executed) |
 
 Raw data, generated fixtures and immutable source snapshots stay under `artifacts/`; moving them would invalidate recorded paths and hashes. Dockerfiles and Compose definitions live under `docker/`, while their build contexts continue to use the repository root. Each package README contains its commands and validation gates.
 
@@ -23,6 +24,9 @@ Run experiments independently and finish each one before starting the next:
 4. `network_bandwidth/`: isolated bandwidth effect.
 5. `packet_loss_campaign/`: isolated packet-loss effect.
 6. `combined_network_campaign/`: representative combined profiles.
+
+PCMA is a separate proof/cache study rather than a continuation of the network
+campaign sequence. See [`pcma/README.md`](pcma/README.md).
 
 Completed historical campaigns do not need to be rerun merely to start a later
 package, but their required fixtures, image IDs, reports and hashes must remain
