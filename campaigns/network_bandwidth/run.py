@@ -9,7 +9,7 @@ COMPOSE=['docker','compose','-f',str(REPO/'docker/compose.network-bandwidth.yaml
 GOODPUT_MIN_RATIO=.80;GOODPUT_MAX_RATIO=1.05
 def load(path):return json.loads(path.read_text())
 def save(path,value):path.write_text(json.dumps(value,indent=2)+'\n')
-def burst(rate):return max(1600,int(rate*1_000_000/8/1000))
+def burst(rate):return max(1600,int(rate*1_000_000/8/500))
 def parse_ping(text):
     values=sorted(float(x) for x in re.findall(r'time=([0-9.]+) ms',text))
     if len(values)!=20:raise RuntimeError('RTT probe loss/failure')
@@ -82,9 +82,10 @@ def main():
                 before=subprocess.check_output(['docker','exec',container,'tc','-s','qdisc','show','dev','eth0'],text=True);(directory/'server-qdisc-before.txt').write_text(before)
                 probe_run=subprocess.run(COMPOSE+['run','--rm','client','probe'],env=env,text=True,capture_output=True);probe_text=probe_run.stdout+probe_run.stderr;(directory/'network-validation.log').write_text(probe_text)
                 if probe_run.returncode:raise RuntimeError(f'Network probe failed with exit code {probe_run.returncode}; inspect {directory / "network-validation.log"}')
+                server_probe=subprocess.check_output(['docker','exec',container,'tc','-s','qdisc','show','dev','eth0'],text=True);(directory/'server-qdisc-probe-after.txt').write_text(server_probe)
+                if drops(probe_text)+drops(server_probe):raise RuntimeError('Probe qdisc drop; inspect client network-validation.log and server-qdisc-probe-after.txt')
                 probe=parse_probe(probe_text,rate)
                 if abs(probe['measured_rtt_median_ms']-rtt)>max(4,rtt*.15):raise RuntimeError('Measured RTT outside tolerance')
-                if drops(probe_text):raise RuntimeError('Probe qdisc drop')
                 with (directory/'driver.log').open('w') as log:subprocess.run(COMPOSE+['run','--rm','client','measure','--runs',str(runs),'--warmup',str(warmups),'--seed',str(seed),'--image-id',image,'--scenarios',*SCENARIOS],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
                 driver=(directory/'driver.log').read_text();server_after=subprocess.check_output(['docker','exec',container,'tc','-s','qdisc','show','dev','eth0'],text=True);(directory/'server-qdisc-after.txt').write_text(server_after);match=re.search(r'QDISC_CLIENT_AFTER_BEGIN\n(.*?)QDISC_CLIENT_AFTER_END',driver,re.S)
                 if not match:raise RuntimeError('Missing client qdisc statistics')

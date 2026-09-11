@@ -15,12 +15,14 @@ each endpoint egress. No loss or jitter is configured. The queue latency bound
 is 1000 ms. Burst is selected before execution as:
 
 ```text
-max(1600 bytes, rate_bits_per_second / 8 / 1000)
+max(1600 bytes, rate_bits_per_second / 8 / 500)
 ```
 
-This supplies roughly one scheduler-millisecond of tokens at high rates and at
-least one packet at low rates. It is recorded per campaign. TBF necessarily has
-a token burst; do not interpret the analytical byte/rate value as the exact
+This supplies two milliseconds of tokens at high rates and at least one packet
+at low rates. A pre-campaign diagnostic showed that one millisecond caused TBF
+drops at 100 Mbit/s under Docker/GSO, while two milliseconds produced zero drops
+and retransmissions. The value is recorded per campaign. TBF necessarily has a
+token burst; do not interpret the analytical byte/rate value as the exact
 measured delay of a short TLS flight.
 
 Before each campaign, twenty pings and forward/reverse four-second iperf3 probes
@@ -31,6 +33,10 @@ configured TBF rate defines the condition; measured goodput is recorded as
 validation evidence and a covariate. Any ping loss, iperf retransmission or
 qdisc drop stops the run and marks that campaign invalid. There is no automatic
 retry.
+
+Client and server qdisc counters are captured immediately after each iperf
+probe. Any drop on either endpoint invalidates the condition before TLS
+measurements begin.
 
 This acceptance interval was frozen before the definitive experiment after
 excluded smoke diagnostics showed that valid 5 Mbit/s TCP goodput could fall
