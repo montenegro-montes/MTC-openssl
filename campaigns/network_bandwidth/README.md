@@ -84,6 +84,10 @@ The gate also verifies that the bind-mounted `client.sh` is executable. Probe
 stdout and stderr are always saved to the condition's `network-validation.log`
 before a nonzero exit aborts the smoke run.
 
+The driver uses one deterministic random stream: warmup shuffles consume the
+first values and measured rounds continue from that state. Validation recreates
+that sequence independently for each CSV.
+
 ## Step 5 — run and inspect the smoke test
 
 ```sh

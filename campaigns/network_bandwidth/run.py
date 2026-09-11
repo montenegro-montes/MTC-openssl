@@ -43,10 +43,11 @@ def enrich(path,condition,experiment):
     with path.open('w',newline='') as f:w=csv.DictWriter(f,fieldnames=fields);w.writeheader();w.writerows(rows)
     return rows
 def validate(directory,seed,rtt,rate,runs,warmups,probe):
-    seen=set();rng=random.Random(seed)
+    seen=set()
     for filename,count,warm in [('warmups.csv',warmups,1),('samples.csv',runs,0)]:
         rows=enrich(directory/filename,{'rtt_target_ms':rtt,'rtt_measured_ms':probe['measured_rtt_median_ms'],'bandwidth_target_mbps':rate,'bandwidth_measured_mbps':probe['bandwidth_measured_mbps']},'bandwidth-limited')
         if len(rows)!=count*6:raise RuntimeError('Wrong sample count')
+        rng=random.Random(seed)
         if not warm:
             for _ in range(warmups):order=SCENARIOS.copy();rng.shuffle(order)
         for round_id in range(1,count+1):
