@@ -4,10 +4,14 @@ from pathlib import Path
 
 REPO=Path(__file__).resolve().parents[2]
 IMAGE='mt-tls-network:latency'
-BASE='sha256:4b04891fc50251a422c3357f35f355151ea50150d0e678dadde8c8f97b968b43'
+BASE='mt-tls-measurement:local'
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 def load(path):return json.loads(path.read_text())
 def save(path,value):path.write_text(json.dumps(value,indent=2)+'\n')
+def inspect(reference):return json.loads(subprocess.check_output(['docker','image','inspect',reference],text=True))[0]
+def verify_base(network,base):
+    network_layers=network['RootFS']['Layers'];base_layers=base['RootFS']['Layers']
+    if network_layers[:len(base_layers)]!=base_layers:raise RuntimeError(f'{IMAGE} is not derived from {BASE}')
 def verify(root):
     counts={}
     for name in ['baseline-source-sha256.json','fixture-sha256.json']:
@@ -24,12 +28,17 @@ def main():
         save(root/'baseline-source-sha256.json',{s:sha(REPO/s) for s in tracked if s and (REPO/s).is_file()})
         files=[f for b in ['artifacts/certs','artifacts/compact/batch16','artifacts/mtc/batch16-v2'] for f in (REPO/b).rglob('*') if f.is_file()]
         save(root/'fixture-sha256.json',{str(f.relative_to(REPO)):sha(f) for f in files})
-        save(root/'metadata.json',{'experiment':'bandwidth-limited','git_commit_before':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip(),'git_status_before':subprocess.check_output(['git','status','--short'],cwd=REPO,text=True),'base_image_id':BASE,'rtt_targets_ms':[10,50,100],'bandwidth_targets_mbps':[100,20,10,5,1],'throughput_tolerance_percent':15,'rate_scope':'per direction; same TBF rate on client and server egress','queue_latency_ms':1000,'status':'initialized','git_commit_after_experiment':None})
+        save(root/'metadata.json',{'experiment':'bandwidth-limited','git_commit_before':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip(),'git_status_before':subprocess.check_output(['git','status','--short'],cwd=REPO,text=True),'base_image_ref':BASE,'base_image_id':None,'rtt_targets_ms':[10,50,100],'bandwidth_targets_mbps':[100,20,10,5,1],'throughput_tolerance_percent':15,'rate_scope':'per direction; same TBF rate on client and server egress','queue_latency_ms':1000,'status':'initialized','git_commit_after_experiment':None})
     elif a.stage=='tests':
-        image=json.loads(subprocess.check_output(['docker','image','inspect',IMAGE],text=True))[0]
+        save(root/'tests-status.json',{'passed':False,'state':'running','image_ref':IMAGE,'base_image_ref':BASE})
+        image=inspect(IMAGE);base=inspect(BASE);verify_base(image,base)
         with (root/'tests.log').open('w') as log:r=subprocess.run(['docker','run','--rm','--network','none','-v',str(REPO/'artifacts')+':/work:ro',image['Id'],'sh','/opt/measurement/tests.sh'],stdout=log,stderr=subprocess.STDOUT)
-        save(root/'tests-status.json',{'passed':r.returncode==0,'exit_code':r.returncode,'image_id':image['Id'],'base_image_id':BASE});save(root/'images.json',{'network_image':image,'base_image':json.loads(subprocess.check_output(['docker','image','inspect',BASE],text=True))[0]});(root/'environment.json').write_text(subprocess.check_output(['docker','info','--format','{{json .}}'],text=True));verify(root)
-        if r.returncode:raise SystemExit('Regression failure')
+        if r.returncode:
+            save(root/'tests-status.json',{'passed':False,'exit_code':r.returncode,'image_id':image['Id'],'base_image_id':base['Id'],'error':'Regression failure'})
+            raise SystemExit('Regression failure')
+        save(root/'images.json',{'network_image':image,'base_image':base});(root/'environment.json').write_text(subprocess.check_output(['docker','info','--format','{{json .}}'],text=True));verify(root)
+        metadata=load(root/'metadata.json');metadata.update(base_image_id=base['Id'],network_image_id=image['Id']);save(root/'metadata.json',metadata)
+        save(root/'tests-status.json',{'passed':True,'exit_code':0,'image_id':image['Id'],'base_image_id':base['Id'],'base_image_ref':BASE,'base_layers_verified':True})
     else:
         if not load(root/'campaign-status.json')['passed'] or not load(root/'analysis-status.json')['passed']:raise SystemExit('Experiment incomplete')
         counts=verify(root);snapshot=root/'source';snapshot.mkdir();shutil.copytree(REPO/'campaigns/network_bandwidth',snapshot/'campaigns/network_bandwidth',ignore=shutil.ignore_patterns('__pycache__'));(snapshot/'docker').mkdir();shutil.copyfile(REPO/'docker/compose.network-bandwidth.yaml',snapshot/'docker/compose.network-bandwidth.yaml')

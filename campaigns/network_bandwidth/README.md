@@ -60,6 +60,9 @@ docker build -f docker/Dockerfile.network -t mt-tls-network:latency .
 ```
 
 Skip the build when the recorded validated image is already available.
+The regression gate resolves the current `mt-tls-measurement:local` image,
+records its immutable ID, and verifies that its filesystem layers are the base
+of `mt-tls-network:latency`. It does not depend on an obsolete local image ID.
 
 ## Step 4 — run the regression gate
 
@@ -69,6 +72,11 @@ cat "$BANDWIDTH_ROOT/tests-status.json"
 ```
 
 Do not continue unless `passed` is true.
+
+If an older runner failed after writing a misleading `passed: true` status,
+discard that unstarted result directory and initialize a new timestamped path.
+The source inventory in the old directory belongs to the earlier commit and
+must not be silently updated.
 
 ## Step 5 — run and inspect the smoke test
 
