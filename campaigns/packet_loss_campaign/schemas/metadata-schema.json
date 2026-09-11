@@ -7,7 +7,7 @@
     "experiment": {"const": "packet-loss-only"},
     "git_commit_before": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "git_status_before": {"type": "string"},
-    "base_image_id": {"type": "string"},
+    "base_image_id": {"type": ["string", "null"]},
     "loss_conditions_percent": {"const": ["0", "0.1", "0.5", "1", "2", "5"]},
     "configured_rtt_ms": {"const": 50},
     "handshake_timeout_seconds": {"const": 30},

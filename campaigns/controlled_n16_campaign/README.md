@@ -27,7 +27,7 @@ is part of this measurement workflow.
 ```sh
 git status --short
 git rev-parse HEAD
-docker image inspect mt-tls-mtc:local --format '{{.Id}}'
+python3 -m campaigns.common.image_chain measurement
 test -d artifacts/compact/batch16
 test -d artifacts/mtc/batch16-v2
 test -d artifacts/certs

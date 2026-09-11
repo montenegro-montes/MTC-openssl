@@ -17,7 +17,7 @@ shell variable through all steps.
 ```sh
 git status --short
 git rev-parse HEAD
-docker image inspect mt-tls-measurement:local --format '{{.Id}}'
+docker image inspect mt-tls-measurement:local --format '{{.Id}}' 2>/dev/null || echo 'missing; the tests stage will rebuild it'
 docker ps
 test -d artifacts/compact/batch16
 test -d artifacts/mtc/batch16-v2
@@ -42,8 +42,11 @@ fixture hashes. Never reuse a failed or completed result directory.
 
 ```sh
 docker build -f docker/Dockerfile.network -t mt-tls-network:latency .
-docker image inspect mt-tls-network:latency --format '{{.Id}}'
+docker image inspect mt-tls-network:latency --format '{{.Id}}' 2>/dev/null || echo 'missing; the tests stage will rebuild it'
 ```
+
+This manual build is optional. `control.py tests` resolves the complete image
+chain and rebuilds missing images before running the regression gate.
 
 If the image already exists and matches the intended validated base, skip the
 build and only inspect its ID.

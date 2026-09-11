@@ -36,7 +36,7 @@ saved image and the required fixtures:
 ```sh
 git status --short
 git rev-parse HEAD
-docker image inspect mt-tls-network:latency --format '{{.Id}}'
+docker image inspect mt-tls-network:latency --format '{{.Id}}' 2>/dev/null || echo 'missing; the tests stage will rebuild it'
 docker ps
 test -d artifacts/compact/batch16
 test -d artifacts/mtc/batch16-v2
@@ -59,7 +59,9 @@ Initialization refuses existing paths. Reuse this variable in all later commands
 docker build -f docker/Dockerfile.network -t mt-tls-network:latency .
 ```
 
-Skip the build when the recorded validated image is already available.
+This manual build is optional. The regression gate automatically rebuilds any
+missing image in the dependency chain and rebuilds a child when its parent has
+changed.
 The regression gate resolves the current `mt-tls-measurement:local` image,
 records its immutable ID, and verifies that its filesystem layers are the base
 of `mt-tls-network:latency`. It does not depend on an obsolete local image ID.

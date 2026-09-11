@@ -50,7 +50,7 @@ def main():
  if not a.preflight:assert read(root/'preflight-status.json')['passed']
  statepath=root/('preflight-status.json' if a.preflight else 'campaign-status.json');assert not statepath.exists()
  state={'passed':False,'image_id':image,'campaigns':[],'failed_campaign':None};dump(statepath,state)
- base=['docker','compose','-f',str(REPO/'docker/compose.scaling.yaml')];env=os.environ.copy();env['SCALING_FIXTURES']=read(root/'fixture-location.json')['container']
+ base=['docker','compose','-f',str(REPO/'docker/compose.scaling.yaml')];env=os.environ.copy();env['SCALING_IMAGE']=image;env['SCALING_FIXTURES']=read(root/'fixture-location.json')['container']
  output=root/('preflight' if a.preflight else 'campaigns');output.mkdir();env['MEASUREMENT_RUN_ROOT']='/work/'+str(output.relative_to(REPO/'artifacts'))
  resources0=None;network0=None;containers=set()
  try:

@@ -259,6 +259,16 @@ Do not continue unless the output ends with:
 ALL REGRESSION AND NEGATIVE TESTS PASS
 ```
 
+For new campaigns, the complete local image chain can be checked and restored
+recursively without regenerating certificate fixtures:
+
+```sh
+python3 -m campaigns.common.image_chain network
+```
+
+Campaign regression gates perform this resolution automatically and record the
+resulting immutable IDs and any rebuilds before allowing measurements.
+
 ### Step 7 — build the network image
 
 ```sh

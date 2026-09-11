@@ -1,17 +1,15 @@
 """Initialize, gate and audit one bandwidth-only result directory."""
-import argparse,datetime,hashlib,json,shutil,subprocess
+import argparse,datetime,hashlib,json,shutil,subprocess,sys
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parents[2]
+sys.path.insert(0,str(REPO/'campaigns'))
+from common.image_chain import ensure
 IMAGE='mt-tls-network:latency'
 BASE='mt-tls-measurement:local'
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 def load(path):return json.loads(path.read_text())
 def save(path,value):path.write_text(json.dumps(value,indent=2)+'\n')
-def inspect(reference):return json.loads(subprocess.check_output(['docker','image','inspect',reference],text=True))[0]
-def verify_base(network,base):
-    network_layers=network['RootFS']['Layers'];base_layers=base['RootFS']['Layers']
-    if network_layers[:len(base_layers)]!=base_layers:raise RuntimeError(f'{IMAGE} is not derived from {BASE}')
 def verify(root):
     counts={}
     for name in ['baseline-source-sha256.json','fixture-sha256.json']:
@@ -31,12 +29,12 @@ def main():
         save(root/'metadata.json',{'experiment':'bandwidth-limited','git_commit_before':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip(),'git_status_before':subprocess.check_output(['git','status','--short'],cwd=REPO,text=True),'base_image_ref':BASE,'base_image_id':None,'rtt_targets_ms':[10,50,100],'bandwidth_targets_mbps':[100,20,10,5,1],'throughput_tolerance_percent':15,'rate_scope':'per direction; same TBF rate on client and server egress','queue_latency_ms':1000,'status':'initialized','git_commit_after_experiment':None})
     elif a.stage=='tests':
         save(root/'tests-status.json',{'passed':False,'state':'running','image_ref':IMAGE,'base_image_ref':BASE})
-        image=inspect(IMAGE);base=inspect(BASE);verify_base(image,base)
+        resolved=ensure('network');image=resolved['target'];base=resolved['images']['measurement']
         with (root/'tests.log').open('w') as log:r=subprocess.run(['docker','run','--rm','--network','none','-v',str(REPO/'artifacts')+':/work:ro',image['Id'],'sh','/opt/measurement/tests.sh'],stdout=log,stderr=subprocess.STDOUT)
         if r.returncode:
             save(root/'tests-status.json',{'passed':False,'exit_code':r.returncode,'image_id':image['Id'],'base_image_id':base['Id'],'error':'Regression failure'})
             raise SystemExit('Regression failure')
-        save(root/'images.json',{'network_image':image,'base_image':base});(root/'environment.json').write_text(subprocess.check_output(['docker','info','--format','{{json .}}'],text=True));verify(root)
+        save(root/'images.json',{'network_image':image,'base_image':base,'automatic_rebuilds':resolved['rebuilt']});(root/'environment.json').write_text(subprocess.check_output(['docker','info','--format','{{json .}}'],text=True));verify(root)
         metadata=load(root/'metadata.json');metadata.update(base_image_id=base['Id'],network_image_id=image['Id']);save(root/'metadata.json',metadata)
         save(root/'tests-status.json',{'passed':True,'exit_code':0,'image_id':image['Id'],'base_image_id':base['Id'],'base_image_ref':BASE,'base_layers_verified':True})
     else:

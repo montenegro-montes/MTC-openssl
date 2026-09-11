@@ -15,6 +15,10 @@ Preparation commit: `9b7ec5a3ed7bd5a8f406d95cd7b9d69f85e4832a`
 
 Both client and server receive the same egress configuration. The two half delays form the configured additional RTT. Loss is sampled independently on each direction, so the configured percentage is not an end-to-end failure probability. There is no jitter, reordering, duplication or corruption.
 
+The regression gate resolves the complete local Docker image chain. Missing
+images are rebuilt, parent-child layers are checked, and the immutable IDs plus
+rebuild reasons are recorded in `images.json`.
+
 For `wan`, `constrained`, and `adverse`, a root TBF applies the rate before a child netem applies delay and loss. The burst is `max(1600, rate_bit_s / 8 / 1000)` bytes and the TBF queue latency is 1000 ms, matching the bandwidth-only policy. `baseline` has only a root netem and therefore no artificial rate cap. `tc qdisc replace` removes a stale root hierarchy before each namespace is used.
 
 The six scenarios are `pq`, `pq-rpk`, `pq-compact-warm`, `pq-compact-cold`, `pq-mtc-experimental-landmark`, and `pq-mtc-experimental-standalone`. The primary study comparison is PQ X.509 versus Compact warm versus MTC landmark. TLS 1.3, X25519, `TLS_AES_256_GCM_SHA384`, server-only authentication, disabled tickets/resumption, fixtures, keys, trust material, OpenSSL images and the Docker bridge remain fixed.
@@ -28,7 +32,7 @@ Run from the repository root. Use a new result path and keep it unchanged throug
 ```sh
 git status --short
 git rev-parse HEAD
-docker image inspect mt-tls-network:latency --format '{{.Id}}'
+docker image inspect mt-tls-network:latency --format '{{.Id}}' 2>/dev/null || echo 'missing; the tests stage will rebuild it'
 docker ps
 test -d artifacts/compact/batch16
 test -d artifacts/mtc/batch16-v2
@@ -51,7 +55,8 @@ python3 campaigns/combined_network_campaign/control.py init "$COMBINED_ROOT"
 
 ## Step 3 — build the image if necessary
 
-The Docker image must already exist. If needed, build it manually using the same network image recipe used by the earlier experiments:
+The regression gate restores a missing image automatically. The equivalent
+manual network image build is:
 
 ```sh
 docker build -f docker/Dockerfile.network -t mt-tls-network:latency .

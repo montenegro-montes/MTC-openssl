@@ -1,7 +1,9 @@
 # Controlled Merkle scaling
 
-This layer preserves the exact N=16 measurement image:
+The completed historical campaign preserves the exact N=16 measurement image
 `sha256:4b04891fc50251a422c3357f35f355151ea50150d0e678dadde8c8f97b968b43`.
+New campaigns resolve `mt-tls-measurement:local`, rebuild its dependency chain
+when necessary, run the full regression gate, and freeze the resulting ID.
 No native protocol, Merkle algorithm, encoding or timer implementation is changed.
 The baseline repository commit is `d6771842a42b32ccdd56fc35978fc6ecfcc5c95a`.
 
@@ -42,13 +44,12 @@ boundaries and TLS bytes are measured separately from theoretical hash-path size
 
 ## Step 1 — inspect the environment
 
-Run from the repository root with the exact local Docker image available.
-Confirm the Git state, frozen image and N=16 regression fixtures:
+Run from the repository root. Confirm the Git state and N=16 regression fixtures:
 
 ```sh
 git status --short
 git rev-parse HEAD
-docker image inspect sha256:4b04891fc50251a422c3357f35f355151ea50150d0e678dadde8c8f97b968b43 --format '{{.Id}}'
+python3 -m campaigns.common.image_chain measurement
 docker ps
 test -d artifacts/compact/batch16
 test -d artifacts/mtc/batch16-v2

@@ -1,9 +1,11 @@
 """Initialize, test and audit one immutable latency experiment."""
-import argparse,datetime,hashlib,json,shutil,subprocess
+import argparse,datetime,hashlib,json,shutil,subprocess,sys
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parents[2]
-BASE='sha256:4b04891fc50251a422c3357f35f355151ea50150d0e678dadde8c8f97b968b43'
+sys.path.insert(0,str(REPO/'campaigns'))
+from common.image_chain import ensure
+BASE='mt-tls-measurement:local'
 def sha(path): return hashlib.sha256(path.read_bytes()).hexdigest()
 def save(path,value): path.write_text(json.dumps(value,indent=2)+'\n')
 def load(path): return json.loads(path.read_text())
@@ -23,13 +25,17 @@ def main():
         save(root/'baseline-source-sha256.json',{s:sha(REPO/s) for s in tracked if s and (REPO/s).is_file()})
         fixtures=[f for b in ['artifacts/certs','artifacts/compact/batch16','artifacts/mtc/batch16-v2'] for f in (REPO/b).rglob('*') if f.is_file()]
         save(root/'fixture-sha256.json',{str(f.relative_to(REPO)):sha(f) for f in fixtures})
-        save(root/'metadata.json',{'experiment':'latency-only','git_commit_before':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip(),'git_status_before':subprocess.check_output(['git','status','--short'],cwd=REPO,text=True),'base_image_id':BASE,'rtt_targets_ms':[0,10,20,50,100,200],'campaigns_per_condition':5,'warmup_rounds':5,'measured_rounds':30,'status':'initialized'})
+        save(root/'metadata.json',{'experiment':'latency-only','git_commit_before':subprocess.check_output(['git','rev-parse','HEAD'],cwd=REPO,text=True).strip(),'git_status_before':subprocess.check_output(['git','status','--short'],cwd=REPO,text=True),'base_image_ref':BASE,'base_image_id':None,'rtt_targets_ms':[0,10,20,50,100,200],'campaigns_per_condition':5,'warmup_rounds':5,'measured_rounds':30,'status':'initialized'})
     elif a.stage=='tests':
-        image=json.loads(subprocess.check_output(['docker','image','inspect','mt-tls-network:latency'],text=True))[0];base=json.loads(subprocess.check_output(['docker','image','inspect',BASE],text=True))[0]
+        save(root/'tests-status.json',{'passed':False,'state':'resolving images','image_ref':'mt-tls-network:latency','base_image_ref':BASE})
+        resolved=ensure('network');image=resolved['target'];base=resolved['images']['measurement']
         with (root/'tests.log').open('w') as log:r=subprocess.run(['docker','run','--rm','--network','none','-v',str(REPO/'artifacts')+':/work:ro',image['Id'],'sh','/opt/measurement/tests.sh'],stdout=log,stderr=subprocess.STDOUT)
-        save(root/'tests-status.json',{'passed':r.returncode==0,'exit_code':r.returncode,'image_id':image['Id'],'base_image_id':base['Id']});
-        if r.returncode: raise SystemExit('Regression failure')
-        save(root/'images.json',{'network_image':image,'base_image':base});(root/'environment.json').write_text(subprocess.check_output(['docker','info','--format','{{json .}}'],text=True));hashes(root)
+        if r.returncode:
+            save(root/'tests-status.json',{'passed':False,'exit_code':r.returncode,'image_id':image['Id'],'base_image_id':base['Id']})
+            raise SystemExit('Regression failure')
+        save(root/'images.json',{'network_image':image,'base_image':base,'automatic_rebuilds':resolved['rebuilt']});(root/'environment.json').write_text(subprocess.check_output(['docker','info','--format','{{json .}}'],text=True));hashes(root)
+        metadata=load(root/'metadata.json');metadata.update(base_image_id=base['Id'],network_image_id=image['Id']);save(root/'metadata.json',metadata)
+        save(root/'tests-status.json',{'passed':True,'exit_code':0,'image_id':image['Id'],'base_image_id':base['Id'],'base_layers_verified':True})
     else:
         if not load(root/'campaign-status.json')['passed'] or not load(root/'analysis-status.json')['passed']: raise SystemExit('Incomplete experiment')
         counts=hashes(root);snapshot=root/'source';snapshot.mkdir();shutil.copytree(REPO/'campaigns/network_latency',snapshot/'campaigns/network_latency',ignore=shutil.ignore_patterns('__pycache__'));(snapshot/'docker').mkdir();shutil.copyfile(REPO/'docker/Dockerfile.network',snapshot/'docker/Dockerfile.network');shutil.copyfile(REPO/'docker/Dockerfile.network.dockerignore',snapshot/'docker/Dockerfile.network.dockerignore');shutil.copyfile(REPO/'docker/compose.network-latency.yaml',snapshot/'docker/compose.network-latency.yaml')

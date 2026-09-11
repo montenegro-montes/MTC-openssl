@@ -12,7 +12,7 @@ PAIRS = [("pq-compact-warm", "pq"), ("pq-mtc-experimental-landmark", "pq"),
          ("pq-compact-cold", "pq"), ("pq-mtc-experimental-standalone", "pq"),
          ("pq-rpk", "pq")]
 IMAGE = "mt-tls-network:latency"
-BASE_IMAGE_ID = "sha256:4b04891fc50251a422c3357f35f355151ea50150d0e678dadde8c8f97b968b43"
+BASE_IMAGE = "mt-tls-measurement:local"
 TIMEOUT_SECONDS = 30
 TBF_QUEUE_LATENCY_MS = 1000
 def burst_bytes(rate_mbit): return max(1600, int(rate_mbit * 1_000_000 / 8 / 1000))

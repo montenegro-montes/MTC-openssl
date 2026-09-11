@@ -1,6 +1,6 @@
 name: mtscaling
 x-lab: &lab
-  image: sha256:4b04891fc50251a422c3357f35f355151ea50150d0e678dadde8c8f97b968b43
+  image: ${SCALING_IMAGE:-mt-tls-measurement:local}
   volumes:
     - ../artifacts:/work:ro
     - ../artifacts/results:/work/results

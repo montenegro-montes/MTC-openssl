@@ -106,6 +106,15 @@ It retains the OpenSSL binary from `mt-tls-measurement:local`.
 
 ## Compose inventory
 
+The image dependency graph can be checked and repaired automatically:
+
+```sh
+python3 -m campaigns.common.image_chain network
+```
+
+It rebuilds a missing image or a child whose parent changed. Network campaign
+regression gates run the same resolver before testing and record all image IDs.
+
 | Compose file | Project | Purpose |
 |---|---|---|
 | `compose.yaml` | `mt` | Initial classic/PQ and Merkle TLS laboratory |

@@ -30,12 +30,16 @@ below and disabled by default.
 - Docker `NET_ADMIN`; privileged mode is not used.
 - A clean, new result path under `artifacts/results/`.
 
+The `tests` stage resolves the complete local image chain automatically. Any
+missing image is rebuilt and its resulting ID is stored in `images.json` before
+the campaign can proceed.
+
 ## Step 1 — inspect environment
 
 ```sh
 git status --short
 git rev-parse HEAD
-docker image inspect mt-tls-network:latency --format '{{.Id}}'
+docker image inspect mt-tls-network:latency --format '{{.Id}}' 2>/dev/null || echo 'missing; the tests stage will rebuild it'
 docker ps
 docker network ls
 test -d artifacts/compact/batch16
