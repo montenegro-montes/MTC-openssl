@@ -18,6 +18,11 @@ It can build, start, stop, inspect, enter and clean individual project targets.
 It never deletes campaign artifacts; result cleanup remains guarded by
 `scripts/archive-results.py --clean-artifacts`.
 
+`down` and `clean` locate containers and networks through Docker Compose project
+labels. They therefore work after an interrupted campaign even when required
+measurement variables such as `MEASUREMENT_RUN_ROOT`, `SCALING_FIXTURES`, or
+`CAPTURE_ROOT` are no longer exported in the current shell.
+
 ## Prerequisites
 
 ```sh

@@ -65,6 +65,23 @@ compose_file() {
   esac
 }
 
+project_name() {
+  case "${1:-}" in
+    base) echo mt ;;
+    compact) echo mtcompact ;;
+    profile) echo mtprofile ;;
+    mtc) echo mtclab ;;
+    measurement) echo controlledn16 ;;
+    scaling) echo mtscaling ;;
+    latency) echo mtlatency ;;
+    bandwidth) echo mtbandwidth ;;
+    loss) echo mtloss ;;
+    combined) echo mtcombined ;;
+    capture) echo mtcapture ;;
+    *) echo "Unknown target: ${1:-<empty>}" >&2; return 2 ;;
+  esac
+}
+
 targets() { printf '%s\n' base compact profile mtc measurement scaling latency bandwidth loss combined capture; }
 compose() { local f; f=$(compose_file "$1"); shift; docker compose -f "$f" "$@"; }
 confirm() {
@@ -104,11 +121,36 @@ doctor() {
   [ "$failed" -eq 0 ]
 }
 
+project_ps() {
+  local project
+  project=$(project_name "$1")
+  docker ps -a --filter "label=com.docker.compose.project=$project" \
+    --format 'table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}'
+}
+
+project_down() {
+  local project containers networks
+  project=$(project_name "$1")
+  containers=$(docker ps -aq --filter "label=com.docker.compose.project=$project")
+  if [ -n "$containers" ]; then
+    # Deliberate word splitting passes each Docker ID as one argument.
+    docker rm -f $containers
+  else
+    echo "No containers for Compose project $project"
+  fi
+  networks=$(docker network ls -q --filter "label=com.docker.compose.project=$project")
+  if [ -n "$networks" ]; then
+    docker network rm $networks
+  else
+    echo "No networks for Compose project $project"
+  fi
+}
+
 all_down() {
   local target
   for target in $(targets); do
     echo "==> down $target"
-    compose "$target" down --remove-orphans || true
+    project_down "$target" || true
   done
 }
 
@@ -142,13 +184,13 @@ case "$cmd" in
   doctor) doctor ;;
   ps)
     target=${1:-all}
-    if [ "$target" = all ]; then for t in $(targets); do echo "==> $t"; compose "$t" ps || true; done
-    else compose "$target" ps; fi ;;
+    if [ "$target" = all ]; then for t in $(targets); do echo "==> $t"; project_ps "$t" || true; done
+    else project_ps "$target"; fi ;;
   build) [ "$#" -ge 1 ] || { usage; exit 2; }; compose "$1" build ;;
   build-chain) python3 -m campaigns.common.image_chain "${1:-network}" ;;
   up) [ "$#" -ge 1 ] || { usage; exit 2; }; t=$1; shift; compose "$t" up -d --force-recreate "$@" ;;
   down)
-    target=${1:-all}; if [ "$target" = all ]; then all_down; else compose "$target" down --remove-orphans; fi ;;
+    target=${1:-all}; if [ "$target" = all ]; then all_down; else project_down "$target"; fi ;;
   restart) [ "$#" -ge 1 ] || { usage; exit 2; }; t=$1; shift; compose "$t" up -d --force-recreate "$@" ;;
   logs) [ "$#" -ge 1 ] || { usage; exit 2; }; t=$1; shift; compose "$t" logs -f --tail=200 "$@" ;;
   shell)
