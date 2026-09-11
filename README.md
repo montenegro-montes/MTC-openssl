@@ -151,6 +151,28 @@ universal performance or loss-resilience properties.
 - Results commit: `6fa2a626f417db5fc7f31f26f2cff9096a6176fb`
 - Published summaries: [combined network](results/campaign-snapshot-20260911T193547Z-662ce7edb956/campaigns/combined-network/)
 
+## Project management commands
+
+Two shell entry points centralize routine operation from the repository root:
+
+```sh
+# Docker images, Compose projects, services, logs and cleanup
+scripts/manage-containers.sh doctor
+scripts/manage-containers.sh menu
+
+# Persistent, step-by-step experiment battery
+scripts/manage-campaigns.sh init
+scripts/manage-campaigns.sh status
+scripts/manage-campaigns.sh next
+```
+
+The campaign manager records every step as `pending`, `running`, `completed`,
+`failed`, or `skipped` under the ignored `.mt-state/` directory. It also saves
+all timestamped output paths, so closing the terminal or continuing another day
+does not lose the current position. Use `show STEP` before a long operation and
+`run STEP` to execute only that operation. See [campaign management](campaigns/README.md)
+and [Docker management](docker/README.md) for the full command reference.
+
 ## Repository layout
 
 ```text

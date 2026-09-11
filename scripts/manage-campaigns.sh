@@ -1,0 +1,250 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+STATE_DIR="$REPO/.mt-state"
+STATE_FILE="$STATE_DIR/campaign-progress.tsv"
+ROOTS_FILE="$STATE_DIR/campaign-roots.env"
+cd "$REPO"
+
+STEPS='00.doctor
+01.base-build
+02.base-fixtures
+03.compact-build
+04.compact-fixtures
+05.mtc-build
+06.mtc-fixtures
+07.measurement-image
+08.network-image
+10.n16-manual-metadata
+11.n16-preflight
+12.n16-run
+13.n16-analysis
+20.scaling-init
+21.scaling-tests-before
+22.scaling-generate
+23.scaling-preflight
+24.scaling-run
+25.scaling-tests-after
+26.scaling-analysis
+30.latency-init
+31.latency-tests
+32.latency-smoke
+33.latency-run
+34.latency-analysis
+40.bandwidth-init
+41.bandwidth-tests
+42.bandwidth-smoke
+43.bandwidth-run
+44.bandwidth-analysis
+50.loss-init
+51.loss-tests
+52.loss-preflight
+53.loss-smoke
+54.loss-run
+55.loss-analysis
+60.combined-init
+61.combined-tests
+62.combined-preflight
+63.combined-smoke
+64.combined-run
+65.combined-analysis
+70.pcma-prepare
+71.pcma-diagnostic
+72.pcma-stage-a
+73.pcma-stage-a-analysis
+80.pcma-a2-diagnostic
+81.pcma-a2-run
+82.pcma-a2-audit
+83.pcma-a2-publication
+90.pcma-b-plan
+91.pcma-b-run
+92.pcma-b-audit
+93.pcma-b-publication
+100.capture-optional
+110.archive-results'
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/manage-campaigns.sh COMMAND [ARGUMENTS]
+
+Commands:
+  init [NAME]                  create a new persistent battery state
+  list                         list ordered project stages
+  status                       show progress and current result paths
+  show STEP                    print a step's command without running it
+  run STEP                     execute one step and record its result
+  next                         execute the first pending/failed step
+  mark STEP STATUS             set pending/completed/failed/skipped manually
+  retry STEP                   mark pending and execute again
+  reset [--yes]                remove progress only; never removes artifacts
+  archive-clean [--yes]        archive completed results, then clean artifacts
+  menu                         interactive interface
+
+Statuses: pending running completed failed skipped
+
+State is stored in .mt-state/ and survives terminal closure and changes to
+artifacts/. Long campaign runners remain intentionally non-resumable internally;
+after an interrupted runner, choose a fresh battery/output or inspect and mark
+the step manually. Run every command from the repository root.
+EOF
+}
+
+description() {
+  case "$1" in
+    00.doctor) echo "Check Docker and repository prerequisites";;
+    01.base-build) echo "Build base OpenSSL/PQ/Merkle image";;
+    02.base-fixtures) echo "Generate base certificates and Merkle fixtures";;
+    03.compact-build) echo "Build Compact image";; 04.compact-fixtures) echo "Generate Compact N=16 fixtures";;
+    05.mtc-build) echo "Build profiling and MTC images";; 06.mtc-fixtures) echo "Generate MTC N=16 fixtures";;
+    07.measurement-image) echo "Build and test controlled measurement image";; 08.network-image) echo "Build and inspect network image";;
+    10.n16-manual-metadata) echo "Create/review historical N=16 metadata (manual gate)";; 11.n16-preflight) echo "N=16 preflight";; 12.n16-run) echo "N=16 full campaign";; 13.n16-analysis) echo "N=16 analysis";;
+    20.scaling-init) echo "Initialize scaling";; 21.scaling-tests-before) echo "Scaling regression gate";; 22.scaling-generate) echo "Generate/validate scaling fixtures";; 23.scaling-preflight) echo "Scaling preflight";; 24.scaling-run) echo "Scaling full campaign";; 25.scaling-tests-after) echo "Scaling post-run tests";; 26.scaling-analysis) echo "Scaling analysis, plots and audit";;
+    30.latency-init) echo "Initialize latency campaign";; 31.latency-tests) echo "Latency tests";; 32.latency-smoke) echo "Latency smoke";; 33.latency-run) echo "Latency full campaign";; 34.latency-analysis) echo "Latency analysis and audit";;
+    40.bandwidth-init) echo "Initialize bandwidth campaign";; 41.bandwidth-tests) echo "Bandwidth tests";; 42.bandwidth-smoke) echo "Bandwidth smoke";; 43.bandwidth-run) echo "Bandwidth full campaign";; 44.bandwidth-analysis) echo "Bandwidth analysis and audit";;
+    50.loss-init) echo "Initialize packet-loss campaign";; 51.loss-tests) echo "Packet-loss tests";; 52.loss-preflight) echo "Packet-loss preflight";; 53.loss-smoke) echo "Packet-loss smoke";; 54.loss-run) echo "Packet-loss full campaign";; 55.loss-analysis) echo "Packet-loss analysis and audit";;
+    60.combined-init) echo "Initialize combined-network campaign";; 61.combined-tests) echo "Combined-network tests";; 62.combined-preflight) echo "Combined-network preflight";; 63.combined-smoke) echo "Combined-network smoke";; 64.combined-run) echo "Combined-network full campaign";; 65.combined-analysis) echo "Combined-network analysis and audit";;
+    70.pcma-prepare) echo "Prepare PCMA fixture references";; 71.pcma-diagnostic) echo "PCMA Stage A diagnostic";; 72.pcma-stage-a) echo "PCMA Stage A full simulation";; 73.pcma-stage-a-analysis) echo "PCMA Stage A analysis";;
+    80.pcma-a2-diagnostic) echo "PCMA Stage A.2 diagnostic";; 81.pcma-a2-run) echo "PCMA Stage A.2 full simulation";; 82.pcma-a2-audit) echo "PCMA Stage A.2 audit";; 83.pcma-a2-publication) echo "PCMA Stage A.2 tables and decision";;
+    90.pcma-b-plan) echo "PCMA Stage B.1 plan";; 91.pcma-b-run) echo "PCMA Stage B.1 full TLS campaign";; 92.pcma-b-audit) echo "PCMA Stage B.1 audit/model check";; 93.pcma-b-publication) echo "PCMA Stage B.1 analysis and tables";;
+    100.capture-optional) echo "Optional packet-capture campaign";; 110.archive-results) echo "Create checksummed publication snapshot";;
+    *) return 1;;
+  esac
+}
+
+require_state() { [ -f "$STATE_FILE" ] && [ -f "$ROOTS_FILE" ] || { echo "No battery state. Run: $0 init" >&2; exit 2; }; }
+load_roots() { require_state; set -a; . "$ROOTS_FILE"; set +a; }
+has_step() { printf '%s\n' "$STEPS" | grep -Fx "$1" >/dev/null; }
+get_status() { awk -F '\t' -v id="$1" '$1==id {print $2}' "$STATE_FILE"; }
+set_status() {
+  local id=$1 value=$2 now tmp
+  case "$value" in pending|running|completed|failed|skipped) :;; *) echo "Invalid status: $value" >&2; return 2;; esac
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ); tmp="$STATE_FILE.tmp"
+  awk -F '\t' -v OFS='\t' -v id="$id" -v value="$value" -v now="$now" '{if($1==id){$2=value;$3=now} print}' "$STATE_FILE" > "$tmp"
+  mv "$tmp" "$STATE_FILE"
+}
+
+init_state() {
+  local name=${1:-battery-$(date +%Y%m%d-%H%M%S)} stamp
+  mkdir -p "$STATE_DIR"
+  if [ -f "$STATE_FILE" ]; then echo "State already exists. Use status or reset first." >&2; exit 2; fi
+  stamp=$(date +%Y%m%d-%H%M%S)
+  printf '%s\n' "$STEPS" | awk '{print $0"\tpending\t-"}' > "$STATE_FILE"
+  cat > "$ROOTS_FILE" <<EOF
+BATTERY_NAME='$name'
+BATTERY_CREATED_UTC='$(date -u +%Y-%m-%dT%H:%M:%SZ)'
+N16_ROOT='artifacts/results/controlled-n16-$stamp'
+SCALING_ROOT='artifacts/results/scaling-$stamp'
+SCALING_FIXTURES='artifacts/scaling/scaling-$stamp'
+LATENCY_ROOT='artifacts/results/network-latency-$stamp'
+BANDWIDTH_ROOT='artifacts/results/network-bandwidth-$stamp'
+LOSS_ROOT='artifacts/results/network-loss-$stamp'
+COMBINED_ROOT='artifacts/results/combined-network-$stamp'
+PCMA_FIXTURES='artifacts/pcma/fixtures-$stamp'
+PCMA_ROOT='artifacts/results/pcma-stage-a-$stamp'
+A2_RESULTS='artifacts/results/pcma-stage-a2-$stamp'
+B_RESULTS='artifacts/results/pcma-stage-b1-$stamp'
+CAPTURE_ROOT='artifacts/captures/handshake-$stamp'
+EOF
+  echo "Initialized $name"; "$0" status
+}
+
+command_for() {
+  case "$1" in
+    00.doctor) echo "scripts/manage-containers.sh doctor && git status --short && git rev-parse HEAD";;
+    01.base-build) echo "scripts/manage-containers.sh build base";;
+    02.base-fixtures) echo "docker compose -f docker/compose.yaml run --rm setup";;
+    03.compact-build) echo "scripts/manage-containers.sh build compact";;
+    04.compact-fixtures) echo "docker compose -f docker/compose.compact.yaml run --rm setup";;
+    05.mtc-build) echo "scripts/manage-containers.sh build profile && scripts/manage-containers.sh build mtc";;
+    06.mtc-fixtures) echo "docker compose -f docker/compose.mtc.yaml run --rm setup";;
+    07.measurement-image) echo "docker build -f docker/Dockerfile.measurement --build-arg BASE_IMAGE=mt-tls-mtc:local -t mt-tls-measurement:local . && docker run --rm --network none -v \"$REPO/artifacts:/work:ro\" mt-tls-measurement:local sh /opt/measurement/tests.sh";;
+    08.network-image) echo "python3 -m campaigns.common.image_chain network";;
+    10.n16-manual-metadata) echo "mkdir -p \"$N16_ROOT\"; echo 'Historical N=16 has no automatic metadata initializer. Complete the schema described in campaigns/controlled_n16_campaign/README.md, then mark this step completed.'; exit 3";;
+    11.n16-preflight) echo "python3 campaigns/controlled_n16_campaign/run.py --root \"$N16_ROOT\" --preflight";;
+    12.n16-run) echo "python3 campaigns/controlled_n16_campaign/run.py --root \"$N16_ROOT\"";;
+    13.n16-analysis) echo "python3 campaigns/controlled_n16_campaign/test_analysis.py && python3 campaigns/controlled_n16_campaign/analyze.py \"$N16_ROOT\"";;
+    20.scaling-init) echo "python3 campaigns/scaling_campaign/control.py init \"$SCALING_ROOT\"";;
+    21.scaling-tests-before) echo "python3 campaigns/scaling_campaign/control.py tests-before \"$SCALING_ROOT\"";;
+    22.scaling-generate) echo "python3 campaigns/scaling_campaign/control.py generate \"$SCALING_ROOT\" && python3 campaigns/scaling_campaign/structural.py \"$SCALING_ROOT\"";;
+    23.scaling-preflight) echo "python3 campaigns/scaling_campaign/run.py \"$SCALING_ROOT\" --preflight";;
+    24.scaling-run) echo "python3 campaigns/scaling_campaign/run.py \"$SCALING_ROOT\"";;
+    25.scaling-tests-after) echo "python3 campaigns/scaling_campaign/control.py tests-after \"$SCALING_ROOT\"";;
+    26.scaling-analysis) echo "python3 campaigns/scaling_campaign/test_analysis.py && python3 campaigns/scaling_campaign/analyze.py \"$SCALING_ROOT\" && python3 campaigns/scaling_campaign/plots.py \"$SCALING_ROOT\" && python3 campaigns/scaling_campaign/control.py audit \"$SCALING_ROOT\"";;
+    30.latency-init) echo "python3 campaigns/network_latency/control.py init \"$LATENCY_ROOT\"";; 31.latency-tests) echo "python3 campaigns/network_latency/control.py tests \"$LATENCY_ROOT\"";; 32.latency-smoke) echo "python3 campaigns/network_latency/run.py \"$LATENCY_ROOT\" --smoke";; 33.latency-run) echo "python3 campaigns/network_latency/run.py \"$LATENCY_ROOT\"";; 34.latency-analysis) echo "python3 campaigns/network_latency/analyze.py \"$LATENCY_ROOT\" && python3 campaigns/network_latency/plots.py \"$LATENCY_ROOT\" && python3 campaigns/network_latency/control.py audit \"$LATENCY_ROOT\"";;
+    40.bandwidth-init) echo "python3 campaigns/network_bandwidth/control.py init \"$BANDWIDTH_ROOT\"";; 41.bandwidth-tests) echo "python3 campaigns/network_bandwidth/control.py tests \"$BANDWIDTH_ROOT\"";; 42.bandwidth-smoke) echo "python3 campaigns/network_bandwidth/run.py \"$BANDWIDTH_ROOT\" --smoke";; 43.bandwidth-run) echo "python3 campaigns/network_bandwidth/run.py \"$BANDWIDTH_ROOT\"";; 44.bandwidth-analysis) echo "python3 campaigns/network_bandwidth/analyze.py \"$BANDWIDTH_ROOT\" && python3 campaigns/network_bandwidth/plots.py \"$BANDWIDTH_ROOT\" && python3 campaigns/network_bandwidth/control.py audit \"$BANDWIDTH_ROOT\"";;
+    50.loss-init) echo "python3 campaigns/packet_loss_campaign/control.py init \"$LOSS_ROOT\"";; 51.loss-tests) echo "python3 campaigns/packet_loss_campaign/control.py tests \"$LOSS_ROOT\"";; 52.loss-preflight) echo "python3 campaigns/packet_loss_campaign/run.py --root \"$LOSS_ROOT\" --preflight";; 53.loss-smoke) echo "python3 campaigns/packet_loss_campaign/run.py --root \"$LOSS_ROOT\" --smoke";; 54.loss-run) echo "python3 campaigns/packet_loss_campaign/run.py --root \"$LOSS_ROOT\"";; 55.loss-analysis) echo "python3 campaigns/packet_loss_campaign/analyze.py \"$LOSS_ROOT\" && python3 campaigns/packet_loss_campaign/plots.py \"$LOSS_ROOT\" && python3 campaigns/packet_loss_campaign/validate.py \"$LOSS_ROOT\" && python3 campaigns/packet_loss_campaign/control.py audit \"$LOSS_ROOT\"";;
+    60.combined-init) echo "python3 campaigns/combined_network_campaign/control.py init \"$COMBINED_ROOT\"";; 61.combined-tests) echo "python3 campaigns/combined_network_campaign/control.py tests \"$COMBINED_ROOT\"";; 62.combined-preflight) echo "python3 campaigns/combined_network_campaign/run.py --root \"$COMBINED_ROOT\" --preflight";; 63.combined-smoke) echo "python3 campaigns/combined_network_campaign/run.py --root \"$COMBINED_ROOT\" --smoke";; 64.combined-run) echo "python3 campaigns/combined_network_campaign/run.py --root \"$COMBINED_ROOT\"";; 65.combined-analysis) echo "python3 campaigns/combined_network_campaign/analyze.py \"$COMBINED_ROOT\" && python3 campaigns/combined_network_campaign/plots.py \"$COMBINED_ROOT\" && python3 campaigns/combined_network_campaign/validate.py \"$COMBINED_ROOT\" && python3 campaigns/combined_network_campaign/control.py audit \"$COMBINED_ROOT\"";;
+    70.pcma-prepare) echo "python3 campaigns/pcma/prepare.py --source \"$SCALING_FIXTURES\" --output \"$PCMA_FIXTURES\" --family pq && python3 campaigns/pcma/validate.py --fixtures \"$PCMA_FIXTURES/fixtures.json\"";;
+    71.pcma-diagnostic) echo "campaigns/pcma/run_pcma_experiment.sh --diagnostic --fixtures \"$PCMA_FIXTURES/fixtures.json\" --output \"$PCMA_ROOT-diagnostic\" --seed 20260911";;
+    72.pcma-stage-a) echo "campaigns/pcma/run_pcma_experiment.sh --full-stage-a --fixtures \"$PCMA_FIXTURES/fixtures.json\" --output \"$PCMA_ROOT\" --accesses 1000 --seed 20260911";;
+    73.pcma-stage-a-analysis) echo "campaigns/pcma/run_pcma_experiment.sh --analyze --output \"$PCMA_ROOT\"";;
+    80.pcma-a2-diagnostic) echo "campaigns/pcma_stage_a2/run_pcma_stage_a2.sh --diagnostic";;
+    81.pcma-a2-run) echo "campaigns/pcma_stage_a2/run_pcma_stage_a2.sh --full --fixtures \"$PCMA_FIXTURES/fixtures.json\" --output \"$A2_RESULTS\" --seed 20260911 --accesses 1000 --stage-a-results \"$PCMA_ROOT\"";;
+    82.pcma-a2-audit) echo "campaigns/pcma_stage_a2/run_pcma_stage_a2.sh --audit --results \"$A2_RESULTS\"";;
+    83.pcma-a2-publication) echo "campaigns/pcma_stage_a2/run_pcma_stage_a2.sh --tables --results \"$A2_RESULTS\" --output \"$A2_RESULTS/tables\" --stage-a-results \"$PCMA_ROOT\" && campaigns/pcma_stage_a2/run_pcma_stage_a2.sh --go-no-go --results \"$A2_RESULTS\" --output \"$A2_RESULTS/decision\"";;
+    90.pcma-b-plan) echo "campaigns/pcma_stage_b/run_pcma_stage_b.sh --stage-b1 --plan";;
+    91.pcma-b-run) echo "campaigns/pcma_stage_b/run_pcma_stage_b.sh --stage-b1 --config campaigns/pcma_stage_b/configs/stage-b1.json --output \"$B_RESULTS\"";;
+    92.pcma-b-audit) echo "campaigns/pcma_stage_b/run_pcma_stage_b.sh --audit --results \"$B_RESULTS\" && campaigns/pcma_stage_b/run_pcma_stage_b.sh --check-model --results \"$B_RESULTS\"";;
+    93.pcma-b-publication) echo "campaigns/pcma_stage_b/run_pcma_stage_b.sh --analyze --results \"$B_RESULTS\" --output \"$B_RESULTS/analysis\" && campaigns/pcma_stage_b/run_pcma_stage_b.sh --tables --results \"$B_RESULTS\" --output \"$B_RESULTS/tables\"";;
+    100.capture-optional) echo "python3 campaigns/handshake_capture/run.py --root \"$CAPTURE_ROOT\" && python3 campaigns/handshake_capture/validate.py \"$CAPTURE_ROOT\"";;
+    110.archive-results) echo "python3 scripts/archive-results.py --campaign controlled-n16=\"$N16_ROOT\" --campaign scaling=\"$SCALING_ROOT\" --campaign network-latency=\"$LATENCY_ROOT\" --campaign network-bandwidth=\"$BANDWIDTH_ROOT\" --campaign packet-loss=\"$LOSS_ROOT\" --campaign combined-network=\"$COMBINED_ROOT\" --campaign pcma-stage-a=\"$PCMA_ROOT\" --campaign pcma-stage-a2=\"$A2_RESULTS\" --campaign pcma-stage-b1=\"$B_RESULTS\"";;
+    *) return 1;;
+  esac
+}
+
+show_status() {
+  load_roots
+  echo "Battery: $BATTERY_NAME ($BATTERY_CREATED_UTC)"
+  echo "State:   ${STATE_FILE#$REPO/}"
+  printf '%-28s %-10s %-20s %s\n' STEP STATUS UPDATED DESCRIPTION
+  while IFS=$'\t' read -r id status updated; do printf '%-28s %-10s %-20s %s\n' "$id" "$status" "$updated" "$(description "$id")"; done < "$STATE_FILE"
+  echo; echo "Result roots:"; sed -n '/_ROOT=/p;/PCMA_FIXTURES=/p;/SCALING_FIXTURES=/p' "$ROOTS_FILE"
+}
+
+run_step() {
+  local id=$1 command rc
+  load_roots; has_step "$id" || { echo "Unknown step: $id" >&2; exit 2; }
+  command=$(command_for "$id")
+  echo "==> $id — $(description "$id")"; echo "+ $command"
+  set_status "$id" running
+  set +e; bash -lc "cd \"$REPO\" && $command"; rc=$?; set -e
+  if [ "$rc" -eq 0 ]; then set_status "$id" completed; echo "COMPLETED $id"
+  else set_status "$id" failed; echo "FAILED $id (exit $rc)" >&2; return "$rc"; fi
+}
+
+next_step() {
+  require_state
+  id=$(awk -F '\t' '$2=="pending" || $2=="failed" {print $1; exit}' "$STATE_FILE")
+  [ -n "$id" ] || { echo "No pending steps"; return 0; }
+  run_step "$id"
+}
+
+menu() {
+  require_state
+  while :; do
+    echo; echo "Campaign manager: 1 status | 2 run next | 3 run step | 4 show step | 5 mark step | 0 exit"
+    printf 'Selection: '; read -r choice
+    case "$choice" in
+      1) show_status;; 2) next_step || true;;
+      3) printf 'Step: '; read -r id; run_step "$id" || true;;
+      4) printf 'Step: '; read -r id; load_roots; command_for "$id";;
+      5) printf 'Step: '; read -r id; printf 'Status: '; read -r value; has_step "$id" && set_status "$id" "$value";;
+      0) return;; *) echo "Invalid selection";;
+    esac
+  done
+}
+
+cmd=${1:-help}; shift || true
+case "$cmd" in
+  help|-h|--help) usage;; init) init_state "${1:-}";; list) printf '%s\n' "$STEPS" | while read -r id; do printf '%-28s %s\n' "$id" "$(description "$id")"; done;;
+  status) show_status;; show) [ "$#" -eq 1 ] || { usage; exit 2; }; load_roots; command_for "$1";;
+  run) [ "$#" -eq 1 ] || { usage; exit 2; }; run_step "$1";; next) next_step;;
+  mark) [ "$#" -eq 2 ] || { usage; exit 2; }; require_state; has_step "$1" || exit 2; set_status "$1" "$2";;
+  retry) [ "$#" -eq 1 ] || { usage; exit 2; }; require_state; set_status "$1" pending; run_step "$1";;
+  reset) [ "${1:-}" = "--yes" ] || { printf 'Delete local campaign progress? [y/N] '; read -r a; case "$a" in y|Y) :;; *) exit 1;; esac; }; rm -f "$STATE_FILE" "$ROOTS_FILE"; echo "Progress reset";;
+  archive-clean)
+    [ "${1:-}" = "--yes" ] || { printf 'Archive this battery and delete artifacts? [y/N] '; read -r a; case "$a" in y|Y) :;; *) exit 1;; esac; }
+    load_roots; archive=$(command_for 110.archive-results); bash -lc "cd \"$REPO\" && $archive --clean-artifacts";;
+  menu) menu;; *) echo "Unknown command: $cmd" >&2; usage; exit 2;;
+esac

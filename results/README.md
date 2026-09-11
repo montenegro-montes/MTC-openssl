@@ -16,6 +16,15 @@ python3 scripts/archive-results.py
 python3 scripts/archive-results.py --verify results/campaign-snapshot-<timestamp>-<hash>
 ```
 
+For a new battery, pass its definitive directories explicitly. The campaign
+manager does this automatically in its final `110.archive-results` step:
+
+```sh
+python3 scripts/archive-results.py \
+  --campaign scaling=artifacts/results/scaling-<timestamp> \
+  --campaign network-latency=artifacts/results/network-latency-<timestamp>
+```
+
 To create the verified snapshot and then reset generated artifacts for a clean
 reconstruction run:
 

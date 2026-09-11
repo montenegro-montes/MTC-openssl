@@ -4,6 +4,20 @@ Run every command from the repository root and always pass the Compose file
 explicitly. Compose resolves the build context and bind mounts relative to the
 Compose file, while the documented commands assume the repository root.
 
+The project-level helper wraps the explicit Compose files while preserving the
+same target separation:
+
+```sh
+scripts/manage-containers.sh list
+scripts/manage-containers.sh doctor
+scripts/manage-containers.sh ps all
+scripts/manage-containers.sh menu
+```
+
+It can build, start, stop, inspect, enter and clean individual project targets.
+It never deletes campaign artifacts; result cleanup remains guarded by
+`scripts/archive-results.py --clean-artifacts`.
+
 ## Prerequisites
 
 ```sh

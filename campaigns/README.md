@@ -2,6 +2,20 @@
 
 This directory contains the executable, reproducible campaign packages. Run every command from the repository root so that Compose files and `artifacts/` resolve consistently.
 
+For an ordered execution that can be stopped and resumed across days, use:
+
+```sh
+scripts/manage-campaigns.sh init
+scripts/manage-campaigns.sh list
+scripts/manage-campaigns.sh status
+scripts/manage-campaigns.sh next
+```
+
+Progress and timestamped result roots are stored locally in `.mt-state/`. The
+manager exposes each initialization, test, preflight, smoke, full run, analysis
+and audit as a separate step. `show STEP` prints its exact command; `mark STEP
+skipped` records an intentional omission such as packet capture.
+
 | Directory | Experiment |
 |---|---|
 | `controlled_n16_campaign/` | Controlled N=16 comparison |

@@ -99,11 +99,11 @@ def status_is_complete(source: Path) -> bool:
     return bool(markers or (source / "analysis.json").exists() or (source / "report.md").exists())
 
 
-def build_snapshot() -> Path:
-    missing = [name for name in CAMPAIGNS.values() if not (RESULTS / name).is_dir()]
+def build_snapshot(campaigns: dict[str, str]) -> Path:
+    missing = [name for name in campaigns.values() if not (RESULTS / name).is_dir()]
     if missing:
         raise SystemExit("Missing definitive result directories: " + ", ".join(missing))
-    invalid = [name for name in CAMPAIGNS.values() if not status_is_complete(RESULTS / name)]
+    invalid = [name for name in campaigns.values() if not status_is_complete(RESULTS / name)]
     if invalid:
         raise SystemExit("Results do not pass completion checks: " + ", ".join(invalid))
 
@@ -111,7 +111,7 @@ def build_snapshot() -> Path:
     with tempfile.TemporaryDirectory(prefix="result-snapshot-", dir=ARCHIVES) as temporary:
         stage = Path(temporary)
         entries = []
-        for campaign, dirname in CAMPAIGNS.items():
+        for campaign, dirname in campaigns.items():
             source = RESULTS / dirname
             target = stage / "campaigns" / campaign
             copied = 0
@@ -143,7 +143,7 @@ def build_snapshot() -> Path:
             "snapshot_content_sha256": content_hash,
             "repository_head": git("rev-parse", "HEAD"),
             "repository_status": git("status", "--short"),
-            "campaigns": CAMPAIGNS,
+            "campaigns": campaigns,
             "selection": {
                 "allowed_suffixes": sorted(ALLOWED_SUFFIXES),
                 "excluded_names": sorted(EXCLUDED_NAMES),
@@ -196,6 +196,8 @@ def clean_artifacts() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--verify", type=Path, help="verify an existing snapshot")
+    parser.add_argument("--campaign", action="append", default=[], metavar="NAME=PATH",
+                        help="archive a named result directory; repeat to override the built-in registry")
     parser.add_argument("--clean-artifacts", action="store_true", help="delete artifacts only after creating and verifying a snapshot")
     args = parser.parse_args()
     if args.verify:
@@ -206,7 +208,22 @@ def main() -> None:
             clean_artifacts()
             print("CLEANED", REPO / "artifacts")
         return
-    snapshot = build_snapshot()
+    campaigns = CAMPAIGNS
+    if args.campaign:
+        campaigns = {}
+        for value in args.campaign:
+            if "=" not in value:
+                raise SystemExit("--campaign requires NAME=PATH")
+            name, path = value.split("=", 1)
+            result = Path(path)
+            try:
+                relative = result.resolve().relative_to(RESULTS.resolve())
+            except ValueError:
+                raise SystemExit("Campaign path must be below artifacts/results: " + path)
+            if not name or len(relative.parts) != 1:
+                raise SystemExit("Campaign name/path must identify one result directory: " + value)
+            campaigns[name] = relative.name
+    snapshot = build_snapshot(campaigns)
     verify(snapshot)
     print("SNAPSHOT", snapshot)
     if args.clean_artifacts:

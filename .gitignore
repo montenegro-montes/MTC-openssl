@@ -2,6 +2,7 @@
 artifacts/
 !results/
 !results/**
+.mt-state/
 __pycache__/
 *.key
 .env
