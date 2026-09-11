@@ -1,5 +1,5 @@
 """Controlled RTT x per-direction bandwidth campaigns; aborts on validation or drops."""
-import argparse,csv,datetime,hashlib,json,os,random,re,subprocess
+import argparse,csv,datetime,hashlib,json,os,random,re,statistics,subprocess
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parents[2]
@@ -24,9 +24,12 @@ def iperf_result(text,direction):
 def parse_probe(text,target):
     ping=parse_ping(text);objects=[iperf_result(text,'FORWARD'),iperf_result(text,'REVERSE')]
     rates=[o['end']['sum_received']['bits_per_second']/1e6 for o in objects];retrans=[o['end'].get('sum_sent',{}).get('retransmits',0) for o in objects]
-    result={**ping,'bandwidth_forward_mbps':rates[0],'bandwidth_reverse_mbps':rates[1],'bandwidth_measured_mbps':min(rates),'iperf_retransmits_forward':retrans[0],'iperf_retransmits_reverse':retrans[1]}
-    ratios=[v/target for v in rates]
-    if any(not GOODPUT_MIN_RATIO<=v<=GOODPUT_MAX_RATIO for v in ratios):raise RuntimeError(f'Goodput outside predeclared 80%-105% of configured TBF rate: rates={rates}, ratios={ratios}')
+    intervals=[[i['sum']['bits_per_second']/1e6 for i in o.get('intervals',[]) if not i['sum'].get('omitted',False)] for o in objects]
+    if any(len(values)<2 for values in intervals):raise RuntimeError('Expected at least two non-omitted iperf intervals per direction')
+    steady=[statistics.fmean(values[-2:]) for values in intervals]
+    result={**ping,'bandwidth_forward_mbps':rates[0],'bandwidth_reverse_mbps':rates[1],'bandwidth_short_flow_mbps':min(rates),'bandwidth_forward_steady_mbps':steady[0],'bandwidth_reverse_steady_mbps':steady[1],'bandwidth_measured_mbps':min(steady),'iperf_retransmits_forward':retrans[0],'iperf_retransmits_reverse':retrans[1]}
+    ratios=[v/target for v in steady]
+    if any(not GOODPUT_MIN_RATIO<=v<=GOODPUT_MAX_RATIO for v in ratios):raise RuntimeError(f'Steady-state goodput outside predeclared 80%-105% of configured TBF rate: rates={steady}, ratios={ratios}, whole_run_rates={rates}')
     if any(retrans):raise RuntimeError(f'Unexpected iperf retransmissions: {retrans}')
     return result
 def drops(text):return sum(int(x) for x in re.findall(r'dropped\s+(\d+)',text))

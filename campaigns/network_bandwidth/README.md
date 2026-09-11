@@ -27,13 +27,14 @@ has a token burst; do not interpret the analytical byte/rate value as the exact
 measured delay of a short TLS flight.
 
 Before each campaign, twenty pings and forward/reverse four-second iperf3 probes
-validate the new namespaces. TCP payload goodput in both directions must be
-80%–105% of the configured TBF rate. This accounts for protocol overhead and
-short-flow dynamics while still rejecting a materially incorrect limiter. The
-configured TBF rate defines the condition; measured goodput is recorded as
-validation evidence and a covariate. Any ping loss, iperf retransmission or
-qdisc drop stops the run and marks that campaign invalid. There is no automatic
-retry.
+validate the new namespaces. The mean TCP payload rate over the final two
+non-omitted one-second intervals in both directions must be 80%–105% of the
+configured TBF rate. This checks steady TBF capacity without treating TCP
+slow-start as a limiter failure. Whole-run goodput is recorded separately as a
+short-flow diagnostic. The configured TBF rate defines the condition; steady
+goodput is retained as validation evidence and a covariate. Any ping loss,
+iperf retransmission or qdisc drop stops the run and marks that campaign
+invalid. There is no automatic retry.
 
 Client and server qdisc counters are captured immediately after each iperf
 probe. Any drop on either endpoint invalidates the condition before TLS
@@ -49,6 +50,13 @@ with the two-millisecond policy delivered only 78.7%--79.7% of the configured
 5 Mbit/s rate. The first fifteen completed conditions from that attempt belong
 to the earlier source commit and must not be combined with a run created under
 this policy.
+
+The steady-interval gate was frozen after another excluded full-run attempt.
+At RTT 50 ms and 100 Mbit/s, one reverse probe progressed through approximately
+26, 68, 96 and 96 Mbit/s with zero loss, retransmissions and qdisc drops. Its
+71% whole-run average measured TCP window growth, while the final intervals
+showed that TBF reached the configured capacity. Results from that earlier
+source commit remain excluded.
 
 ## Step 1 — inspect the environment
 
