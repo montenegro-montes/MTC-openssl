@@ -9,7 +9,7 @@ COMPOSE=['docker','compose','-f',str(REPO/'docker/compose.network-bandwidth.yaml
 GOODPUT_MIN_RATIO=.80;GOODPUT_MAX_RATIO=1.05
 def load(path):return json.loads(path.read_text())
 def save(path,value):path.write_text(json.dumps(value,indent=2)+'\n')
-def burst(rate):return max(1600,int(rate*1_000_000/8/500))
+def burst(rate):return max(1600,int(rate*1_000_000/8/100))
 def parse_ping(text):
     values=sorted(float(x) for x in re.findall(r'time=([0-9.]+) ms',text))
     if len(values)!=20:raise RuntimeError('RTT probe loss/failure')

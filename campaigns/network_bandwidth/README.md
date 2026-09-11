@@ -15,14 +15,15 @@ each endpoint egress. No loss or jitter is configured. The queue latency bound
 is 1000 ms. Burst is selected before execution as:
 
 ```text
-max(1600 bytes, rate_bits_per_second / 8 / 500)
+max(1600 bytes, rate_bits_per_second / 8 / 100)
 ```
 
-This supplies two milliseconds of tokens at high rates and at least one packet
-at low rates. A pre-campaign diagnostic showed that one millisecond caused TBF
-drops at 100 Mbit/s under Docker/GSO, while two milliseconds produced zero drops
-and retransmissions. The value is recorded per campaign. TBF necessarily has a
-token burst; do not interpret the analytical byte/rate value as the exact
+This supplies ten milliseconds of tokens at rates above the minimum and at
+least one packet at low rates. It follows TBF's `rate/HZ` buffer rule using a
+conservative HZ value of 100. Earlier excluded diagnostics showed that smaller
+buckets caused drops at 100 Mbit/s and under-delivery at 5 Mbit/s even when the
+qdisc reported no drops. The value is recorded per campaign. TBF necessarily
+has a token burst; do not interpret the analytical byte/rate value as the exact
 measured delay of a short TLS flight.
 
 Before each campaign, twenty pings and forward/reverse four-second iperf3 probes
@@ -42,6 +43,12 @@ This acceptance interval was frozen before the definitive experiment after
 excluded smoke diagnostics showed that valid 5 Mbit/s TCP goodput could fall
 just below the former symmetric 15% boundary. Those failed smoke directories
 remain excluded and are never pooled with results produced under this protocol.
+
+The ten-millisecond burst policy was frozen after an excluded full-run attempt
+with the two-millisecond policy delivered only 78.7%--79.7% of the configured
+5 Mbit/s rate. The first fifteen completed conditions from that attempt belong
+to the earlier source commit and must not be combined with a run created under
+this policy.
 
 ## Step 1 — inspect the environment
 
