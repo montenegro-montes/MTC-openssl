@@ -46,7 +46,8 @@ static int id_encode(const char *s,unsigned char *out,size_t *n){
         if(*p<'0'||*p>'9'||(*p=='0'&&p[1]&&p[1]!='.'))return 0;
         v=strtoul(p,&end,10);if(end==p||(*end&&*end!='.')||v>0xffffffffUL)return 0;
         b[k++]=(unsigned char)(v&127);while((v>>=7))b[k++]=(unsigned char)((v&127)|128);
-        if(j+k>80)return 0;while(k)out[j++]=b[--k];
+        if(j+k>80)return 0;
+        while(k)out[j++]=b[--k];
         p=*end?end+1:end;if(*end&&! *p)return 0;
     }*n=j;return j>0;
 }
@@ -78,7 +79,8 @@ void mtc_free(MTCConfig *c){if(c){for(unsigned i=0;i<2;i++)EVP_PKEY_free(c->sign
 MTCConfig *mtc_load(const char *path,int landmark){
     double begin=tick(),validation=0;FILE *f=fopen(path,"rb");unsigned char *buf=NULL;long size;MTCConfig *c=NULL;
     Slice s,x,sigs;uint64_t v;unsigned char actual[32];int ok=0;
-    if(!f)return NULL;if(fseek(f,0,SEEK_END)||(size=ftell(f))<=0||size>MTC_MAX||fseek(f,0,SEEK_SET))goto end;
+    if(!f)return NULL;
+    if(fseek(f,0,SEEK_END)||(size=ftell(f))<=0||size>MTC_MAX||fseek(f,0,SEEK_SET))goto end;
     buf=OPENSSL_malloc(size);c=OPENSSL_zalloc(sizeof(*c));if(!buf||!c||fread(buf,1,size,f)!=(size_t)size)goto end;
     c->landmark=landmark;c->file_bytes=(size_t)size;s=(Slice){buf,(size_t)size};
     if(!take(&s,4,&x)||memcmp(x.p,"MCF1",4)||!vector(&s,1,&x)||!ascii(x,c->caid)||!number(&s,1,&v)||v!=2)goto end;
@@ -124,13 +126,15 @@ end:
 static int algorithm(const X509_ALGOR *a){const ASN1_OBJECT *o;int type;char text[80];X509_ALGOR_get0(&o,&type,NULL,a);return type==V_ASN1_UNDEF&&OBJ_obj2txt(text,sizeof(text),o,1)>0&&!strcmp(text,"1.3.6.1.4.1.44363.47.0");}
 static int issuer(X509 *x,const char *id){
     X509_NAME *name=X509_get_issuer_name(x);X509_NAME_ENTRY *e;char oid[80];ASN1_STRING *v;
-    if(X509_NAME_entry_count(name)!=1)return 0;e=X509_NAME_get_entry(name,0);v=X509_NAME_ENTRY_get_data(e);
+    if(X509_NAME_entry_count(name)!=1)return 0;
+    e=X509_NAME_get_entry(name,0);v=X509_NAME_ENTRY_get_data(e);
     return OBJ_obj2txt(oid,sizeof(oid),X509_NAME_ENTRY_get_object(e),1)>0&&!strcmp(oid,"1.3.6.1.4.1.44363.47.1")&&ASN1_STRING_type(v)==V_ASN1_UTF8STRING&&ASN1_STRING_length(v)==(int)strlen(id)&&!memcmp(ASN1_STRING_get0_data(v),id,strlen(id));
 }
 static int leaf_hash(X509 *x,Slice extensions,unsigned char out[32]){
     unsigned char *der=NULL,keyhash[32],header[3],octet[2]={4,32};int n=i2d_re_X509_tbs(x,&der),ok=0;unsigned count=0,size;
     Slice s;TLV outer,fields[12],spki,alg;EVP_MD_CTX *md=NULL;
-    if(n<=0)goto end;s=(Slice){der,(size_t)n};if(!tlv(&s,&outer)||s.n||outer.tag!=48)goto end;s=outer.body;
+    if(n<=0)goto end;
+    s=(Slice){der,(size_t)n};if(!tlv(&s,&outer)||s.n||outer.tag!=48)goto end;s=outer.body;
     while(s.n){if(count>=12||!tlv(&s,&fields[count++]))goto end;}
     if(count<7||fields[0].tag!=160||fields[1].tag!=2||fields[2].tag!=48||fields[3].tag!=48||fields[4].tag!=48||fields[5].tag!=48||fields[6].tag!=48)goto end;
     spki=fields[6];s=spki.body;if(!tlv(&s,&alg)||alg.tag!=48||!hash(spki.raw,keyhash))goto end;
