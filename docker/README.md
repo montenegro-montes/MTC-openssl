@@ -56,18 +56,27 @@ stop the `mt` project after the check.
 
 ```sh
 docker compose -f docker/compose.compact.yaml build
-docker compose -f docker/compose.compact.yaml run --rm setup
+test -f artifacts/compact/batch16/classic/manifest.json \
+  -a -f artifacts/compact/batch16/pq/manifest.json \
+  || docker compose -f docker/compose.compact.yaml run --rm setup
 ```
+
+The setup command is skipped when both immutable fixture manifests already
+exist. `prepare.py` intentionally refuses to overwrite that directory.
 
 ## Step 4 — build profiling and MTC
 
 ```sh
 docker compose -f docker/compose.profile.yaml build
 docker compose -f docker/compose.mtc.yaml build
-docker compose -f docker/compose.mtc.yaml run --rm setup
+test -f artifacts/mtc/batch16-v2/classic/manifest.json \
+  -a -f artifacts/mtc/batch16-v2/pq/manifest.json \
+  || docker compose -f docker/compose.mtc.yaml run --rm setup
 ```
 
-The MTC setup creates `artifacts/mtc/batch16-v2/`.
+The MTC setup creates `artifacts/mtc/batch16-v2/`. If both manifests are
+already present, reuse that immutable fixture set. If only part of the output
+exists, inspect it and choose a new directory instead of combining generations.
 
 ## Step 5 — build and test the study image
 

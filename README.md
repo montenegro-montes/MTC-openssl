@@ -222,14 +222,24 @@ must also report successful Merkle verification.
 
 ```sh
 docker compose -f docker/compose.compact.yaml build
-docker compose -f docker/compose.compact.yaml run --rm setup
+test -f artifacts/compact/batch16/classic/manifest.json \
+  -a -f artifacts/compact/batch16/pq/manifest.json \
+  || docker compose -f docker/compose.compact.yaml run --rm setup
 docker compose -f docker/compose.profile.yaml build
 docker compose -f docker/compose.mtc.yaml build
-docker compose -f docker/compose.mtc.yaml run --rm setup
+test -f artifacts/mtc/batch16-v2/classic/manifest.json \
+  -a -f artifacts/mtc/batch16-v2/pq/manifest.json \
+  || docker compose -f docker/compose.mtc.yaml run --rm setup
 test -f artifacts/compact/batch16/classic/manifest.json
 test -f artifacts/compact/batch16/pq/manifest.json
-test -d artifacts/mtc/batch16-v2
+test -f artifacts/mtc/batch16-v2/classic/manifest.json
+test -f artifacts/mtc/batch16-v2/pq/manifest.json
 ```
+
+Both setup programs create immutable fixture directories and refuse to overwrite
+an existing output. The conditional commands reuse a complete N=16 fixture set.
+If a directory exists without both manifests, inspect or move it aside and use a
+new output name; do not merge a partial set with newly generated files.
 
 ### Step 6 — build and validate the controlled measurement image
 
