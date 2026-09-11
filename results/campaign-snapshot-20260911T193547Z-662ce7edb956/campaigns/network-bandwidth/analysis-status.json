@@ -1,0 +1,9 @@
+{
+  "passed": true,
+  "campaigns": 75,
+  "measured_handshakes": 13500,
+  "warmups": 2250,
+  "bootstrap_unit": "campaign at fixed RTT and bandwidth",
+  "resamples": 10000,
+  "all_outliers_retained": 3577
+}

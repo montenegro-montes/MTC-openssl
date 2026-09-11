@@ -1,0 +1,32 @@
+{
+  "image_id": "sha256:4b04891fc50251a422c3357f35f355151ea50150d0e678dadde8c8f97b968b43",
+  "campaigns": [
+    {
+      "campaign_id": "measurement-preflight",
+      "seed": 42,
+      "started_utc": "2026-09-10T05:25:41.931417+00:00",
+      "state": "complete",
+      "server_container_id": "3b14212f1e30d34d96128538abc4ba0fda8c81c72a590f153e4c15062b6766fa",
+      "server_started_at": "2026-09-10T05:25:42.223193967Z",
+      "resources": {
+        "NanoCpus": 0,
+        "CpuPeriod": 0,
+        "CpuQuota": 0,
+        "CpuShares": 0,
+        "CpusetCpus": "",
+        "Memory": 0,
+        "MemorySwap": 0,
+        "MemoryReservation": 0,
+        "PidsLimit": null
+      },
+      "networks": {
+        "papern16_default": "3f1ce607741add58002945985693b281310a3ae5b375a2a7c5990579057048e6"
+      },
+      "measured_handshakes": 28,
+      "warmup_handshakes": 14,
+      "finished_utc": "2026-09-10T05:25:46.514070+00:00"
+    }
+  ],
+  "shared_docker_desktop_session": true,
+  "failed_campaign": null
+}

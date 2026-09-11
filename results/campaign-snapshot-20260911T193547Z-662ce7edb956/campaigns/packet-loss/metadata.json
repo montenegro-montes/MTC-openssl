@@ -1,0 +1,26 @@
+{
+  "experiment": "packet-loss-only",
+  "preparation_commit": "74ce286d8667ddaf02f9efc920aa3903fd79da4f",
+  "git_commit_before": "74ce286d8667ddaf02f9efc920aa3903fd79da4f",
+  "git_status_before": "",
+  "base_image_id": "sha256:4b04891fc50251a422c3357f35f355151ea50150d0e678dadde8c8f97b968b43",
+  "loss_conditions_percent": [
+    "0",
+    "0.1",
+    "0.5",
+    "1",
+    "2",
+    "5"
+  ],
+  "configured_rtt_ms": 50,
+  "handshake_timeout_seconds": 30,
+  "campaigns_per_condition": 5,
+  "warmup_rounds": 5,
+  "measured_rounds": 30,
+  "loss_scope": "independent percentage on each endpoint egress; not end-to-end probability",
+  "bandwidth_limiter": false,
+  "status": "complete",
+  "git_commit_after_experiment": "d6b98c7faf728e7627c6b7292a198548c38f9de4",
+  "network_image_id": "sha256:5bcd09bf4cfa821d4688b83178ca50a96542a27e6fe3529cadcab3fa53acfa77",
+  "authentication_or_protocol_source_changed": false
+}

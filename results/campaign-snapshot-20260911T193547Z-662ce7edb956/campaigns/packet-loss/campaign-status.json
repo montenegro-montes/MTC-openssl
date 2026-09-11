@@ -1,0 +1,1354 @@
+{
+  "experiment": "packet-loss-only",
+  "mode": "full",
+  "passed": true,
+  "image_id": "sha256:5bcd09bf4cfa821d4688b83178ca50a96542a27e6fe3529cadcab3fa53acfa77",
+  "failed_campaign": null,
+  "campaigns": [
+    {
+      "campaign_id": "loss-0-c1",
+      "loss_target_percent": "0",
+      "loss_code": 0,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "0",
+      "server_egress_loss_percent": "0",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 300001,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:31:47.633511+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 2000,
+      "loss_measured_percent": 0.0,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 51.1,
+      "measured_rtt_max_ms": 101.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 1,
+          "tcp_segments_sent": 3169,
+          "tcp_segments_received": 2557,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 0,
+          "tcp_segments_sent": 3467,
+          "tcp_segments_received": 3170,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:33:14.502343+00:00"
+    },
+    {
+      "campaign_id": "loss-0-c2",
+      "loss_target_percent": "0",
+      "loss_code": 0,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "0",
+      "server_egress_loss_percent": "0",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 300002,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:33:14.503975+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 2000,
+      "loss_measured_percent": 0.0,
+      "measured_rtt_min_ms": 44.6,
+      "measured_rtt_median_ms": 51.1,
+      "measured_rtt_max_ms": 103.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 0,
+          "tcp_segments_sent": 3173,
+          "tcp_segments_received": 2555,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 0,
+          "tcp_segments_sent": 3465,
+          "tcp_segments_received": 3173,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:34:40.773533+00:00"
+    },
+    {
+      "campaign_id": "loss-0-c3",
+      "loss_target_percent": "0",
+      "loss_code": 0,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "0",
+      "server_egress_loss_percent": "0",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 300003,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:34:40.774238+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 2000,
+      "loss_measured_percent": 0.0,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 51.1,
+      "measured_rtt_max_ms": 101.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 0,
+          "tcp_segments_sent": 3170,
+          "tcp_segments_received": 2555,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 0,
+          "tcp_segments_sent": 3465,
+          "tcp_segments_received": 3170,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:36:06.659597+00:00"
+    },
+    {
+      "campaign_id": "loss-0-c4",
+      "loss_target_percent": "0",
+      "loss_code": 0,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "0",
+      "server_egress_loss_percent": "0",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 300004,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:36:06.660039+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 2000,
+      "loss_measured_percent": 0.0,
+      "measured_rtt_min_ms": 44.2,
+      "measured_rtt_median_ms": 51.0,
+      "measured_rtt_max_ms": 101.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 0,
+          "tcp_segments_sent": 3173,
+          "tcp_segments_received": 2555,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 0,
+          "tcp_segments_sent": 3465,
+          "tcp_segments_received": 3173,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:37:32.725180+00:00"
+    },
+    {
+      "campaign_id": "loss-0-c5",
+      "loss_target_percent": "0",
+      "loss_code": 0,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "0",
+      "server_egress_loss_percent": "0",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 300005,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:37:32.725704+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 2000,
+      "loss_measured_percent": 0.0,
+      "measured_rtt_min_ms": 50.0,
+      "measured_rtt_median_ms": 51.1,
+      "measured_rtt_max_ms": 102.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 0,
+          "tcp_segments_sent": 3173,
+          "tcp_segments_received": 2555,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 0,
+          "tcp_segments_sent": 3465,
+          "tcp_segments_received": 3173,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:39:00.804477+00:00"
+    },
+    {
+      "campaign_id": "loss-0p1-c1",
+      "loss_target_percent": "0.1",
+      "loss_code": 1,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "0.1",
+      "server_egress_loss_percent": "0.1",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 300101,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:39:00.805037+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1999,
+      "loss_measured_percent": 0.05,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.5,
+      "measured_rtt_max_ms": 101.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 2,
+          "tcp_segments_sent": 3177,
+          "tcp_segments_received": 2556,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 7,
+          "tcp_segments_sent": 3466,
+          "tcp_segments_received": 3175,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:40:33.535104+00:00"
+    },
+    {
+      "campaign_id": "loss-0p1-c2",
+      "loss_target_percent": "0.1",
+      "loss_code": 1,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "0.1",
+      "server_egress_loss_percent": "0.1",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 300102,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:40:33.536087+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1992,
+      "loss_measured_percent": 0.4,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.3,
+      "measured_rtt_max_ms": 102.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 2,
+          "tcp_segments_sent": 3177,
+          "tcp_segments_received": 2558,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 4,
+          "tcp_segments_sent": 3466,
+          "tcp_segments_received": 3173,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:42:04.277289+00:00"
+    },
+    {
+      "campaign_id": "loss-0p1-c3",
+      "loss_target_percent": "0.1",
+      "loss_code": 1,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "0.1",
+      "server_egress_loss_percent": "0.1",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 300103,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:42:04.278242+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1995,
+      "loss_measured_percent": 0.25,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.3,
+      "measured_rtt_max_ms": 106.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 1,
+          "tcp_segments_sent": 3180,
+          "tcp_segments_received": 2555,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 1,
+          "tcp_segments_sent": 3466,
+          "tcp_segments_received": 3175,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:43:34.618522+00:00"
+    },
+    {
+      "campaign_id": "loss-0p1-c4",
+      "loss_target_percent": "0.1",
+      "loss_code": 1,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "0.1",
+      "server_egress_loss_percent": "0.1",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 300104,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:43:34.619206+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1994,
+      "loss_measured_percent": 0.3,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.4,
+      "measured_rtt_max_ms": 102.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 3,
+          "tcp_segments_sent": 3172,
+          "tcp_segments_received": 2560,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 4,
+          "tcp_segments_sent": 3468,
+          "tcp_segments_received": 3172,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:45:05.095548+00:00"
+    },
+    {
+      "campaign_id": "loss-0p1-c5",
+      "loss_target_percent": "0.1",
+      "loss_code": 1,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "0.1",
+      "server_egress_loss_percent": "0.1",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 300105,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:45:05.096353+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1996,
+      "loss_measured_percent": 0.2,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.4,
+      "measured_rtt_max_ms": 102.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 0,
+          "tcp_segments_sent": 3172,
+          "tcp_segments_received": 2555,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 0,
+          "tcp_segments_sent": 3465,
+          "tcp_segments_received": 3172,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:46:35.102788+00:00"
+    },
+    {
+      "campaign_id": "loss-0p5-c1",
+      "loss_target_percent": "0.5",
+      "loss_code": 5,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "0.5",
+      "server_egress_loss_percent": "0.5",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 300501,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:46:35.104614+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1984,
+      "loss_measured_percent": 0.8,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.1,
+      "measured_rtt_max_ms": 108.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 10,
+          "tcp_segments_sent": 3193,
+          "tcp_segments_received": 2570,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 23,
+          "tcp_segments_sent": 3477,
+          "tcp_segments_received": 3191,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:48:14.030266+00:00"
+    },
+    {
+      "campaign_id": "loss-0p5-c2",
+      "loss_target_percent": "0.5",
+      "loss_code": 5,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "0.5",
+      "server_egress_loss_percent": "0.5",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 300502,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:48:14.031382+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1976,
+      "loss_measured_percent": 1.2,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.3,
+      "measured_rtt_max_ms": 105.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 4,
+          "tcp_segments_sent": 3181,
+          "tcp_segments_received": 2556,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 11,
+          "tcp_segments_sent": 3466,
+          "tcp_segments_received": 3166,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:49:48.083500+00:00"
+    },
+    {
+      "campaign_id": "loss-0p5-c3",
+      "loss_target_percent": "0.5",
+      "loss_code": 5,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "0.5",
+      "server_egress_loss_percent": "0.5",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 300503,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:49:48.084151+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1975,
+      "loss_measured_percent": 1.25,
+      "measured_rtt_min_ms": 50.0,
+      "measured_rtt_median_ms": 52.3,
+      "measured_rtt_max_ms": 103.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 9,
+          "tcp_segments_sent": 3185,
+          "tcp_segments_received": 2564,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 15,
+          "tcp_segments_sent": 3471,
+          "tcp_segments_received": 3177,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:51:25.286810+00:00"
+    },
+    {
+      "campaign_id": "loss-0p5-c4",
+      "loss_target_percent": "0.5",
+      "loss_code": 5,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "0.5",
+      "server_egress_loss_percent": "0.5",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 300504,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:51:25.287482+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1984,
+      "loss_measured_percent": 0.8,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.3,
+      "measured_rtt_max_ms": 103.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 10,
+          "tcp_segments_sent": 3180,
+          "tcp_segments_received": 2566,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 13,
+          "tcp_segments_sent": 3473,
+          "tcp_segments_received": 3173,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:53:01.542810+00:00"
+    },
+    {
+      "campaign_id": "loss-0p5-c5",
+      "loss_target_percent": "0.5",
+      "loss_code": 5,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "0.5",
+      "server_egress_loss_percent": "0.5",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 300505,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:53:01.544021+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1984,
+      "loss_measured_percent": 0.8,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.4,
+      "measured_rtt_max_ms": 104.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 9,
+          "tcp_segments_sent": 3181,
+          "tcp_segments_received": 2563,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 15,
+          "tcp_segments_sent": 3473,
+          "tcp_segments_received": 3178,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:54:37.138715+00:00"
+    },
+    {
+      "campaign_id": "loss-1-c1",
+      "loss_target_percent": "1",
+      "loss_code": 10,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "1",
+      "server_egress_loss_percent": "1",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 301001,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:54:37.139764+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1959,
+      "loss_measured_percent": 2.05,
+      "measured_rtt_min_ms": 50.0,
+      "measured_rtt_median_ms": 52.3,
+      "measured_rtt_max_ms": 103.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 19,
+          "tcp_segments_sent": 3192,
+          "tcp_segments_received": 2580,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 42,
+          "tcp_segments_sent": 3481,
+          "tcp_segments_received": 3183,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:56:16.596550+00:00"
+    },
+    {
+      "campaign_id": "loss-1-c2",
+      "loss_target_percent": "1",
+      "loss_code": 10,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "1",
+      "server_egress_loss_percent": "1",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 301002,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:56:16.597469+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1950,
+      "loss_measured_percent": 2.5,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.2,
+      "measured_rtt_max_ms": 102.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 18,
+          "tcp_segments_sent": 3191,
+          "tcp_segments_received": 2576,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 36,
+          "tcp_segments_sent": 3478,
+          "tcp_segments_received": 3174,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:57:57.363705+00:00"
+    },
+    {
+      "campaign_id": "loss-1-c3",
+      "loss_target_percent": "1",
+      "loss_code": 10,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "1",
+      "server_egress_loss_percent": "1",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 301003,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:57:57.364793+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1966,
+      "loss_measured_percent": 1.7,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.3,
+      "measured_rtt_max_ms": 101.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 13,
+          "tcp_segments_sent": 3196,
+          "tcp_segments_received": 2575,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 35,
+          "tcp_segments_sent": 3473,
+          "tcp_segments_received": 3179,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:59:32.777247+00:00"
+    },
+    {
+      "campaign_id": "loss-1-c4",
+      "loss_target_percent": "1",
+      "loss_code": 10,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "1",
+      "server_egress_loss_percent": "1",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 301004,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:59:32.778624+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1954,
+      "loss_measured_percent": 2.3,
+      "measured_rtt_min_ms": 50.0,
+      "measured_rtt_median_ms": 52.2,
+      "measured_rtt_max_ms": 105.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 18,
+          "tcp_segments_sent": 3193,
+          "tcp_segments_received": 2580,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 36,
+          "tcp_segments_sent": 3483,
+          "tcp_segments_received": 3184,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T20:01:10.057317+00:00"
+    },
+    {
+      "campaign_id": "loss-1-c5",
+      "loss_target_percent": "1",
+      "loss_code": 10,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "1",
+      "server_egress_loss_percent": "1",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 301005,
+      "state": "complete",
+      "started_utc": "2026-09-10T20:01:10.058819+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1956,
+      "loss_measured_percent": 2.2,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.3,
+      "measured_rtt_max_ms": 102.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 11,
+          "tcp_segments_sent": 3192,
+          "tcp_segments_received": 2569,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 35,
+          "tcp_segments_sent": 3471,
+          "tcp_segments_received": 3179,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T20:02:48.298147+00:00"
+    },
+    {
+      "campaign_id": "loss-2-c1",
+      "loss_target_percent": "2",
+      "loss_code": 20,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "2",
+      "server_egress_loss_percent": "2",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 302001,
+      "state": "complete",
+      "started_utc": "2026-09-10T20:02:48.299289+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1919,
+      "loss_measured_percent": 4.05,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.3,
+      "measured_rtt_max_ms": 102.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 35,
+          "tcp_segments_sent": 3207,
+          "tcp_segments_received": 2592,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 67,
+          "tcp_segments_sent": 3493,
+          "tcp_segments_received": 3173,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T20:04:35.518621+00:00"
+    },
+    {
+      "campaign_id": "loss-2-c2",
+      "loss_target_percent": "2",
+      "loss_code": 20,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "2",
+      "server_egress_loss_percent": "2",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 302002,
+      "state": "complete",
+      "started_utc": "2026-09-10T20:04:35.519794+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1922,
+      "loss_measured_percent": 3.9,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.4,
+      "measured_rtt_max_ms": 103.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 41,
+          "tcp_segments_sent": 3189,
+          "tcp_segments_received": 2581,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 39,
+          "tcp_segments_sent": 3492,
+          "tcp_segments_received": 3153,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T20:06:27.193884+00:00"
+    },
+    {
+      "campaign_id": "loss-2-c3",
+      "loss_target_percent": "2",
+      "loss_code": 20,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "2",
+      "server_egress_loss_percent": "2",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 302003,
+      "state": "complete",
+      "started_utc": "2026-09-10T20:06:27.195045+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1918,
+      "loss_measured_percent": 4.1,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.3,
+      "measured_rtt_max_ms": 106.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 34,
+          "tcp_segments_sent": 3209,
+          "tcp_segments_received": 2594,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 70,
+          "tcp_segments_sent": 3491,
+          "tcp_segments_received": 3171,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T20:08:14.154663+00:00"
+    },
+    {
+      "campaign_id": "loss-2-c4",
+      "loss_target_percent": "2",
+      "loss_code": 20,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "2",
+      "server_egress_loss_percent": "2",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 302004,
+      "state": "complete",
+      "started_utc": "2026-09-10T20:08:14.155862+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1932,
+      "loss_measured_percent": 3.4,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.2,
+      "measured_rtt_max_ms": 102.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 26,
+          "tcp_segments_sent": 3216,
+          "tcp_segments_received": 2589,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 72,
+          "tcp_segments_sent": 3487,
+          "tcp_segments_received": 3184,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T20:09:59.280147+00:00"
+    },
+    {
+      "campaign_id": "loss-2-c5",
+      "loss_target_percent": "2",
+      "loss_code": 20,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "2",
+      "server_egress_loss_percent": "2",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 302005,
+      "state": "complete",
+      "started_utc": "2026-09-10T20:09:59.281630+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1925,
+      "loss_measured_percent": 3.75,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.3,
+      "measured_rtt_max_ms": 103.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 40,
+          "tcp_segments_sent": 3197,
+          "tcp_segments_received": 2603,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 74,
+          "tcp_segments_sent": 3502,
+          "tcp_segments_received": 3167,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T20:11:50.649616+00:00"
+    },
+    {
+      "campaign_id": "loss-5-c1",
+      "loss_target_percent": "5",
+      "loss_code": 50,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "5",
+      "server_egress_loss_percent": "5",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 305001,
+      "state": "complete",
+      "started_utc": "2026-09-10T20:11:50.651170+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1803,
+      "loss_measured_percent": 9.85,
+      "measured_rtt_min_ms": 50.0,
+      "measured_rtt_median_ms": 52.2,
+      "measured_rtt_max_ms": 107.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 81,
+          "tcp_segments_sent": 3246,
+          "tcp_segments_received": 2626,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 168,
+          "tcp_segments_sent": 3524,
+          "tcp_segments_received": 3141,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T20:14:02.713383+00:00"
+    },
+    {
+      "campaign_id": "loss-5-c2",
+      "loss_target_percent": "5",
+      "loss_code": 50,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "5",
+      "server_egress_loss_percent": "5",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 305002,
+      "state": "complete",
+      "started_utc": "2026-09-10T20:14:02.714871+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1818,
+      "loss_measured_percent": 9.1,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.4,
+      "measured_rtt_max_ms": 104.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 88,
+          "tcp_segments_sent": 3246,
+          "tcp_segments_received": 2633,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 156,
+          "tcp_segments_sent": 3532,
+          "tcp_segments_received": 3179,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T20:16:22.599444+00:00"
+    },
+    {
+      "campaign_id": "loss-5-c3",
+      "loss_target_percent": "5",
+      "loss_code": 50,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "5",
+      "server_egress_loss_percent": "5",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 305003,
+      "state": "complete",
+      "started_utc": "2026-09-10T20:16:22.601072+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1798,
+      "loss_measured_percent": 10.1,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 52.2,
+      "measured_rtt_max_ms": 92.2,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 83,
+          "tcp_segments_sent": 3244,
+          "tcp_segments_received": 2638,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 158,
+          "tcp_segments_sent": 3534,
+          "tcp_segments_received": 3155,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T20:18:31.817996+00:00"
+    },
+    {
+      "campaign_id": "loss-5-c4",
+      "loss_target_percent": "5",
+      "loss_code": 50,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "5",
+      "server_egress_loss_percent": "5",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 305004,
+      "state": "complete",
+      "started_utc": "2026-09-10T20:18:31.819521+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1803,
+      "loss_measured_percent": 9.85,
+      "measured_rtt_min_ms": 50.1,
+      "measured_rtt_median_ms": 51.1,
+      "measured_rtt_max_ms": 1142.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 89,
+          "tcp_segments_sent": 3244,
+          "tcp_segments_received": 2644,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 182,
+          "tcp_segments_sent": 3533,
+          "tcp_segments_received": 3155,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T20:20:50.512237+00:00"
+    },
+    {
+      "campaign_id": "loss-5-c5",
+      "loss_target_percent": "5",
+      "loss_code": 50,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "5",
+      "server_egress_loss_percent": "5",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 305005,
+      "state": "complete",
+      "started_utc": "2026-09-10T20:20:50.513551+00:00",
+      "measured_attempts": 180,
+      "warmup_attempts": 30,
+      "successful_attempts": 210,
+      "failed_attempts": 0,
+      "probe_packets_sent": 2000,
+      "probe_packets_received": 1827,
+      "loss_measured_percent": 8.65,
+      "measured_rtt_min_ms": 50.0,
+      "measured_rtt_median_ms": 51.2,
+      "measured_rtt_max_ms": 107.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 80,
+          "tcp_segments_sent": 3255,
+          "tcp_segments_received": 2654,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 189,
+          "tcp_segments_sent": 3524,
+          "tcp_segments_received": 3158,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T20:23:05.104443+00:00"
+    }
+  ],
+  "expected": {
+    "mode": "full",
+    "output_directory": "<REPO>/artifacts/results/network-loss-20260910-212643",
+    "loss_conditions_percent": [
+      "0",
+      "0.1",
+      "0.5",
+      "1",
+      "2",
+      "5"
+    ],
+    "campaigns": 30,
+    "measured_attempts": 5400,
+    "warmup_attempts": 900,
+    "seeds": [
+      {
+        "loss_target_percent": "0",
+        "campaign": 1,
+        "seed": 300001
+      },
+      {
+        "loss_target_percent": "0",
+        "campaign": 2,
+        "seed": 300002
+      },
+      {
+        "loss_target_percent": "0",
+        "campaign": 3,
+        "seed": 300003
+      },
+      {
+        "loss_target_percent": "0",
+        "campaign": 4,
+        "seed": 300004
+      },
+      {
+        "loss_target_percent": "0",
+        "campaign": 5,
+        "seed": 300005
+      },
+      {
+        "loss_target_percent": "0.1",
+        "campaign": 1,
+        "seed": 300101
+      },
+      {
+        "loss_target_percent": "0.1",
+        "campaign": 2,
+        "seed": 300102
+      },
+      {
+        "loss_target_percent": "0.1",
+        "campaign": 3,
+        "seed": 300103
+      },
+      {
+        "loss_target_percent": "0.1",
+        "campaign": 4,
+        "seed": 300104
+      },
+      {
+        "loss_target_percent": "0.1",
+        "campaign": 5,
+        "seed": 300105
+      },
+      {
+        "loss_target_percent": "0.5",
+        "campaign": 1,
+        "seed": 300501
+      },
+      {
+        "loss_target_percent": "0.5",
+        "campaign": 2,
+        "seed": 300502
+      },
+      {
+        "loss_target_percent": "0.5",
+        "campaign": 3,
+        "seed": 300503
+      },
+      {
+        "loss_target_percent": "0.5",
+        "campaign": 4,
+        "seed": 300504
+      },
+      {
+        "loss_target_percent": "0.5",
+        "campaign": 5,
+        "seed": 300505
+      },
+      {
+        "loss_target_percent": "1",
+        "campaign": 1,
+        "seed": 301001
+      },
+      {
+        "loss_target_percent": "1",
+        "campaign": 2,
+        "seed": 301002
+      },
+      {
+        "loss_target_percent": "1",
+        "campaign": 3,
+        "seed": 301003
+      },
+      {
+        "loss_target_percent": "1",
+        "campaign": 4,
+        "seed": 301004
+      },
+      {
+        "loss_target_percent": "1",
+        "campaign": 5,
+        "seed": 301005
+      },
+      {
+        "loss_target_percent": "2",
+        "campaign": 1,
+        "seed": 302001
+      },
+      {
+        "loss_target_percent": "2",
+        "campaign": 2,
+        "seed": 302002
+      },
+      {
+        "loss_target_percent": "2",
+        "campaign": 3,
+        "seed": 302003
+      },
+      {
+        "loss_target_percent": "2",
+        "campaign": 4,
+        "seed": 302004
+      },
+      {
+        "loss_target_percent": "2",
+        "campaign": 5,
+        "seed": 302005
+      },
+      {
+        "loss_target_percent": "5",
+        "campaign": 1,
+        "seed": 305001
+      },
+      {
+        "loss_target_percent": "5",
+        "campaign": 2,
+        "seed": 305002
+      },
+      {
+        "loss_target_percent": "5",
+        "campaign": 3,
+        "seed": 305003
+      },
+      {
+        "loss_target_percent": "5",
+        "campaign": 4,
+        "seed": 305004
+      },
+      {
+        "loss_target_percent": "5",
+        "campaign": 5,
+        "seed": 305005
+      }
+    ],
+    "commands": {
+      "compose": "docker compose -f <REPO>/docker/compose.network-loss.yaml",
+      "server_qdisc": "tc qdisc replace dev eth0 root netem delay 25ms loss LOSS%",
+      "client": "docker compose run --rm client measure ..."
+    },
+    "network": "independent symmetric per-egress loss and 25ms delay; no bandwidth limiter",
+    "timeout_seconds": 30,
+    "probe_packets": 2000
+  }
+}

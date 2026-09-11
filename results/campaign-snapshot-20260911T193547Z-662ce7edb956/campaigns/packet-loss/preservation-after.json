@@ -1,0 +1,10 @@
+{
+  "passed": true,
+  "checked_files": {
+    "baseline-source-sha256.json": 3443,
+    "fixture-sha256.json": 446
+  },
+  "authentication_or_protocol_source_changed": false,
+  "containers_stopped": true,
+  "completed_utc": "2026-09-10T20:25:00.121894+00:00"
+}

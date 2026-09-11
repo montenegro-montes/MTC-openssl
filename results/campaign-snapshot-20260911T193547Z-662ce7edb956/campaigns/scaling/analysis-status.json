@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "primary_measured": 10800,
+  "primary_warmups": 1800,
+  "detail_measured": 3600,
+  "detail_warmups": 600,
+  "bootstrap_unit": "campaign at fixed N",
+  "campaigns_per_n_per_mode": 5,
+  "resamples": 10000,
+  "bootstrap_seed": 20260910,
+  "outlier_rows_retained": 5183,
+  "hypothesis_tests": 0,
+  "timing_regressions": 0
+}

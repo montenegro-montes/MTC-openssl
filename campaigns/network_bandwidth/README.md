@@ -177,7 +177,7 @@ Generate plots using the same temporary plotting environment created for the
 scaling experiment, or install its pinned requirements in a new venv:
 
 ```sh
-/tmp/mt-scaling-plots-venv/bin/python campaigns/network_bandwidth/plots.py "$BANDWIDTH_ROOT"
+python3 campaigns/network_bandwidth/plots.py "$BANDWIDTH_ROOT"
 python3 campaigns/network_bandwidth/control.py audit "$BANDWIDTH_ROOT"
 ```
 

@@ -10,7 +10,9 @@ This directory contains the executable, reproducible campaign packages. Run ever
 | `network_bandwidth/` | Bandwidth-limited campaign |
 | `packet_loss_campaign/` | Packet-loss-only campaign |
 | `combined_network_campaign/` | Representative combined network profiles |
-| `pcma/` | Progressive cross-credential Compact proof/cache simulation (prepared, not executed) |
+| `pcma/` | PCMA Stage A proof/cache simulation (completed) |
+| `pcma_stage_a2/` | PCMA Stage A.2 compact cache-state advertisement evaluation (completed and audited) |
+| `pcma_stage_b/` | PCMA Stage B end-to-end TLS integration; Stage B.1 completed and audited |
 
 Raw data, generated fixtures and immutable source snapshots stay under `artifacts/`; moving them would invalidate recorded paths and hashes. Dockerfiles and Compose definitions live under `docker/`, while their build contexts continue to use the repository root. Each package README contains its commands and validation gates.
 
@@ -26,7 +28,10 @@ Run experiments independently and finish each one before starting the next:
 6. `combined_network_campaign/`: representative combined profiles.
 
 PCMA is a separate proof/cache study rather than a continuation of the network
-campaign sequence. See [`pcma/README.md`](pcma/README.md).
+campaign sequence. Stage A and A.2 select and validate the advertisement model;
+Stage B validates it in end-to-end TLS. See [`pcma/README.md`](pcma/README.md),
+[`pcma_stage_a2/README.md`](pcma_stage_a2/README.md), and
+[`pcma_stage_b/README.md`](pcma_stage_b/README.md).
 
 Completed historical campaigns do not need to be rerun merely to start a later
 package, but their required fixtures, image IDs, reports and hashes must remain

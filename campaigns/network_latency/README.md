@@ -99,7 +99,7 @@ Do not alter qdiscs or restart Docker while the experiment is running.
 
 ```sh
 python3 campaigns/network_latency/analyze.py "$LATENCY_ROOT"
-/tmp/mt-scaling-plots-venv/bin/python campaigns/network_latency/plots.py "$LATENCY_ROOT"
+python3 campaigns/network_latency/plots.py "$LATENCY_ROOT"
 python3 campaigns/network_latency/control.py audit "$LATENCY_ROOT"
 ```
 

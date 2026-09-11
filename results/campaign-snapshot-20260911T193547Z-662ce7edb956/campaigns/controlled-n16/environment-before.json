@@ -1,0 +1,61 @@
+{
+  "docker": {
+    "ID": "2fe37653-a482-42d3-86e6-92ede1cabff8",
+    "ServerVersion": "29.7.2",
+    "Architecture": "aarch64",
+    "OSType": "linux",
+    "OperatingSystem": "Docker Desktop",
+    "KernelVersion": "7.0.12-linuxkit",
+    "NCPU": 8,
+    "MemTotal": 8215117824,
+    "CgroupVersion": "2",
+    "Driver": "overlay2",
+    "DockerRootDir": "/var/lib/docker"
+  },
+  "docker_desktop_session": "shared across all ten campaigns; daemon not restarted",
+  "host_architecture": "arm64",
+  "host_cpus": "8",
+  "host_memory_bytes": "17179869184",
+  "baseline_images": [
+    {
+      "Id": "sha256:07c30b0ab3f4e05c813b7232a065cecfe42f640b908629757211c365be54b3bc",
+      "RepoTags": [
+        "mt-tls-lab:local"
+      ],
+      "RepoDigests": [],
+      "Created": "2026-09-09T13:28:09.156705843Z",
+      "Architecture": "arm64",
+      "Os": "linux"
+    },
+    {
+      "Id": "sha256:85de39317a613255f558b8cf47069667ab8e9b1e30d8a1b6e6fc5b07e8cbd23e",
+      "RepoTags": [
+        "mt-tls-compact:local"
+      ],
+      "RepoDigests": [],
+      "Created": "2026-09-09T16:23:51.771733458Z",
+      "Architecture": "arm64",
+      "Os": "linux"
+    },
+    {
+      "Id": "sha256:c02badb91c814ac13ac0069a4b867d3160e549e31c9dc2bbc511aebfe3ef1e4c",
+      "RepoTags": [
+        "mt-tls-profile:local"
+      ],
+      "RepoDigests": [],
+      "Created": "2026-09-09T22:04:45.212325125Z",
+      "Architecture": "arm64",
+      "Os": "linux"
+    },
+    {
+      "Id": "sha256:3b0206b037528bc3e84e59d3bafeae34b9b5f4bf9f1e6100d0d3db5211acbd61",
+      "RepoTags": [
+        "mt-tls-mtc:local"
+      ],
+      "RepoDigests": [],
+      "Created": "2026-09-10T05:01:22.629887507Z",
+      "Architecture": "arm64",
+      "Os": "linux"
+    }
+  ]
+}

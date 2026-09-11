@@ -1,0 +1,8 @@
+{
+  "passed": true,
+  "exit_code": 0,
+  "image_id": "sha256:a0ccc219e11049ad473573803e226c0d8421e528a05d6df7a49e606e834cdb60",
+  "base_image_id": "sha256:64090584d53d2552d4dde7d2dc1ecf67906ac93ecfb45c41f23089ba7323a718",
+  "base_image_ref": "mt-tls-measurement:local",
+  "base_layers_verified": true
+}

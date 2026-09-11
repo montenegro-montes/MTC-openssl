@@ -1,0 +1,21 @@
+{
+  "docker/compose.network-loss.yaml": "e4eaab187f7fb3c0d95bb4302d96246070ef59c72459dcb6041e4f2cca818105",
+  "campaigns/packet_loss_campaign/measure.py": "d0d48aa62696dc26a231de9b927b7be59d74732a35b81d13c535755a989997f9",
+  "campaigns/packet_loss_campaign/run.py": "72cad1b4841f440a0b80081bc0a12d9d98b74e27f46ce996316d3e1292a8a851",
+  "campaigns/packet_loss_campaign/config.py": "4ed24961922a883e7e46d878ab7aecab4c1f1d8eb8ab1c66dc79e641ebb80c6b",
+  "campaigns/packet_loss_campaign/test_measure.py": "1bd1b57a61c36494bb0fbcdde2f85fef0ede2db75655594d36c4891c6ad54f08",
+  "campaigns/packet_loss_campaign/control.py": "7617ff317054c31c0b2112eb6638ffa483df88e50a25ad3d7156d59d8822d067",
+  "campaigns/packet_loss_campaign/test_analysis.py": "0ed886a31a1db2f015425025a61efc9350c71b5579f90fa918ab2fdce1512476",
+  "campaigns/packet_loss_campaign/README.md": "1392bc67a841818e2c4debb3239fd254a2757e9e74298d4ec5318f7bd4bc6db5",
+  "campaigns/packet_loss_campaign/validate.py": "35a108ce85c6be547db2c04dc52d7408a85e351c0aafe6bfe4faeea44aa356d2",
+  "campaigns/packet_loss_campaign/plots.py": "47da19bbcfb9e77ddd8fba8b5479c2cb32bf996c197f53541ecc7fbe5f3e9025",
+  "campaigns/packet_loss_campaign/test_network.py": "6c5501b4f3f70d6adf5cc4295bfa02a17a1d1fda10b8061d7de89d55f6f2ee40",
+  "campaigns/packet_loss_campaign/requirements-plots.txt": "050e5bdb1aa3fabfeb70dc575c435823433f46f6928a6c1f330859119e495634",
+  "campaigns/packet_loss_campaign/test_preservation_status.py": "01e4262126357dad9b3bff85153cbf24ee21d005478f30d04096d377aa6fa143",
+  "campaigns/packet_loss_campaign/record_commit.py": "cfa38a201b5d6f05896cb6674141aa7ea438f093210d39ecc5482cac20a09f24",
+  "campaigns/packet_loss_campaign/network.py": "a903e7691fe5121b8276b01cf48f6e409f8c1210639002d6f1fd51cddd895b58",
+  "campaigns/packet_loss_campaign/client.sh": "b6b2b26ba82a0e0518b1460640864799e5931df25e074764863551d915916619",
+  "campaigns/packet_loss_campaign/cleanup.sh": "ac114844d3b9e24ba54db973e8d0db407d9993f9811b0dc193f9c377c39d60f9",
+  "campaigns/packet_loss_campaign/analyze.py": "6fd8ff51bbf006ae28c308f3c4b9ad83ded83a2f9a07c216a3ab475acb7f757f",
+  "campaigns/packet_loss_campaign/schemas/metadata-schema.json": "27a7c3a94aacf22a2422ed2c90b232247f5a5dd33f46c482bff86b962bf324d5"
+}

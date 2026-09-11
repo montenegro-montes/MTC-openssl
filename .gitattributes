@@ -1,0 +1,3 @@
+# Preserve archived result bytes exactly; their SHA-256 values cover original
+# CSV line endings and other generated publication output.
+results/campaign-snapshot-*/campaigns/** -text

@@ -1,0 +1,9 @@
+{
+  "passed": true,
+  "input_rows": 156000,
+  "groups": 156,
+  "outputs": [
+    "summary.csv",
+    "pareto.csv"
+  ]
+}

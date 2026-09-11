@@ -1,0 +1,27 @@
+{
+  "experiment": "latency-only",
+  "git_commit_before": "b008481c6e98ac8e54bbdd97002673fe671b8463",
+  "git_status_before": "?? Dockerfile.network\n?? Dockerfile.network.dockerignore\n?? compose.network-bandwidth.yaml\n?? compose.network-latency.yaml.old\n?? network_bandwidth/\n?? network_latency/analyze.py\n?? network_latency/client.sh\n?? network_latency/control.py\n?? network_latency/plots.py\n",
+  "base_image_id": "sha256:4b04891fc50251a422c3357f35f355151ea50150d0e678dadde8c8f97b968b43",
+  "rtt_targets_ms": [
+    0,
+    10,
+    20,
+    50,
+    100,
+    200
+  ],
+  "campaigns_per_condition": 5,
+  "warmup_rounds": 5,
+  "measured_rounds": 30,
+  "status": "complete",
+  "network_image_id": "sha256:5bcd09bf4cfa821d4688b83178ca50a96542a27e6fe3529cadcab3fa53acfa77",
+  "protocol_source_changed": false,
+  "git_commit_after_experiment": "b18ed919977d9456a6d9156b223d6bfc36a8a770",
+  "post_audit_documentation_change": {
+    "path": "network_latency/README.md",
+    "reason": "Reproduction commands changed to use one timestamped FINAL variable; no executable, protocol, measurement, analysis, or result data changed.",
+    "audited_snapshot_sha256": "1d54b543a2558869320e9c975333bcad254cf3c885045021bb6ea06c849478f9",
+    "committed_sha256": "b4416abc8f1263189a4fe136954830d6e56318ac45da78bf3588b1d47afb647f"
+  }
+}

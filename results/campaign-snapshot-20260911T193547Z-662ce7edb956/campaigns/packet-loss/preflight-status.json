@@ -1,0 +1,73 @@
+{
+  "experiment": "packet-loss-only",
+  "mode": "preflight",
+  "passed": true,
+  "image_id": "sha256:5bcd09bf4cfa821d4688b83178ca50a96542a27e6fe3529cadcab3fa53acfa77",
+  "failed_campaign": null,
+  "campaigns": [
+    {
+      "campaign_id": "loss-0-c1",
+      "loss_target_percent": "0",
+      "loss_code": 0,
+      "configured_rtt_ms": 50,
+      "client_egress_loss_percent": "0",
+      "server_egress_loss_percent": "0",
+      "loss_scope": "independent per-direction netem probability; not end-to-end probability",
+      "seed": 300001,
+      "state": "complete",
+      "started_utc": "2026-09-10T19:28:27.522606+00:00",
+      "measured_attempts": 12,
+      "warmup_attempts": 6,
+      "successful_attempts": 18,
+      "failed_attempts": 0,
+      "probe_packets_sent": 200,
+      "probe_packets_received": 200,
+      "loss_measured_percent": 0.0,
+      "measured_rtt_min_ms": 49.9,
+      "measured_rtt_median_ms": 50.8,
+      "measured_rtt_max_ms": 103.0,
+      "tcp_counters": {
+        "client": {
+          "tcp_retransmitted_segments": 0,
+          "tcp_segments_sent": 270,
+          "tcp_segments_received": 219,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        },
+        "server": {
+          "tcp_retransmitted_segments": 0,
+          "tcp_segments_sent": 297,
+          "tcp_segments_received": 270,
+          "retransmitted_bytes": null,
+          "scope": "campaign container namespace; not attributable to individual TLS connections"
+        }
+      },
+      "finished_utc": "2026-09-10T19:28:38.877280+00:00"
+    }
+  ],
+  "expected": {
+    "mode": "preflight",
+    "output_directory": "<REPO>/artifacts/results/network-loss-20260910-212643",
+    "loss_conditions_percent": [
+      "0"
+    ],
+    "campaigns": 1,
+    "measured_attempts": 12,
+    "warmup_attempts": 6,
+    "seeds": [
+      {
+        "loss_target_percent": "0",
+        "campaign": 1,
+        "seed": 300001
+      }
+    ],
+    "commands": {
+      "compose": "docker compose -f <REPO>/docker/compose.network-loss.yaml",
+      "server_qdisc": "tc qdisc replace dev eth0 root netem delay 25ms loss LOSS%",
+      "client": "docker compose run --rm client measure ..."
+    },
+    "network": "independent symmetric per-egress loss and 25ms delay; no bandwidth limiter",
+    "timeout_seconds": 30,
+    "probe_packets": 200
+  }
+}

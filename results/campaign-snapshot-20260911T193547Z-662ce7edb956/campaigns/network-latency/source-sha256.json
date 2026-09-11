@@ -1,0 +1,11 @@
+{
+  "Dockerfile.network": "92616b83f023819a9ae3b56d4e6d59ccbb1e80725c31cd9f039aa5623a2bbec4",
+  "compose.network-latency.yaml": "9818632f82525664b482ff151391c1c43eaa26abce31a2ff11e28050537e72cb",
+  "Dockerfile.network.dockerignore": "2d6b0e79f34e164f300d8e26ec4216bd8bc966a83f508aa3ca489aacd6de1c2f",
+  "network_latency/run.py": "a4b2caaf360ac50e8cd1c495789bc15677247b383a0090fda12a4b5d7d93728d",
+  "network_latency/control.py": "61630e1d36ade7d38ab9b54adbbf1fdcbf42c4ed2574abf79240f624dbfb054b",
+  "network_latency/README.md": "1d54b543a2558869320e9c975333bcad254cf3c885045021bb6ea06c849478f9",
+  "network_latency/plots.py": "dc50ede0a5dfbb5bb4c2ede6bd19dc8df6da011c99f81e994f3c11372ad8dfcd",
+  "network_latency/client.sh": "dbffdb627b7202800e19c96ada647d0dfebd880eeb33388649c1444403670141",
+  "network_latency/analyze.py": "4b7b6db344e6aab64763e3aad586b389162becf29066d3f98bb18dbb8a5a3318"
+}

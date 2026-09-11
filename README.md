@@ -45,17 +45,64 @@ are architectural; their trust and transparency models are not equivalent.
 | Initial TLS/X.509/PQ/Merkle laboratory | Implemented and validated | Functional OpenSSL `s_client` and `s_server` integration |
 | Controlled N=16 comparison | Completed | Size, wall time, CPU, and trust costs |
 | Merkle population scaling | Completed | Tree sizes 1, 4, 16, 64, 256, and 1024 |
-| Progressive Compact Merkle Authentication (PCMA) | Prepared, not executed | Stage-A proof/cache simulator using actual Compact fixtures; no TLS integration yet |
+| PCMA Stage A | Completed | Proof/cache simulation over actual Compact fixtures |
+| PCMA Stage A.2 | Completed and audited | Compact cache-state encodings; 720,000 observations and GO decision |
+| PCMA Stage B.1 | Completed and audited | End-to-end TLS validation; 12,600 handshakes across 90 campaigns |
 | Controlled latency | Completed | Additional RTT from 0 to 200 ms |
-| Bandwidth constrained | Infrastructure prepared | Independent manual campaign |
+| Bandwidth constrained | Completed | 75 controlled campaigns across 3 RTT and 5 bandwidth levels |
 | Packet loss | Completed | Six loss levels at 50 ms RTT; latency, reliability, and TCP retransmission activity |
 | Combined network conditions | Completed | Baseline, WAN, constrained, and adverse profiles; 3,600 validated measurements |
 
-Generated data live under `artifacts/results/` and are excluded from Git by
-default. Selected validated summaries, metadata, and figures may be committed
-without raw logs, private keys, or large local sample directories.
+Generated data live temporarily under `artifacts/results/` and are excluded
+from Git. After a complete battery, selected validated summaries and metadata
+are archived in a checksummed [publication snapshot](results/campaign-snapshot-20260911T193547Z-662ce7edb956/); raw logs, private keys and large local sample directories are omitted.
 Campaigns record the commit, Git state, image, environment, hashes, effective
 configuration, and validation evidence.
+
+### Completed bandwidth-constrained campaign
+
+The bandwidth experiment completed 75 independent campaigns: five repetitions
+at every combination of 10, 50, and 100 ms RTT with symmetric per-egress rates
+of 100, 20, 10, 5, and 1 Mbit/s. It contains **13,500 measured handshakes and
+2,250 warmups** across the six post-quantum authentication scenarios. Every
+accepted campaign passed the RTT, bidirectional goodput, retransmission, and
+qdisc-drop gates.
+
+Compact warm became faster than PQ X.509 at the observed 5 and 1 Mbit/s points
+for every RTT; the neighboring observed sign change lies between 5 and
+10 Mbit/s. At 1 Mbit/s its paired median advantage over PQ X.509 was 27.887 ms
+at 10 ms RTT, 28.620 ms at 50 ms RTT, and 27.349 ms at 100 ms RTT. These are
+observed points rather than an interpolated break-even threshold.
+
+- Execution and reproduction: [bandwidth campaign](campaigns/network_bandwidth/README.md)
+- Measurement-source commit: `796282369f003e86621f61bd20466583fd64e75d`
+- Archived results: [network-bandwidth](results/campaign-snapshot-20260911T193547Z-662ce7edb956/campaigns/network-bandwidth/)
+
+### Completed PCMA campaigns
+
+PCMA Stage A.2 evaluated five exact cache-state advertisement encodings in 720
+configurations and **720,000 deterministic observations**. Its structural and
+paired audit passes, and all five predeclared decision criteria pass, producing
+a `GO` decision for TLS integration. The result includes the advertisement in
+net authentication bytes; it does not count proof reduction alone as a saving.
+
+PCMA Stage B.1 then completed **12,600 end-to-end TLS handshakes in 90
+campaigns**. Its audit and analytical-model comparison both pass; 6,300 PCMA
+measurements agree with the Stage A.2 byte model. All 18 tested
+size/workload/budget cells transferred fewer bytes than Compact warm. Five
+cells also had a bootstrap latency interval entirely below zero; the other 13
+intervals included zero and therefore do not establish timing equivalence.
+
+The A.2 manifest records base commit `7962823`, and the B.1 manifest records
+base commit `ff88aa4`. Their campaign implementations were still untracked at
+execution time. The manifests retain per-source hashes, so the outputs remain
+auditable, but those base hashes must not be described as commits containing
+the PCMA implementations.
+
+- Stage A and A.2: [PCMA simulation](campaigns/pcma/README.md) and [compact advertisement evaluation](campaigns/pcma_stage_a2/README.md)
+- Stage B.1: [end-to-end PCMA TLS campaign](campaigns/pcma_stage_b/README.md)
+- Audited A.2 results: [PCMA Stage A.2](results/campaign-snapshot-20260911T193547Z-662ce7edb956/campaigns/pcma-stage-a2/)
+- Audited B.1 results: [PCMA Stage B.1](results/campaign-snapshot-20260911T193547Z-662ce7edb956/campaigns/pcma-stage-b1/)
 
 ### Completed packet-loss campaign
 
@@ -102,7 +149,7 @@ universal performance or loss-resilience properties.
 - Execution and reproduction: [combined-network campaign](campaigns/combined_network_campaign/README.md)
 - Measurement-source commit: `4a5cf75ea674095f52c7ee759c8b43c0080a1096`
 - Results commit: `6fa2a626f417db5fc7f31f26f2cff9096a6176fb`
-- Published summaries and figures: [`artifacts/results/combined-network-20260911-001540/`](artifacts/results/combined-network-20260911-001540/)
+- Published summaries: [combined network](results/campaign-snapshot-20260911T193547Z-662ce7edb956/campaigns/combined-network/)
 
 ## Repository layout
 

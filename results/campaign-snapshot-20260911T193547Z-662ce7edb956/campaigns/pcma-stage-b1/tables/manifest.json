@@ -1,0 +1,9 @@
+{
+  "hashes": {
+    "paired.csv": "3b7171c9830f524fa8b4c9dea71a798debd7b202cc9ab83d5880fc3bc2dba7ca",
+    "paired.tex": "762c9d0d443d0e256c725f9295cae0f2244b0aaf1826e96164f6eea0fd981a34",
+    "primary.csv": "b965d601c9d4a08c4ed11b19d77f59911b2ef5eb946765ace1fb04cd916976da",
+    "primary.tex": "594e612d66e1af77dfaf57150b5d0517da8b931a1e2f9277396848e197fe9b63"
+  },
+  "source_sha256": "f613c7982514db728faf1ed87c8f92febe607abd6c00b7abe41114cc7f79e5e6"
+}

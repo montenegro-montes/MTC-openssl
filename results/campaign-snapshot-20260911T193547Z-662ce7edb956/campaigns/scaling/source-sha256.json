@@ -1,0 +1,13 @@
+{
+  "compose.scaling.yaml": "0a2ba3ea7e274158183cdccdf0102bfeb53f92a7d27c8a7b0d3e403763ba0665",
+  "scaling_campaign/structural.py": "6a3b13c8d690aca0b8a9744a66c3988c7cb7a886c49af63c83abdb6f80f171ed",
+  "scaling_campaign/run.py": "d1d745d53bf049d6f2d095ef636afc965a019a6af7ae212420a8cccb04f597f7",
+  "scaling_campaign/generate.py": "f1a7b5d5f1c37f3bb30dccf8e7f65d97ee2c14a475581cdb8801b0af5b670b36",
+  "scaling_campaign/control.py": "587624809a76589adb32f416307110eda4abcf397e118b98b3683ac7c7def310",
+  "scaling_campaign/test_analysis.py": "467ac2ddfb0f7f8f39fcb8d635746f74d12b67358dbedfe1d20a103b21976d1d",
+  "scaling_campaign/README.md": "ab91c3884f522ef98857fd6864bf913147a1f3be9f8ff08120d6b862f18f1481",
+  "scaling_campaign/plots.py": "d3664a81339f9ad744e521dfaa6c04f1d4ca613ab5c9019b9c38e327f4de00b5",
+  "scaling_campaign/requirements-plots.txt": "050e5bdb1aa3fabfeb70dc575c435823433f46f6928a6c1f330859119e495634",
+  "scaling_campaign/detail_measure.py": "1fcf45377c32bffa29891391ab42973e3c6ad2d1893608619af6df0539cf600e",
+  "scaling_campaign/analyze.py": "81e7efaab6d94a2e14d44d074e406dd3e836d71147855e6815e10be69dfa970e"
+}

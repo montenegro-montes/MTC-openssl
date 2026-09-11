@@ -1,0 +1,11 @@
+{
+  "output_sha256": {
+    "all_configurations.csv": "eefd47a5605a041da0b387fd77811a3c0a9a2f96189725c89ecfb89ca6f48e5e",
+    "all_configurations.tex": "778ce75d9e0dd0749e9e385f7585e22a6d1908c3b25442c87e1af48a070b4929",
+    "best_scheme_and_budget.csv": "78c92090db972c97f5df61823630bb19b26ae0e2234381dacc37f830c593c624",
+    "best_scheme_and_budget.tex": "473c7c2292f29d5d8a7d56c1869b401c17c537ff19b7857d2bc7475c6a5b759c",
+    "stage_a_reduction.csv": "61333cedbde547f870e03884b12d0d44790f3b69ef5c8fbd247c82283074faf1",
+    "stage_a_reduction.tex": "589d81d89dcf28a415b31eabb594addb55abcac3e65189b646bcf17b8a518671"
+  },
+  "source_sha256": "c6854e7f294dcc64367e67bca6771629fcf1444e21592ae4033898cc349cc9de"
+}

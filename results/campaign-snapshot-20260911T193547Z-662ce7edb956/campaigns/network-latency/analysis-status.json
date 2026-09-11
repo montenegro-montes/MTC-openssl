@@ -1,0 +1,9 @@
+{
+  "passed": true,
+  "campaigns": 30,
+  "measured_handshakes": 5400,
+  "warmups": 900,
+  "bootstrap_unit": "campaign",
+  "resamples": 10000,
+  "all_outliers_retained": 1029
+}

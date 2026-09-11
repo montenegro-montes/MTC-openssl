@@ -1,0 +1,121 @@
+crypto_family,metric,from_n,to_n,additional_levels,additional_bytes,bytes_per_added_level
+classic,compact_inclusion_hash_bytes,1,4,2.0,64.0,32.0
+classic,compact_inclusion_hash_bytes,4,16,2.0,64.0,32.0
+classic,compact_inclusion_hash_bytes,16,64,2.0,64.0,32.0
+classic,compact_inclusion_hash_bytes,64,256,2.0,64.0,32.0
+classic,compact_inclusion_hash_bytes,256,1024,2.0,64.0,32.0
+classic,compact_proof_bytes,1,4,2.0,64.0,32.0
+classic,compact_proof_bytes,4,16,2.0,64.0,32.0
+classic,compact_proof_bytes,16,64,2.0,64.0,32.0
+classic,compact_proof_bytes,64,256,2.0,64.0,32.0
+classic,compact_proof_bytes,256,1024,2.0,64.0,32.0
+classic,compact_bundle_bytes,1,4,2.0,64.0,32.0
+classic,compact_bundle_bytes,4,16,2.0,64.0,32.0
+classic,compact_bundle_bytes,16,64,2.0,64.0,32.0
+classic,compact_bundle_bytes,64,256,2.0,64.0,32.0
+classic,compact_bundle_bytes,256,1024,2.0,64.0,32.0
+classic,compact_warm_credential_with_spki_bytes,1,4,2.0,64.0,32.0
+classic,compact_warm_credential_with_spki_bytes,4,16,2.0,64.0,32.0
+classic,compact_warm_credential_with_spki_bytes,16,64,2.0,64.0,32.0
+classic,compact_warm_credential_with_spki_bytes,64,256,2.0,64.0,32.0
+classic,compact_warm_credential_with_spki_bytes,256,1024,2.0,64.0,32.0
+classic,mtc_landmark_inclusion_bytes,1,4,2.0,32.0,16.0
+classic,mtc_landmark_inclusion_bytes,4,16,2.0,64.0,32.0
+classic,mtc_landmark_inclusion_bytes,16,64,2.0,64.0,32.0
+classic,mtc_landmark_inclusion_bytes,64,256,2.0,64.0,32.0
+classic,mtc_landmark_inclusion_bytes,256,1024,2.0,64.0,32.0
+classic,mtc_landmark_proof_bytes,1,4,2.0,32.0,16.0
+classic,mtc_landmark_proof_bytes,4,16,2.0,64.0,32.0
+classic,mtc_landmark_proof_bytes,16,64,2.0,64.0,32.0
+classic,mtc_landmark_proof_bytes,64,256,2.0,64.0,32.0
+classic,mtc_landmark_proof_bytes,256,1024,2.0,64.0,32.0
+classic,mtc_landmark_certificate_der_bytes,1,4,2.0,32.0,16.0
+classic,mtc_landmark_certificate_der_bytes,4,16,2.0,64.0,32.0
+classic,mtc_landmark_certificate_der_bytes,16,64,2.0,65.0,32.5
+classic,mtc_landmark_certificate_der_bytes,64,256,2.0,64.0,32.0
+classic,mtc_landmark_certificate_der_bytes,256,1024,2.0,65.0,32.5
+classic,mtc_standalone_certificate_der_bytes,1,4,2.0,30.0,15.0
+classic,mtc_standalone_certificate_der_bytes,4,16,2.0,68.0,34.0
+classic,mtc_standalone_certificate_der_bytes,16,64,2.0,63.0,31.5
+classic,mtc_standalone_certificate_der_bytes,64,256,2.0,65.0,32.5
+classic,mtc_standalone_certificate_der_bytes,256,1024,2.0,62.0,31.0
+classic,classic-compact-warm TLS median,1,4,2.0,64.0,32.0
+classic,classic-compact-warm TLS median,4,16,2.0,64.0,32.0
+classic,classic-compact-warm TLS median,16,64,2.0,64.0,32.0
+classic,classic-compact-warm TLS median,64,256,2.0,64.0,32.0
+classic,classic-compact-warm TLS median,256,1024,2.0,64.0,32.0
+classic,classic-compact-cold TLS median,1,4,2.0,65.0,32.5
+classic,classic-compact-cold TLS median,4,16,2.0,64.0,32.0
+classic,classic-compact-cold TLS median,16,64,2.0,63.0,31.5
+classic,classic-compact-cold TLS median,64,256,2.0,64.0,32.0
+classic,classic-compact-cold TLS median,256,1024,2.0,65.0,32.5
+classic,classic-mtc-experimental-standalone TLS median,1,4,2.0,30.0,15.0
+classic,classic-mtc-experimental-standalone TLS median,4,16,2.0,68.0,34.0
+classic,classic-mtc-experimental-standalone TLS median,16,64,2.0,63.0,31.5
+classic,classic-mtc-experimental-standalone TLS median,64,256,2.0,65.0,32.5
+classic,classic-mtc-experimental-standalone TLS median,256,1024,2.0,62.0,31.0
+classic,classic-mtc-experimental-landmark TLS median,1,4,2.0,32.0,16.0
+classic,classic-mtc-experimental-landmark TLS median,4,16,2.0,64.0,32.0
+classic,classic-mtc-experimental-landmark TLS median,16,64,2.0,65.0,32.5
+classic,classic-mtc-experimental-landmark TLS median,64,256,2.0,64.0,32.0
+classic,classic-mtc-experimental-landmark TLS median,256,1024,2.0,65.0,32.5
+pq,compact_inclusion_hash_bytes,1,4,2.0,64.0,32.0
+pq,compact_inclusion_hash_bytes,4,16,2.0,64.0,32.0
+pq,compact_inclusion_hash_bytes,16,64,2.0,64.0,32.0
+pq,compact_inclusion_hash_bytes,64,256,2.0,64.0,32.0
+pq,compact_inclusion_hash_bytes,256,1024,2.0,64.0,32.0
+pq,compact_proof_bytes,1,4,2.0,64.0,32.0
+pq,compact_proof_bytes,4,16,2.0,64.0,32.0
+pq,compact_proof_bytes,16,64,2.0,64.0,32.0
+pq,compact_proof_bytes,64,256,2.0,64.0,32.0
+pq,compact_proof_bytes,256,1024,2.0,64.0,32.0
+pq,compact_bundle_bytes,1,4,2.0,64.0,32.0
+pq,compact_bundle_bytes,4,16,2.0,64.0,32.0
+pq,compact_bundle_bytes,16,64,2.0,64.0,32.0
+pq,compact_bundle_bytes,64,256,2.0,64.0,32.0
+pq,compact_bundle_bytes,256,1024,2.0,64.0,32.0
+pq,compact_warm_credential_with_spki_bytes,1,4,2.0,64.0,32.0
+pq,compact_warm_credential_with_spki_bytes,4,16,2.0,64.0,32.0
+pq,compact_warm_credential_with_spki_bytes,16,64,2.0,64.0,32.0
+pq,compact_warm_credential_with_spki_bytes,64,256,2.0,64.0,32.0
+pq,compact_warm_credential_with_spki_bytes,256,1024,2.0,64.0,32.0
+pq,mtc_landmark_inclusion_bytes,1,4,2.0,32.0,16.0
+pq,mtc_landmark_inclusion_bytes,4,16,2.0,64.0,32.0
+pq,mtc_landmark_inclusion_bytes,16,64,2.0,64.0,32.0
+pq,mtc_landmark_inclusion_bytes,64,256,2.0,64.0,32.0
+pq,mtc_landmark_inclusion_bytes,256,1024,2.0,64.0,32.0
+pq,mtc_landmark_proof_bytes,1,4,2.0,32.0,16.0
+pq,mtc_landmark_proof_bytes,4,16,2.0,64.0,32.0
+pq,mtc_landmark_proof_bytes,16,64,2.0,64.0,32.0
+pq,mtc_landmark_proof_bytes,64,256,2.0,64.0,32.0
+pq,mtc_landmark_proof_bytes,256,1024,2.0,64.0,32.0
+pq,mtc_landmark_certificate_der_bytes,1,4,2.0,32.0,16.0
+pq,mtc_landmark_certificate_der_bytes,4,16,2.0,64.0,32.0
+pq,mtc_landmark_certificate_der_bytes,16,64,2.0,65.0,32.5
+pq,mtc_landmark_certificate_der_bytes,64,256,2.0,64.0,32.0
+pq,mtc_landmark_certificate_der_bytes,256,1024,2.0,65.0,32.5
+pq,mtc_standalone_certificate_der_bytes,1,4,2.0,32.0,16.0
+pq,mtc_standalone_certificate_der_bytes,4,16,2.0,64.0,32.0
+pq,mtc_standalone_certificate_der_bytes,16,64,2.0,64.0,32.0
+pq,mtc_standalone_certificate_der_bytes,64,256,2.0,64.0,32.0
+pq,mtc_standalone_certificate_der_bytes,256,1024,2.0,64.0,32.0
+pq,pq-compact-warm TLS median,1,4,2.0,64.0,32.0
+pq,pq-compact-warm TLS median,4,16,2.0,64.0,32.0
+pq,pq-compact-warm TLS median,16,64,2.0,64.0,32.0
+pq,pq-compact-warm TLS median,64,256,2.0,64.0,32.0
+pq,pq-compact-warm TLS median,256,1024,2.0,64.0,32.0
+pq,pq-compact-cold TLS median,1,4,2.0,64.0,32.0
+pq,pq-compact-cold TLS median,4,16,2.0,64.0,32.0
+pq,pq-compact-cold TLS median,16,64,2.0,64.0,32.0
+pq,pq-compact-cold TLS median,64,256,2.0,64.0,32.0
+pq,pq-compact-cold TLS median,256,1024,2.0,64.0,32.0
+pq,pq-mtc-experimental-standalone TLS median,1,4,2.0,32.0,16.0
+pq,pq-mtc-experimental-standalone TLS median,4,16,2.0,64.0,32.0
+pq,pq-mtc-experimental-standalone TLS median,16,64,2.0,64.0,32.0
+pq,pq-mtc-experimental-standalone TLS median,64,256,2.0,64.0,32.0
+pq,pq-mtc-experimental-standalone TLS median,256,1024,2.0,64.0,32.0
+pq,pq-mtc-experimental-landmark TLS median,1,4,2.0,32.0,16.0
+pq,pq-mtc-experimental-landmark TLS median,4,16,2.0,64.0,32.0
+pq,pq-mtc-experimental-landmark TLS median,16,64,2.0,65.0,32.5
+pq,pq-mtc-experimental-landmark TLS median,64,256,2.0,64.0,32.0
+pq,pq-mtc-experimental-landmark TLS median,256,1024,2.0,65.0,32.5
