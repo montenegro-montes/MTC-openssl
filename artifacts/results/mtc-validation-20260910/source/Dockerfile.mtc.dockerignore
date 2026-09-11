@@ -1,7 +1,0 @@
-**
-!Dockerfile.mtc
-!mtc/
-!mtc/*.py
-!mtc/*.c
-!mtc/*.h
-!mtc/*.sh

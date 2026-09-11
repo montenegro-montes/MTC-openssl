@@ -317,6 +317,7 @@ bootstrap inference uses independent campaigns and retains outliers.
 - [TLS-MT protocol](docs/tls-mt.md)
 - [Compact Merkle protocol](docs/compact-protocol.md)
 - [PCMA Stage-A laboratory](campaigns/pcma/README.md)
+- [Experiment artifact publication policy](docs/artifact-publication-policy.md)
 - [MTC methodology](docs/mtc-methodology.md)
 - [MTC results](docs/mtc-results.md)
 - [MTC comparison](docs/mtc-comparison.md)
