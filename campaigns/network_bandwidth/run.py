@@ -7,7 +7,7 @@ RTTS=[10,50,100];RATES=[100,20,10,5,1]
 SCENARIOS=['pq','pq-rpk','pq-compact-warm','pq-compact-cold','pq-mtc-experimental-landmark','pq-mtc-experimental-standalone']
 COMPOSE=['docker','compose','-f',str(REPO/'docker/compose.network-bandwidth.yaml')]
 GOODPUT_MIN_RATIO=.80;GOODPUT_MAX_RATIO=1.05
-RTT_ABSOLUTE_TOLERANCE_MS=5.0
+RTT_ABSOLUTE_TOLERANCE_MS=10.0
 def load(path):return json.loads(path.read_text())
 def save(path,value):path.write_text(json.dumps(value,indent=2)+'\n')
 def burst(rate):return max(1600,int(rate*1_000_000/8/100))

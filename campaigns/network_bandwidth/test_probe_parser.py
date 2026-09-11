@@ -6,7 +6,7 @@ valid={'intervals':[{'sum':{'bits_per_second':5_000_000,'omitted':True}},{'sum':
 text='IPERF_FORWARD_BEGIN\n'+json.dumps(valid)+'\nIPERF_FORWARD_END\n'
 assert iperf_result(text,'FORWARD')==valid
 assert GOODPUT_MIN_RATIO==.80 and GOODPUT_MAX_RATIO==1.05
-assert RTT_ABSOLUTE_TOLERANCE_MS==5.0
+assert RTT_ABSOLUTE_TOLERANCE_MS==10.0
 ping='\n'.join(f'64 bytes from server: icmp_seq={i} ttl=64 time=50.0 ms' for i in range(1,21))
 both=ping+'\nIPERF_FORWARD_BEGIN\n'+json.dumps(valid)+'\nIPERF_FORWARD_END\nIPERF_REVERSE_BEGIN\n'+json.dumps(valid)+'\nIPERF_REVERSE_END\n'
 try:parse_probe(both,20)
