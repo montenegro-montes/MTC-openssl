@@ -89,7 +89,7 @@ MTCConfig *mtc_load(const char *path,int landmark){
         const unsigned char *p;
         if(!vector(&s,1,&x)||!ascii(x,c->signers[i].id)||!id_encode(c->signers[i].id,c->signers[i].binary,&c->signers[i].idlen)||!vector(&s,2,&x))goto end;
         p=x.p;c->signers[i].key=d2i_PUBKEY(NULL,&p,(long)x.n);
-        if(!c->signers[i].key||p!=x.p+x.n||(!EVP_PKEY_is_a(c->signers[i].key,"EC")&&!EVP_PKEY_is_a(c->signers[i].key,"ML-DSA-65")))goto end;
+        if(!c->signers[i].key||p!=x.p+x.n||(!EVP_PKEY_is_a(c->signers[i].key,"EC")&&!EVP_PKEY_is_a(c->signers[i].key,"mldsa65")&&!EVP_PKEY_is_a(c->signers[i].key,"ML-DSA-65")))goto end;
     }
     if(strcmp(c->caid,c->signers[0].id)||!strcmp(c->signers[0].id,c->signers[1].id))goto end;
     if(!number(&s,2,&c->log)||c->log!=1||!number(&s,8,&c->min)||!number(&s,8,&c->max)||c->min!=(1ULL<<48)||c->max<c->min||c->max-c->min>=1024)goto end;

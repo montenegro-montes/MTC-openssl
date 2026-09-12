@@ -29,19 +29,19 @@ PROFILES = {
         "level": 1,
         "family": "ML-DSA",
         "algorithm": "mldsa44",
-        "standard_name": "ML-DSA-44",
+        "standard_name": "mldsa44",
     },
     "mldsa65": {
         "level": 3,
         "family": "ML-DSA",
         "algorithm": "mldsa65",
-        "standard_name": "ML-DSA-65",
+        "standard_name": "mldsa65",
     },
     "mldsa87": {
         "level": 5,
         "family": "ML-DSA",
         "algorithm": "mldsa87",
-        "standard_name": "ML-DSA-87",
+        "standard_name": "mldsa87",
     },
 
     "slhdsa128s": {

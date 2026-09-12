@@ -60,7 +60,7 @@ def prepare(output, scenario, leaves, cert_base):
     for index in range(1, leaves):
         name = f'member-{index}.lab'; names.append(name)
         key = issued / f'{index}.key'; cert = issued / f'{index}.pem'; csr = issued / f'{index}.csr'
-        key_args = ['-algorithm', 'EC', '-pkeyopt', 'ec_paramgen_curve:P-256'] if scenario == 'classic' else ['-algorithm', 'ML-DSA-65']
+        key_args = ['-algorithm', 'EC', '-pkeyopt', 'ec_paramgen_curve:P-256'] if scenario == 'classic' else ['-algorithm', 'mldsa65']
         command('genpkey', *key_args, '-out', key)
         command('req', '-new', '-key', key, '-subj', '/CN=' + name, '-out', csr)
         ext = issued / f'{index}.cnf'

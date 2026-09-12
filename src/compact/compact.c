@@ -51,7 +51,8 @@ static const char *signature_digest(EVP_PKEY *key)
 }
 static int supported_key(EVP_PKEY *key)
 {
-    return key && (EVP_PKEY_is_a(key, "ML-DSA-65")
+    return key && (EVP_PKEY_is_a(key, "mldsa65")
+                  ||  EVP_PKEY_is_a(key, "ML-DSA-65"))
                   || (EVP_PKEY_is_a(key, "EC") && EVP_PKEY_get_bits(key) == 256));
 }
 static uint64_t asn1_epoch(const ASN1_TIME *value)

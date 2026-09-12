@@ -19,7 +19,7 @@ Usage:
 
 Without arguments, generate the preserved laboratory profiles:
   classic  EC with ec_paramgen_curve:P-256
-  pq       ML-DSA-65
+  pq       mldsa65
 
 Custom profile options:
   --profile NAME       Output name below certs/ and merkle/ (required).
@@ -113,7 +113,7 @@ mkdir -p "$cert_root"
 
 if (($# == 0)); then
   generate_profile classic EC 30 '' ec_paramgen_curve:P-256 --signature-options
-  generate_profile pq ML-DSA-65 30 '' --signature-options
+  generate_profile pq mldsa65 30 '' --signature-options
   exit
 fi
 

@@ -5,7 +5,7 @@ from core import *
 OPENSSL='/opt/openssl/bin/openssl'
 def command(*args,data=None):return subprocess.run([OPENSSL,*map(str,args)],input=data,capture_output=True,check=True).stdout
 def keygen(path,family):
-    command('genpkey','-algorithm','EC' if family=='classic' else 'ML-DSA-65',*(['-pkeyopt','ec_paramgen_curve:P-256'] if family=='classic' else []),'-out',path)
+    command('genpkey','-algorithm','EC' if family=='classic' else 'mldsa65',*(['-pkeyopt','ec_paramgen_curve:P-256'] if family=='classic' else []),'-out',path)
 def sign(path,data,family):
     tmp=path.parent/'sign-input.tmp';tmp.write_bytes(data)
     try:return command('pkeyutl','-sign','-rawin','-inkey',path,'-in',tmp,*(['-digest','sha256'] if family=='classic' else []))
