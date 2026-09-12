@@ -7,9 +7,18 @@ ARG LIBOQS_VERSION=0.16.0
 ARG OQS_PROVIDER_VERSION=main
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake ninja-build git ca-certificates perl python3 pkg-config && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/src
+COPY docker/original_campaigns/patch_max_cert_list.py /opt/patch_max_cert_list.py
 RUN git clone --depth 1 --branch openssl-${OPENSSL_VERSION} https://github.com/openssl/openssl.git && \
-    cd openssl && ./Configure --prefix=/opt/openssl --libdir=lib shared && \
-    make -j2 && make install_sw && git rev-parse HEAD > /opt/openssl/SOURCE_COMMIT
+    python3 /opt/patch_max_cert_list.py /opt/src/openssl && \
+    cd openssl && \
+    ./Configure --prefix=/opt/openssl --libdir=lib shared && \
+    make -j2 && \
+    make install_sw && \
+    git rev-parse HEAD > /opt/openssl/SOURCE_COMMIT && \
+    cp EXPERIMENT_MAX_CERT_LIST_BYTES /opt/openssl/EXPERIMENT_MAX_CERT_LIST_BYTES
+#RUN git clone --depth 1 --branch openssl-${OPENSSL_VERSION} https://github.com/openssl/openssl.git && \
+#    cd openssl && ./Configure --prefix=/opt/openssl --libdir=lib shared && \
+#    make -j2 && make install_sw && git rev-parse HEAD > /opt/openssl/SOURCE_COMMIT
 ENV PATH="/opt/openssl/bin:${PATH}"
 ENV LD_LIBRARY_PATH=/opt/openssl/lib:/opt/oqs/lib
 RUN git clone --depth 1 --branch ${LIBOQS_VERSION} https://github.com/open-quantum-safe/liboqs.git && \
