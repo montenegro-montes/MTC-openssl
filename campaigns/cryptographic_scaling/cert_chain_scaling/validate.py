@@ -27,7 +27,7 @@ def main():
    if not item.get("signature_algorithms"):failures.append(f"{d}/{name}: missing signature algorithm evidence")
    else:observed.append(item["signature_algorithms"][-1].lower().replace("-","").replace("_",""))
   if len(set(observed))>1:failures.append(f"{d}: mixed certificate signature algorithms: {observed}")
-  cmd=["docker","run","--rm","-v",f"{d}:/fixture:ro","--entrypoint","/opt/openssl/bin/openssl",a.image,"verify","-CAfile","/fixture/root.pem","-verify_hostname","server"]
+  cmd=["docker","run","--rm","-v",f"{d.resolve()}:/fixture:ro","--entrypoint","/opt/openssl/bin/openssl",a.image,"verify","-CAfile","/fixture/root.pem","-verify_hostname","server"]
   if depth>2:cmd += ["-untrusted","/fixture/intermediates.pem"]
   cmd += ["/fixture/server.pem"];r=subprocess.run(cmd,capture_output=True,text=True)
   if r.returncode:failures.append(f"{d}: chain verification failed: {r.stderr.strip()}")
