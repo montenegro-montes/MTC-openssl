@@ -21,7 +21,7 @@ def main():
    (out/"logs"/f'{"warmup" if is_warm else "sample"}-{round_id:04d}.log').write_text(log)
    found=re.findall(r"^PROFILE_METRICS (\{.*\})$",r.stderr,re.M)
    if r.returncode or len(found)!=1 or "Verify return code: 0 (ok)" not in log:raise RuntimeError("TLS authentication failed")
-   if "New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384" not in log or "Peer Temp Key: X25519" not in log:raise RuntimeError("controlled TLS negotiation mismatch")
+   if "New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384" not in log or "Shared groups: x25519" not in log:raise RuntimeError("controlled TLS negotiation mismatch")
    client=json.loads(found[0]);key=client["client_random"];paths=list(metrics.glob(key+".json"))
    if len(paths)!=1:raise RuntimeError("missing server metrics")
    server=json.loads(paths[0].read_text());(out/"server-metrics"/(key+".json")).write_text(paths[0].read_text())

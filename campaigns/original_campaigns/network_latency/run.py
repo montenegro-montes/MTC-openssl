@@ -44,7 +44,7 @@ def validate(directory,seed,rtt,runs,warmups,probe):
             if row['client_random'] in seen: raise RuntimeError('Repeated handshake identity')
             seen.add(row['client_random'])
             log=(directory/'logs'/f'{"warmup" if warm else "sample"}-{int(row["round"]):04d}-{row["scenario"]}.log').read_text()
-            if 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' not in log or 'Peer Temp Key: X25519' not in log or 'no client certificate available' not in log: raise RuntimeError('TLS controls missing')
+            if 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' not in log or 'Shared groups: x25519' not in log or 'no client certificate available' not in log: raise RuntimeError('TLS controls missing')
             if float(row['certificate_verify_bytes'])<=0: raise RuntimeError('CertificateVerify missing')
             if '-compact-' in row['scenario'] and 'Compact verification: OK' not in log: raise RuntimeError('Compact fallback/failure')
             if '-mtc-experimental-' in row['scenario'] and 'MTC verification: OK' not in log: raise RuntimeError('MTC fallback/failure')

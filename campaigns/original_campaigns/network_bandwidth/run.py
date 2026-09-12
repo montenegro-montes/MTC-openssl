@@ -55,7 +55,7 @@ def validate(directory,seed,rtt,rate,runs,warmups,probe):
         for row in rows:
             if row['client_random'] in seen:raise RuntimeError('Duplicate handshake ID')
             seen.add(row['client_random']);log=(directory/'logs'/f'{"warmup" if warm else "sample"}-{int(row["round"]):04d}-{row["scenario"]}.log').read_text()
-            if 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' not in log or 'Peer Temp Key: X25519' not in log or 'no client certificate available' not in log or float(row['certificate_verify_bytes'])<=0:raise RuntimeError('TLS control failure')
+            if 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' not in log or 'Shared groups: x25519' not in log or 'no client certificate available' not in log or float(row['certificate_verify_bytes'])<=0:raise RuntimeError('TLS control failure')
             if '-compact-' in row['scenario'] and 'Compact verification: OK' not in log:raise RuntimeError('Compact failure/fallback')
             if '-mtc-experimental-' in row['scenario'] and 'MTC verification: OK' not in log:raise RuntimeError('MTC failure/fallback')
     save(directory/'validation.json',{'passed':True,'seed':seed,'rtt_target_ms':rtt,'bandwidth_target_mbps':rate,**probe,'qdisc_drops':0,'goodput_acceptance_ratio':[GOODPUT_MIN_RATIO,GOODPUT_MAX_RATIO]})

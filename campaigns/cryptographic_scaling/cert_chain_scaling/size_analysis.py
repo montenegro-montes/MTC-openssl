@@ -16,6 +16,11 @@ def tls_certificate_message_size(certs):
  # Handshake(4), certificate_request_context vector(1), certificate_list vector(3),
  # and, per CertificateEntry, cert_data vector(3) plus extensions vector(2).
  return 8+sum(len(x)+5 for x in certs)
+def crossover_status(profile, fixtures_supplied, series, crossed):
+ if profile not in MTC_PROFILE_MAP:return "UNSUPPORTED_MTC_PROFILE"
+ if not fixtures_supplied:return "MTC_FIXTURES_NOT_PROVIDED"
+ if not series:return "MISSING_MTC_FIXTURES"
+ return "CROSSED" if crossed else "OUTSIDE_SEARCH_RANGE"
 def main():
  p=argparse.ArgumentParser();p.add_argument("fixtures",type=Path);p.add_argument("--output",type=Path,required=True);p.add_argument("--mtc-fixtures",type=Path);p.add_argument("--max-tree-power",type=int,default=20);a=p.parse_args()
  if a.output.exists():p.error("Output exists; choose a new analysis directory")
@@ -59,10 +64,10 @@ def main():
   for row in series:
    if row["tls_certificate_message_bytes"]>=target:cross=row;break
    before=row
-  status="CROSSED" if cross else ("OUTSIDE_SEARCH_RANGE" if series else "UNSUPPORTED_MTC_PROFILE")
+  status=crossover_status(chain["algorithm"],a.mtc_fixtures is not None,series,cross is not None)
   crossings.append({"security_level":chain["security_level"],"algorithm":chain["algorithm"],"x509_depth":chain["depth"],"x509_bytes":target,"mtc_previous_N":before["tree_size"] if before else "","mtc_previous_bytes":before["tls_certificate_message_bytes"] if before else "","mtc_cross_N":cross["tree_size"] if cross else "","mtc_cross_bytes":cross["tls_certificate_message_bytes"] if cross else "","proof_hashes":cross["proof_hashes"] if cross else "","difference_bytes":cross["tls_certificate_message_bytes"]-target if cross else "","status":status})
  write(a.output/"crossover.csv",crossings)
- metadata={"schema":1,"result_domain":"STATIC_CRYPTOGRAPHIC_CERTIFICATE","tls_support_required":False,"x509_fixture_root":str(a.fixtures),"mtc_fixture_root":str(a.mtc_fixtures) if a.mtc_fixtures else None,"model_validation":model_validation,"definitions":{"x509_bytes":"complete TLS 1.3 Certificate handshake message through CertificateEntry extensions; excludes CertificateVerify","mtc_bytes":"same TLS Certificate message boundary; landmark trust material is offline","modeled_mtc":"real DER and MTCProof encoders with deterministic 32-byte placeholder hashes; validated against supplied fixtures"}}
+ metadata={"schema":1,"result_domain":"STATIC_CRYPTOGRAPHIC_CERTIFICATE","tls_support_required":False,"x509_fixture_root":str(a.fixtures),"mtc_fixture_root":str(a.mtc_fixtures) if a.mtc_fixtures else None,"model_validation":model_validation,"crossover_status_definitions":{"MTC_FIXTURES_NOT_PROVIDED":"Supported MTC profile; --mtc-fixtures was omitted","MISSING_MTC_FIXTURES":"Supported MTC profile; supplied directory has no matching landmark fixtures","UNSUPPORTED_MTC_PROFILE":"Profile is not implemented by the MTC issuer","CROSSED":"Model reaches or exceeds X.509 size within the search range","OUTSIDE_SEARCH_RANGE":"Available model does not cross within the search range"},"definitions":{"x509_bytes":"complete TLS 1.3 Certificate handshake message through CertificateEntry extensions; excludes CertificateVerify","mtc_bytes":"same TLS Certificate message boundary; landmark trust material is offline","modeled_mtc":"real DER and MTCProof encoders with deterministic 32-byte placeholder hashes; validated against supplied fixtures"}}
  (a.output/"analysis.json").write_text(json.dumps(metadata,indent=2)+"\n");(a.output/"manifest.json").write_text(json.dumps(metadata,indent=2)+"\n")
  print(a.output)
 if __name__=="__main__":main()

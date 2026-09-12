@@ -40,7 +40,7 @@ def validate_observations(directory,condition,runs,warmups):
         if any(v!=1 for round_ in rounds.values() for v in round_.values()):raise RuntimeError('Missing/duplicate scenario attempt')
         for row in good:
             log=(directory/'logs'/f'{"warmup" if warm else "sample"}-{int(row["round"]):04d}-{row["scenario"]}.log').read_text()
-            if 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' not in log or 'Peer Temp Key: X25519' not in log or 'no client certificate available' not in log or float(row['certificate_verify_bytes'])<=0:raise RuntimeError('TLS controls missing')
+            if 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' not in log or 'Shared groups: x25519' not in log or 'no client certificate available' not in log or float(row['certificate_verify_bytes'])<=0:raise RuntimeError('TLS controls missing')
             if '-compact-' in row['scenario'] and 'Compact verification: OK' not in log:raise RuntimeError('Compact fallback/failure')
             if '-mtc-experimental-' in row['scenario'] and 'MTC verification: OK' not in log:raise RuntimeError('MTC fallback/failure')
         successes+=good

@@ -54,10 +54,65 @@ python3 campaigns/cryptographic_scaling/cert_chain_scaling/generate_fixtures.py 
 python3 campaigns/cryptographic_scaling/cert_chain_scaling/validate.py "$CHAIN_FIXTURES" --output "$CHAIN_FIXTURES/validation.json"
 ```
 
-4. Run static size analysis using the validated scaling-fixture directory:
+4. Run static size analysis. X.509-only analysis needs only `CHAIN_FIXTURES`:
 
 ```sh
-MTC_SCALING_ROOT="artifacts/scaling/<validated-fixture-directory>"
+python3 campaigns/cryptographic_scaling/cert_chain_scaling/size_analysis.py "$CHAIN_FIXTURES" --output "$STATIC_ROOT"
+```
+
+To include MTC sizes and X.509–MTC crossover, first prepare fixtures with the
+[original Merkle population scaling campaign](../../original_campaigns/scaling_campaign/README.md),
+located at `campaigns/original_campaigns/scaling_campaign/`. This is separate
+from the Paper-1 certificate-chain campaign and from the exploratory MTC runner.
+
+The dependency is **fixture generation and structural validation**, not the
+full scaling timing campaign. The base, Compact and MTC fixtures and the
+measurement image must already be prepared (original battery steps through
+`07.measurement-image`). With an initialized battery, inspect its state:
+
+```sh
+bin/original_campaigns/mt-campaigns status
+```
+
+If these stages are still pending, run them in order; stop on any failure:
+
+```sh
+mkdir -p artifacts/results
+bin/original_campaigns/mt-campaigns run 20.scaling-init &&
+bin/original_campaigns/mt-campaigns run 21.scaling-tests-before &&
+bin/original_campaigns/mt-campaigns run 22.scaling-generate
+```
+
+- `20.scaling-init` creates the scaling campaign metadata.
+- `21.scaling-tests-before` runs the regression gate and records the image ID;
+  its tests do include TLS connections inside the container.
+- `22.scaling-generate` generates populations N=1,4,16,64,256,1024 and runs
+  `structural.py` to validate the resulting Compact/MTC fixtures.
+
+Only proceed when `22.scaling-generate` completes. Do not rerun completed
+stages over immutable outputs. Steps `23.scaling-preflight` through
+`26.scaling-analysis` belong to the full scaling measurement campaign and are
+not required for this static comparison. Fixture generation itself can be
+expensive and is a manual operation.
+
+Obtain the actual fixture directory recorded by that campaign, from the
+repository root:
+
+```sh
+. .mt-state/campaign-roots.env
+MTC_SCALING_ROOT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["host"])' "$SCALING_ROOT/fixture-location.json")
+```
+
+`SCALING_ROOT` contains the campaign metadata; `MTC_SCALING_ROOT` contains the
+`batch1`, `batch4`, …, `batch1024` fixture directories. They are different
+paths. For a different battery, read its own `fixture-location.json` rather
+than using the current battery's state.
+
+Then run the combined static analysis. If the X.509-only command above already
+created `STATIC_ROOT`, assign a **new output path** first, for example
+`STATIC_ROOT="${STATIC_ROOT}-with-mtc"`; existing analyses are not overwritten.
+
+```sh
 python3 campaigns/cryptographic_scaling/cert_chain_scaling/size_analysis.py "$CHAIN_FIXTURES" --mtc-fixtures "$MTC_SCALING_ROOT" --output "$STATIC_ROOT"
 ```
 
@@ -65,6 +120,19 @@ This writes `key_sizes.csv`, `certificate_sizes.csv`, `chain_sizes.csv`,
 `mtc_sizes.csv`, and `crossover.csv`. It measures real DER objects. MTC powers
 through 2^20 use the real DER/MTCProof encoder with deterministic 32-byte proof
 elements and are labeled `exact serialization model`.
+
+The crossover status distinguishes absent data from implementation limits:
+
+| Status | Meaning |
+|---|---|
+| `MTC_FIXTURES_NOT_PROVIDED` | P-256 or ML-DSA-65 is supported, but `--mtc-fixtures` was omitted |
+| `MISSING_MTC_FIXTURES` | A directory was supplied, but no matching MTC landmark fixtures were found for that supported profile |
+| `UNSUPPORTED_MTC_PROFILE` | The MTC issuer does not implement this profile, independently of fixture availability |
+| `CROSSED` | The model reaches the X.509 size within the evaluated range |
+| `OUTSIDE_SEARCH_RANGE` | A model exists, but does not reach the X.509 size within that range |
+
+Without MTC fixtures, X.509 analysis still runs, `mtc_sizes.csv` has no data
+rows, and no crossover sizes are fabricated.
 
 5. Inspect crossings:
 

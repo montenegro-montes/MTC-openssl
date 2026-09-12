@@ -66,7 +66,7 @@ try:
                 logname=('warmup' if int(row['is_warmup']) else 'sample')+f'-{int(row["round"]):04d}-{row["scenario"]}.log'
                 text=(directory/'logs'/logname).read_text()
                 assert 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' in text
-                assert 'Peer Temp Key: X25519' in text
+                assert 'Shared groups: x25519' in text
                 assert 'no client certificate available' in text
         record.update(state='complete',measured_handshakes=len(rows),warmup_handshakes=len(warm),finished_utc=datetime.datetime.now(datetime.timezone.utc).isoformat());save()
         print(cid,'PASS',len(rows),'measured',len(warm),'warmup',flush=True)

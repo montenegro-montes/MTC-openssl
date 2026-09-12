@@ -18,7 +18,7 @@ def validate(directory,scenarios,seed,n,detail,runs,warmups):
    assert int(row['tree_size'])==n and int(row['seed'])==seed and int(row['is_warmup'])==warm
    key=row['client_random'];assert key not in seen;seen.add(key)
    log=(directory/'logs'/f'{"warmup" if warm else "sample"}-{int(row["round"]):04d}-{row["scenario"]}.log').read_text()
-   assert 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' in log and 'Peer Temp Key: X25519' in log and 'no client certificate available' in log
+   assert 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' in log and 'Shared groups: x25519' in log and 'no client certificate available' in log
    assert float(row['certificate_verify_bytes'])>0
    assert float(row['transport_total_bytes'])==float(row['transport_read_bytes'])+float(row['transport_written_bytes'])
    client=json.loads(re.findall(r'^PROFILE_METRICS (\{.*\})$',log,re.M)[0]);server=read(directory/'server-metrics'/f'{key}.json')
