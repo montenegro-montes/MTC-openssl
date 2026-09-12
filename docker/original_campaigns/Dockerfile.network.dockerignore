@@ -1,0 +1,9 @@
+**
+!docker/
+!docker/original_campaigns/
+!docker/original_campaigns/Dockerfile.network
+!campaigns/
+!campaigns/original_campaigns/
+!campaigns/original_campaigns/network_latency/
+!campaigns/original_campaigns/network_latency/*.py
+!campaigns/original_campaigns/network_latency/*.sh

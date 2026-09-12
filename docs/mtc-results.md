@@ -72,7 +72,7 @@ Se ejecutó una serie separada de treinta rondas con X509 y RPK en ambas familia
 - Regresiones anteriores: **50 + 66 + 74 casos correctos** en sus ejecutables originales.
 - Inventario previo: **5287 archivos sin cambios SHA-256**, incluyendo los resultados previos. Ningún archivo anterior fue modificado.
 
-Archivos nuevos: `mtc/` (generador, verificador C, integración, pruebas y drivers), `docker/Dockerfile.mtc`, `docker/Dockerfile.mtc.dockerignore`, `docker/compose.mtc.yaml` y los cinco documentos `docs/mtc-*.md`. Los fixtures y claves nuevos están bajo artifacts/ y las claves no se incorporan a Git.
+Archivos nuevos: `mtc/` (generador, verificador C, integración, pruebas y drivers), `docker/original_campaigns/Dockerfile.mtc`, `docker/original_campaigns/Dockerfile.mtc.dockerignore`, `docker/original_campaigns/compose.mtc.yaml` y los cinco documentos `docs/mtc-*.md`. Los fixtures y claves nuevos están bajo artifacts/ y las claves no se incorporan a Git.
 
 - [Campaña principal](../artifacts/results/mtc-20260910T050144616225Z/report.md): samples.csv, summary.csv, comparisons.csv, metadata.json y logs.
 - [Escalado](../artifacts/results/mtc-scaling-20260910T050257177516Z/scaling.csv) y [manifiesto de sus ejecuciones](../artifacts/results/mtc-scaling-20260910T050257177516Z/manifest.json).

@@ -25,7 +25,7 @@
   "compact/test_tls.py": "1047a9e13e706a1ffcbd8a4887546bb11dd30df4437ac242742428b096242877",
   "compact/test_peer.c": "d4044d98427932e0ccbff9c65e6b098de64c29ff5013fd8214f67061a976a595",
   "compact/prepare.py": "e8ffc88e96f62fb794702a1154feee9df4c79220701aff13988bb9d20b0c2dc8",
-  "docker/openssl.cnf": "d620051406b34903f29e11551f5bd416b5a5ec65541d5448608e85fa0cdb7afb",
+  "docker/original_campaigns/openssl.cnf": "d620051406b34903f29e11551f5bd416b5a5ec65541d5448608e85fa0cdb7afb",
   "integration/mt_wire.c": "546a36d29c8ff4087e872f8404b97a0d4726bd3ac5cd2d4215e019e61fc8dbca",
   "integration/mt_tls.c": "00a2938575b71b3eef414948154669ba1d2d7f20e05ea38cd724992e39aa91b1",
   "integration/patch_openssl.py": "ceef5e7befcece749b22f5daa0c034312dc7a1c825ab5077711286d1dc60ec22",

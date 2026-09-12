@@ -1,7 +1,0 @@
-**
-!docker/
-!docker/Dockerfile.measurement
-!campaigns/
-!campaigns/controlled_n16_campaign/
-!campaigns/controlled_n16_campaign/*.py
-!campaigns/controlled_n16_campaign/*.sh

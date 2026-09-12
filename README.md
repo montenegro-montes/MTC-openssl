@@ -52,6 +52,13 @@ are architectural; their trust and transparency models are not equivalent.
 | Bandwidth constrained | Completed | 75 controlled campaigns across 3 RTT and 5 bandwidth levels |
 | Packet loss | Completed | Six loss levels at 50 ms RTT; latency, reliability, and TCP retransmission activity |
 | Combined network conditions | Completed | Baseline, WAN, constrained, and adverse profiles; 3,600 validated measurements |
+| Certificate-chain and MTC proof scaling | Prepared; not executed | Separate ideal-network infrastructure for ECDSA, ML-DSA, SLH-DSA, PKI depth, MTC size, and crossover analysis |
+
+The [certificate-chain and MTC proof-scaling experiment](campaigns/cryptographic_scaling/cert_chain_scaling/README.md)
+is isolated from the validated baselines. It prepares immutable multi-depth
+X.509 fixtures, exact DER/TLS size accounting, MTC crossover models, and
+filtered manual TLS measurements. No result or conclusion is claimed before
+the manual campaigns are completed.
 
 Generated data live temporarily under `artifacts/results/` and are excluded
 from Git. After a complete battery, selected validated summaries and metadata
@@ -74,7 +81,7 @@ for every RTT; the neighboring observed sign change lies between 5 and
 at 10 ms RTT, 28.620 ms at 50 ms RTT, and 27.349 ms at 100 ms RTT. These are
 observed points rather than an interpolated break-even threshold.
 
-- Execution and reproduction: [bandwidth campaign](campaigns/network_bandwidth/README.md)
+- Execution and reproduction: [bandwidth campaign](campaigns/original_campaigns/network_bandwidth/README.md)
 - Measurement-source commit: `796282369f003e86621f61bd20466583fd64e75d`
 - Archived results: [network-bandwidth](results/campaign-snapshot-20260911T193547Z-662ce7edb956/campaigns/network-bandwidth/)
 
@@ -99,8 +106,8 @@ execution time. The manifests retain per-source hashes, so the outputs remain
 auditable, but those base hashes must not be described as commits containing
 the PCMA implementations.
 
-- Stage A and A.2: [PCMA simulation](campaigns/pcma/README.md) and [compact advertisement evaluation](campaigns/pcma_stage_a2/README.md)
-- Stage B.1: [end-to-end PCMA TLS campaign](campaigns/pcma_stage_b/README.md)
+- Stage A and A.2: [PCMA simulation](campaigns/original_campaigns/pcma/README.md) and [compact advertisement evaluation](campaigns/original_campaigns/pcma_stage_a2/README.md)
+- Stage B.1: [end-to-end PCMA TLS campaign](campaigns/original_campaigns/pcma_stage_b/README.md)
 - Audited A.2 results: [PCMA Stage A.2](results/campaign-snapshot-20260911T193547Z-662ce7edb956/campaigns/pcma-stage-a2/)
 - Audited B.1 results: [PCMA Stage B.1](results/campaign-snapshot-20260911T193547Z-662ce7edb956/campaigns/pcma-stage-b1/)
 
@@ -120,7 +127,7 @@ paired round effects, and campaign-level bootstrap intervals. TCP
 retransmissions cannot be assigned reliably to individual handshakes, and TLS
 BIO bytes are not network-wire bytes.
 
-- Execution and reproduction: [packet-loss campaign](campaigns/packet_loss_campaign/README.md)
+- Execution and reproduction: [packet-loss campaign](campaigns/original_campaigns/packet_loss_campaign/README.md)
 - Validated experiment commit: `d6b98c7faf728e7627c6b7292a198548c38f9de4`
 - Postprocessing idempotency fix: `795c553d1d877b6f6d55b1131255592183b7e6a4`
 - Local result directory: `artifacts/results/network-loss-20260910-212643/`
@@ -146,7 +153,7 @@ baseline and 175.30 / 148.72 / 148.98 ms under the adverse 100 ms RTT, 1 Mbit/s,
 2% per-egress-loss profile. These controlled Docker observations do not imply
 universal performance or loss-resilience properties.
 
-- Execution and reproduction: [combined-network campaign](campaigns/combined_network_campaign/README.md)
+- Execution and reproduction: [combined-network campaign](campaigns/original_campaigns/combined_network_campaign/README.md)
 - Measurement-source commit: `4a5cf75ea674095f52c7ee759c8b43c0080a1096`
 - Results commit: `6fa2a626f417db5fc7f31f26f2cff9096a6176fb`
 - Published summaries: [combined network](results/campaign-snapshot-20260911T193547Z-662ce7edb956/campaigns/combined-network/)
@@ -177,8 +184,14 @@ and [Docker management](docker/README.md) for the full command reference.
 
 ```text
 .
-├── campaigns/       campaign runners, analysis, validation, and instructions
-├── docker/          Dockerfiles, Compose definitions, and OpenSSL configuration
+├── campaigns/
+│   ├── original_campaigns/     validated baseline, network, capture, and PCMA studies
+│   ├── cryptographic_scaling/  algorithm, key, chain, and proof-size studies
+│   └── common/                 shared campaign helpers
+├── docker/
+│   ├── original_campaigns/     original images and Compose definitions
+│   ├── cryptographic_scaling/  Compose definitions for the second study group
+│   └── README.md               Docker category and operation index
 ├── artifacts/       local certificates, keys, fixtures, and results
 ├── compact/         Compact Merkle credential implementation
 ├── mtc/             MTC-experimental implementation
@@ -228,7 +241,7 @@ private keys and local evidence and must remain outside Git.
 ### Step 2 — build the base image
 
 ```sh
-docker compose -f docker/compose.yaml build
+docker compose -f docker/original_campaigns/compose.yaml build
 docker image inspect mt-tls-lab:local --format '{{.Id}}'
 ```
 
@@ -238,7 +251,7 @@ tests, and the initial Merkle integration for `s_client` and `s_server`.
 ### Step 3 — generate the original certificates and Merkle fixtures
 
 ```sh
-docker compose -f docker/compose.yaml run --rm setup
+docker compose -f docker/original_campaigns/compose.yaml run --rm setup
 find artifacts/certs artifacts/merkle -maxdepth 2 -type f -print
 ```
 
@@ -249,11 +262,11 @@ earlier results.
 To create an additional signature profile:
 
 ```sh
-docker compose -f docker/compose.yaml run --rm setup \
+docker compose -f docker/original_campaigns/compose.yaml run --rm setup \
   bash /opt/lab/generate-certs.sh \
   --profile mldsa44 --algorithm ML-DSA-44
 
-docker compose -f docker/compose.yaml run --rm setup \
+docker compose -f docker/original_campaigns/compose.yaml run --rm setup \
   bash /opt/lab/generate-certs.sh \
   --profile ecdsa-p384 --algorithm EC \
   --pkeyopt ec_paramgen_curve:P-384 --digest sha384
@@ -264,7 +277,7 @@ optional. Each profile contains a self-signed root CA, a CA-signed server
 certificate, DER output, generation metadata, and a matching Merkle fixture.
 
 ```sh
-docker compose -f docker/compose.yaml run --rm setup \
+docker compose -f docker/original_campaigns/compose.yaml run --rm setup \
   bash /opt/lab/generate-certs.sh --help
 ```
 
@@ -277,10 +290,10 @@ Algorithm availability depends on the image and can be inspected with
 ```sh
 for SCENARIO in classic pq classic-mt pq-mt; do
   export SCENARIO
-  docker compose -f docker/compose.yaml up -d --force-recreate server
+  docker compose -f docker/original_campaigns/compose.yaml up -d --force-recreate server
   sleep 2
-  docker compose -f docker/compose.yaml run --rm client
-  docker compose -f docker/compose.yaml down
+  docker compose -f docker/original_campaigns/compose.yaml run --rm client
+  docker compose -f docker/original_campaigns/compose.yaml down
 done
 unset SCENARIO
 ```
@@ -291,15 +304,15 @@ must also report successful Merkle verification.
 ### Step 5 — build Compact, profiling, and MTC
 
 ```sh
-docker compose -f docker/compose.compact.yaml build
+docker compose -f docker/original_campaigns/compose.compact.yaml build
 test -f artifacts/compact/batch16/classic/manifest.json \
   -a -f artifacts/compact/batch16/pq/manifest.json \
-  || docker compose -f docker/compose.compact.yaml run --rm setup
-docker compose -f docker/compose.profile.yaml build
-docker compose -f docker/compose.mtc.yaml build
+  || docker compose -f docker/original_campaigns/compose.compact.yaml run --rm setup
+docker compose -f docker/original_campaigns/compose.profile.yaml build
+docker compose -f docker/original_campaigns/compose.mtc.yaml build
 test -f artifacts/mtc/batch16-v2/classic/manifest.json \
   -a -f artifacts/mtc/batch16-v2/pq/manifest.json \
-  || docker compose -f docker/compose.mtc.yaml run --rm setup
+  || docker compose -f docker/original_campaigns/compose.mtc.yaml run --rm setup
 test -f artifacts/compact/batch16/classic/manifest.json
 test -f artifacts/compact/batch16/pq/manifest.json
 test -f artifacts/mtc/batch16-v2/classic/manifest.json
@@ -314,7 +327,7 @@ new output name; do not merge a partial set with newly generated files.
 ### Step 6 — build and validate the controlled measurement image
 
 ```sh
-docker build -f docker/Dockerfile.measurement \
+docker build -f docker/original_campaigns/Dockerfile.measurement \
   --build-arg BASE_IMAGE=mt-tls-mtc:local \
   -t mt-tls-measurement:local .
 
@@ -342,7 +355,7 @@ resulting immutable IDs and any rebuilds before allowing measurements.
 ### Step 7 — build the network image
 
 ```sh
-docker build -f docker/Dockerfile.network -t mt-tls-network:latency .
+docker build -f docker/original_campaigns/Dockerfile.network -t mt-tls-network:latency .
 docker run --rm --network none mt-tls-network:latency sh -c \
   'command -v tc && command -v ping && command -v nstat && command -v iperf3'
 ```
@@ -385,7 +398,7 @@ bootstrap inference uses independent campaigns and retains outliers.
 - [Initial TLS-Merkle laboratory](docs/tls-merkle-laboratory.md)
 - [TLS-MT protocol](docs/tls-mt.md)
 - [Compact Merkle protocol](docs/compact-protocol.md)
-- [PCMA Stage-A laboratory](campaigns/pcma/README.md)
+- [PCMA Stage-A laboratory](campaigns/original_campaigns/pcma/README.md)
 - [Experiment artifact publication policy](docs/artifact-publication-policy.md)
 - [MTC methodology](docs/mtc-methodology.md)
 - [MTC results](docs/mtc-results.md)

@@ -1,7 +1,0 @@
-**
-!docker/
-!docker/Dockerfile.network
-!campaigns/
-!campaigns/network_latency/
-!campaigns/network_latency/*.py
-!campaigns/network_latency/*.sh

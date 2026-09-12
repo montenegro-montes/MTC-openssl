@@ -1,0 +1,8 @@
+**
+!docker/
+!docker/original_campaigns/
+!docker/original_campaigns/Dockerfile.capture
+!campaigns/
+!campaigns/original_campaigns/
+!campaigns/original_campaigns/handshake_capture/
+!campaigns/original_campaigns/handshake_capture/*.py

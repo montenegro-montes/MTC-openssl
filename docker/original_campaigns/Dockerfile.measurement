@@ -1,0 +1,11 @@
+ARG BASE_IMAGE=mt-tls-mtc:local
+FROM ${BASE_IMAGE}
+COPY campaigns/original_campaigns/controlled_n16_campaign/patch_setup.py /opt/measurement/
+RUN cp -a /opt/src/openssl-mtc /opt/src/openssl-measurement && \
+    python3 /opt/measurement/patch_setup.py /opt/src/openssl-measurement && \
+    cd /opt/src/openssl-measurement && make -j2 apps/openssl && \
+    mkdir -p /opt/openssl-measurement/bin && cp apps/openssl /opt/openssl-measurement/bin/openssl && \
+    cp CONTROLLED_MEASUREMENT_SHA256 /opt/openssl-measurement/
+COPY campaigns/original_campaigns/controlled_n16_campaign /opt/measurement
+RUN chmod +x /opt/measurement/openssl.sh
+WORKDIR /work

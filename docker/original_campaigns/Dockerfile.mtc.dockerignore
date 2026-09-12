@@ -1,0 +1,9 @@
+**
+!docker/
+!docker/original_campaigns/
+!docker/original_campaigns/Dockerfile.mtc
+!mtc/
+!mtc/*.py
+!mtc/*.c
+!mtc/*.h
+!mtc/*.sh

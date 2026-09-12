@@ -5,7 +5,7 @@ p=argparse.ArgumentParser();p.add_argument('--fixtures',default='/work/mtc/scali
 root=Path(__file__).resolve().parents[1];out=root/'artifacts/results'/('mtc-scaling-'+datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'));out.mkdir()
 image=subprocess.check_output(['docker','image','inspect','mt-tls-mtc:local','--format','{{.Id}}'],text=True).strip();runs=[]
 scenarios=[f'{f}-{s}' for f in ['classic','pq'] for s in ['compact-warm','compact-cold','mtc-experimental-standalone','mtc-experimental-landmark']]
-base=['docker','compose','-f',str(root/'docker/compose.mtc.yaml')]
+base=['docker','compose','-f',str(root/'docker/original_campaigns/compose.mtc.yaml')]
 try:
     for n in a.sizes:
         env=os.environ.copy();env.update(COMPACT_BATCH=f'{a.fixtures}/compact-{n}',MTC_BATCH=f'{a.fixtures}/mtc-{n}')

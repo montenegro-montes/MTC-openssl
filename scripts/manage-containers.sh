@@ -5,17 +5,17 @@ REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$REPO"
 
 COMPOSE_FILES="
-base:docker/compose.yaml
-compact:docker/compose.compact.yaml
-profile:docker/compose.profile.yaml
-mtc:docker/compose.mtc.yaml
-measurement:docker/compose.measurement.yaml
-scaling:docker/compose.scaling.yaml
-latency:docker/compose.network-latency.yaml
-bandwidth:docker/compose.network-bandwidth.yaml
-loss:docker/compose.network-loss.yaml
-combined:docker/compose.network-combined.yaml
-capture:docker/compose.capture.yaml
+base:docker/original_campaigns/compose.yaml
+compact:docker/original_campaigns/compose.compact.yaml
+profile:docker/original_campaigns/compose.profile.yaml
+mtc:docker/original_campaigns/compose.mtc.yaml
+measurement:docker/original_campaigns/compose.measurement.yaml
+scaling:docker/original_campaigns/compose.scaling.yaml
+latency:docker/original_campaigns/compose.network-latency.yaml
+bandwidth:docker/original_campaigns/compose.network-bandwidth.yaml
+loss:docker/original_campaigns/compose.network-loss.yaml
+combined:docker/original_campaigns/compose.network-combined.yaml
+capture:docker/original_campaigns/compose.capture.yaml
 "
 
 usage() {
@@ -50,17 +50,17 @@ EOF
 
 compose_file() {
   case "${1:-}" in
-    base) echo docker/compose.yaml ;;
-    compact) echo docker/compose.compact.yaml ;;
-    profile) echo docker/compose.profile.yaml ;;
-    mtc) echo docker/compose.mtc.yaml ;;
-    measurement) echo docker/compose.measurement.yaml ;;
-    scaling) echo docker/compose.scaling.yaml ;;
-    latency) echo docker/compose.network-latency.yaml ;;
-    bandwidth) echo docker/compose.network-bandwidth.yaml ;;
-    loss) echo docker/compose.network-loss.yaml ;;
-    combined) echo docker/compose.network-combined.yaml ;;
-    capture) echo docker/compose.capture.yaml ;;
+    base) echo docker/original_campaigns/compose.yaml ;;
+    compact) echo docker/original_campaigns/compose.compact.yaml ;;
+    profile) echo docker/original_campaigns/compose.profile.yaml ;;
+    mtc) echo docker/original_campaigns/compose.mtc.yaml ;;
+    measurement) echo docker/original_campaigns/compose.measurement.yaml ;;
+    scaling) echo docker/original_campaigns/compose.scaling.yaml ;;
+    latency) echo docker/original_campaigns/compose.network-latency.yaml ;;
+    bandwidth) echo docker/original_campaigns/compose.network-bandwidth.yaml ;;
+    loss) echo docker/original_campaigns/compose.network-loss.yaml ;;
+    combined) echo docker/original_campaigns/compose.network-combined.yaml ;;
+    capture) echo docker/original_campaigns/compose.capture.yaml ;;
     *) echo "Unknown target: ${1:-<empty>}" >&2; return 2 ;;
   esac
 }

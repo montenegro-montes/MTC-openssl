@@ -1,0 +1,9 @@
+**
+!docker/
+!docker/original_campaigns/
+!docker/original_campaigns/Dockerfile.measurement
+!campaigns/
+!campaigns/original_campaigns/
+!campaigns/original_campaigns/controlled_n16_campaign/
+!campaigns/original_campaigns/controlled_n16_campaign/*.py
+!campaigns/original_campaigns/controlled_n16_campaign/*.sh

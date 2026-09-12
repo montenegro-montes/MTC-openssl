@@ -24,20 +24,20 @@ Fuentes: [OpenSSL](https://openssl-library.org/source/),
 ## Ejecución
 
 ```sh
-docker compose -f docker/compose.yaml build
-docker compose -f docker/compose.yaml run --rm setup
-docker compose -f docker/compose.yaml up -d server
-docker compose -f docker/compose.yaml run --rm client
+docker compose -f docker/original_campaigns/compose.yaml build
+docker compose -f docker/original_campaigns/compose.yaml run --rm setup
+docker compose -f docker/original_campaigns/compose.yaml up -d server
+docker compose -f docker/original_campaigns/compose.yaml run --rm client
 # Repeticiones clásicas (servidor ya arrancado):
-docker compose -f docker/compose.yaml run --rm client python3 /opt/lab/benchmark.py --runs 30
+docker compose -f docker/original_campaigns/compose.yaml run --rm client python3 /opt/lab/benchmark.py --runs 30
 # Cambiar servidor y cliente a certificados ML-DSA-65:
-SCENARIO=pq docker compose -f docker/compose.yaml up -d --force-recreate server
-SCENARIO=pq docker compose -f docker/compose.yaml run --rm client
-SCENARIO=pq docker compose -f docker/compose.yaml run --rm client python3 /opt/lab/benchmark.py --runs 30
-docker compose -f docker/compose.yaml down
+SCENARIO=pq docker compose -f docker/original_campaigns/compose.yaml up -d --force-recreate server
+SCENARIO=pq docker compose -f docker/original_campaigns/compose.yaml run --rm client
+SCENARIO=pq docker compose -f docker/original_campaigns/compose.yaml run --rm client python3 /opt/lab/benchmark.py --runs 30
+docker compose -f docker/original_campaigns/compose.yaml down
 ```
 
-Esperar al mensaje de escucha del servidor (`docker compose -f docker/compose.yaml logs server`) antes
+Esperar al mensaje de escucha del servidor (`docker compose -f docker/original_campaigns/compose.yaml logs server`) antes
 de lanzar el cliente. El puerto se publica solo en `127.0.0.1:4433`. Los servicios
 usan una misma imagen en contenedores separados. `artifacts/` contiene claves
 locales de laboratorio, certificados y resultados; no se incluye en la imagen ni
@@ -69,8 +69,8 @@ con una única ejecución.
 ## Código Merkle recibido
 
 ```sh
-docker compose -f docker/compose.yaml run --rm client /opt/mt/bin/merkle_tests
-docker compose -f docker/compose.yaml run --rm client /opt/mt/bin/merkle_mtc_tests /work/certs/classic
+docker compose -f docker/original_campaigns/compose.yaml run --rm client /opt/mt/bin/merkle_tests
+docker compose -f docker/original_campaigns/compose.yaml run --rm client /opt/mt/bin/merkle_mtc_tests /work/certs/classic
 ```
 
 Los ejecutables se recompilan para Linux; los binarios macOS originales no se
@@ -82,14 +82,14 @@ fiable por su código de salida.
 
 ```sh
 # Setup también genera raíces y pruebas conservando los certificados existentes.
-docker compose -f docker/compose.yaml run --rm setup
-SCENARIO=pq-mt docker compose -f docker/compose.yaml up -d --force-recreate server
-SCENARIO=pq-mt docker compose -f docker/compose.yaml run --rm client
-SCENARIO=pq-mt docker compose -f docker/compose.yaml run --rm client python3 /opt/lab/benchmark.py --runs 30
-docker compose -f docker/compose.yaml down
+docker compose -f docker/original_campaigns/compose.yaml run --rm setup
+SCENARIO=pq-mt docker compose -f docker/original_campaigns/compose.yaml up -d --force-recreate server
+SCENARIO=pq-mt docker compose -f docker/original_campaigns/compose.yaml run --rm client
+SCENARIO=pq-mt docker compose -f docker/original_campaigns/compose.yaml run --rm client python3 /opt/lab/benchmark.py --runs 30
+docker compose -f docker/original_campaigns/compose.yaml down
 # Tests (no necesitan un servicio server arrancado):
-docker compose -f docker/compose.yaml run --rm client /opt/mt/bin/test_wire
-docker compose -f docker/compose.yaml run --rm client python3 /opt/mt/tests/test_tls.py
+docker compose -f docker/original_campaigns/compose.yaml run --rm client /opt/mt/bin/test_wire
+docker compose -f docker/original_campaigns/compose.yaml run --rm client python3 /opt/mt/tests/test_tls.py
 ```
 
 Usar `classic-mt` para ECDSA + Merkle. Esperar al servidor antes de lanzar el

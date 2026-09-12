@@ -21,7 +21,7 @@ def run(command,**kwargs):
 
 with patch.object(image_chain,'inspect',side_effect=inspect),patch.object(image_chain.subprocess,'run',side_effect=run):
     result=image_chain.ensure('network')
-assert len(commands)==1 and commands[0][:4]==['docker','build','-f','docker/Dockerfile.network']
+assert len(commands)==1 and commands[0][:4]==['docker','build','-f','docker/original_campaigns/Dockerfile.network']
 assert result['target']['Id']=='sha256:network'
 assert result['rebuilt'][0]['reason']=='missing'
 print('PASS missing child image is rebuilt and parent layers are verified')

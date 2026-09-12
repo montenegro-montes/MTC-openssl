@@ -6,12 +6,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 SPECS = {
-    'lab': ('mt-tls-lab:local', 'docker/Dockerfile', None),
-    'compact': ('mt-tls-compact:local', 'docker/Dockerfile.compact', 'lab'),
-    'profile': ('mt-tls-profile:local', 'docker/Dockerfile.profile', 'compact'),
-    'mtc': ('mt-tls-mtc:local', 'docker/Dockerfile.mtc', 'profile'),
-    'measurement': ('mt-tls-measurement:local', 'docker/Dockerfile.measurement', 'mtc'),
-    'network': ('mt-tls-network:latency', 'docker/Dockerfile.network', 'measurement'),
+    'lab': ('mt-tls-lab:local', 'docker/original_campaigns/Dockerfile', None),
+    'compact': ('mt-tls-compact:local', 'docker/original_campaigns/Dockerfile.compact', 'lab'),
+    'profile': ('mt-tls-profile:local', 'docker/original_campaigns/Dockerfile.profile', 'compact'),
+    'mtc': ('mt-tls-mtc:local', 'docker/original_campaigns/Dockerfile.mtc', 'profile'),
+    'measurement': ('mt-tls-measurement:local', 'docker/original_campaigns/Dockerfile.measurement', 'mtc'),
+    'network': ('mt-tls-network:latency', 'docker/original_campaigns/Dockerfile.network', 'measurement'),
 }
 
 def inspect(reference):

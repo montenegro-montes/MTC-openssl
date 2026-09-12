@@ -1,0 +1,9 @@
+**
+!profiling/
+!profiling/*.c
+!profiling/*.h
+!profiling/*.py
+!profiling/*.sh
+!docker/
+!docker/original_campaigns/
+!docker/original_campaigns/Dockerfile.profile
