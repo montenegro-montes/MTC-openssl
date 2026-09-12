@@ -22,7 +22,7 @@ COPY codigoOriginal/C/crypto /opt/mt/crypto
 COPY codigoOriginal/C/*tests.c /opt/mt/
 RUN mkdir /opt/mt/bin && for test in merkle_tests mtc_tests merkle_mtc_tests; do \
     cc -Wall -Wextra -I/opt/openssl/include /opt/mt/$test.c /opt/mt/crypto/merkle.c /opt/mt/crypto/mtc.c -L/opt/openssl/lib -lcrypto -o /opt/mt/bin/$test; done
-COPY integration /opt/mt/integration
+COPY src/integration /opt/mt/integration
 RUN cc -Wall -Wextra -I/opt/openssl/include -I/opt/mt/crypto -I/opt/mt/integration \
     /opt/mt/integration/mt_bundle.c /opt/mt/integration/mt_wire.c /opt/mt/crypto/merkle.c /opt/mt/crypto/mtc.c \
     -L/opt/openssl/lib -lcrypto -o /opt/mt/bin/mt_bundle
@@ -38,7 +38,8 @@ RUN cc -Wall -Wextra -Werror -I/opt/openssl/include /opt/mt/tests/extension_serv
     -I/opt/openssl/include -I/opt/mt/crypto -I/opt/mt/integration \
     /opt/mt/tests/test_wire.c /opt/mt/integration/mt_wire.c /opt/mt/crypto/merkle.c \
     -L/opt/openssl/lib -lcrypto -o /opt/mt/bin/test_wire && /opt/mt/bin/test_wire
-COPY scripts /opt/lab
+COPY scripts/runtime/client.sh scripts/runtime/server.sh scripts/runtime/benchmark-initial.py scripts/fixtures/generate-certs.sh scripts/fixtures/generate-merkle.sh scripts/lib/scenario.sh /opt/lab/
+RUN mv /opt/lab/benchmark-initial.py /opt/lab/benchmark.py
 RUN openssl list -providers && openssl list -signature-algorithms | grep -q ML-DSA
 WORKDIR /work
 CMD ["openssl", "version", "-a"]

@@ -4,7 +4,7 @@
 
 `docker/original_campaigns/Dockerfile.compact` parte de `mt-tls-lab:local` y construye un tercer ejecutable,
 `/opt/openssl-compact/bin/openssl`. Copia los fuentes a
-`/opt/src/openssl-compact`, aplica `compact/patch.py` y conserva los ejecutables
+`/opt/src/openssl-compact`, aplica `src/compact/patch.py` y conserva los ejecutables
 original y Merkle adicional en sus ubicaciones previas. No modifica libssl.
 
 El soporte RPK de OpenSSL permite enviar SubjectPublicKeyInfo en Certificate.

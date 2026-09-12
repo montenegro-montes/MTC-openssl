@@ -23,8 +23,8 @@ SCENARIOS = [
     "classic-rpk", "pq-rpk",
 ]
 SOURCE_PREFIXES = (
-    "campaigns/original_campaigns/controlled_n16_campaign/", "compact/", "integration/", "mtc/",
-    "profiling/", "codigoOriginal/C/", "scripts/",
+    "campaigns/original_campaigns/controlled_n16_campaign/", "src/compact/", "src/integration/", "src/mtc/",
+    "src/profiling/", "codigoOriginal/C/", "scripts/", "bin/",
 )
 SOURCE_FILES = {
     ".dockerignore", ".gitignore", "docker/original_campaigns/Dockerfile",

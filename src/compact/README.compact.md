@@ -2,7 +2,7 @@
 
 This phase extends the initial laboratory. It preserves the base Docker image,
 Compose definition, received code, integration, scripts, executables, and prior
-results. See the [root README](../README.md) for initial setup.
+results. See the [root README](../../README.md) for initial setup.
 
 The Compact variant sends an RPK and a Merkle credential containing identity,
 validity, and key data instead of an X.509 chain. TLS 1.3,
@@ -92,6 +92,6 @@ docker compose -f docker/original_campaigns/compose.compact.yaml run --rm client
 Tests start temporary local servers inside the container. The comparative run
 uses separate client and server containers.
 
-See the [protocol](../docs/compact-protocol.md),
-[methodology](../docs/compact-methodology.md), and
-[initial results](../docs/compact-results.md).
+See the [protocol](../../docs/compact-protocol.md),
+[methodology](../../docs/compact-methodology.md), and
+[initial results](../../docs/compact-results.md).

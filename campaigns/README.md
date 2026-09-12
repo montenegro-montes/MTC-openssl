@@ -5,10 +5,10 @@ This directory contains the executable, reproducible campaign packages. Run ever
 For an ordered execution that can be stopped and resumed across days, use:
 
 ```sh
-scripts/manage-campaigns.sh init
-scripts/manage-campaigns.sh list
-scripts/manage-campaigns.sh status
-scripts/manage-campaigns.sh next
+bin/original_campaigns/mt-campaigns init
+bin/original_campaigns/mt-campaigns list
+bin/original_campaigns/mt-campaigns status
+bin/original_campaigns/mt-campaigns next
 ```
 
 Progress and timestamped result roots are stored locally in `.mt-state/`. The

@@ -3,7 +3,7 @@ import ast
 from pathlib import Path
 
 measurement=Path('campaigns/original_campaigns/controlled_n16_campaign/measure.py').read_text()
-benchmark=Path('mtc/benchmark.py').read_text()
+benchmark=Path('src/mtc/benchmark.py').read_text()
 wrapper=Path('campaigns/original_campaigns/packet_loss_campaign/measure.py').read_text()
 assert measurement.count("source=Path('/opt/mtc/benchmark.py').read_text()") == 1
 assert benchmark.count("timeout=20") == 1

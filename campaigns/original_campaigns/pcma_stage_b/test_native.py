@@ -31,9 +31,9 @@ class NativeTests(unittest.TestCase):
         if not libdir.exists():libdir=prefix/'lib64'
         target=Path(cls.tmp.name)/'protocol.so'
         subprocess.run(['cc','-std=c11','-shared','-fPIC','-O1','-Wall','-Wextra','-Werror',
-            '-Wno-misleading-indentation','-Wno-unused-function','-I'+str(prefix/'include'),'-I'+str(ROOT/'integration'),
+            '-Wno-misleading-indentation','-Wno-unused-function','-I'+str(prefix/'include'),'-I'+str(ROOT/'src/integration'),
             '-I'+str(ROOT/'codigoOriginal/C/crypto'),str(ROOT/'campaigns/original_campaigns/pcma_stage_b/native/protocol.c'),
-            str(ROOT/'integration/mt_wire.c'),str(ROOT/'codigoOriginal/C/crypto/merkle.c'),
+            str(ROOT/'src/integration/mt_wire.c'),str(ROOT/'codigoOriginal/C/crypto/merkle.c'),
             '-L'+str(libdir),'-Wl,-rpath,'+str(libdir),'-lcrypto','-o',str(target)],check=True)
         cls.lib=C.CDLL(str(target))
         cls.lib.pc_encode.argtypes=[C.POINTER(Cache),C.c_void_p,C.c_size_t,C.POINTER(C.c_size_t)]

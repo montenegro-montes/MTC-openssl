@@ -74,7 +74,7 @@ Comparación descriptiva de medianas de tiempo de cliente en bloques sucesivos; 
 - [Serie sin detalle](../artifacts/results/profile-detail0-20260909T220523884803Z/report.md): muestras, componentes, comparaciones e información del entorno en el mismo directorio.
 - [Serie detallada](../artifacts/results/profile-detail1-20260909T220612112265Z/report.md).
 - [Pruebas](../artifacts/results/profile-validation-final/tests.log), [regresión](../artifacts/results/profile-validation-final/regression.log), [bibliotecas utilizadas](../artifacts/results/profile-validation-final/library-routing.log) y [fuentes de la fase](../artifacts/results/profile-validation-final/source/).
-- [Instrucciones de reproducción](../README.profile.md).
+- [Instrucciones de reproducción](../src/profiling/README.profile.md).
 
 Imagen final: `sha256:c02badb91c814ac13ac0069a4b867d3160e549e31c9dc2bbc511aebfe3ef1e4c`.
 

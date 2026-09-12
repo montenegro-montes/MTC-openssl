@@ -78,7 +78,7 @@ independientes ni cubren variabilidad de máquinas o redes.
 
 ```sh
 docker compose -f docker/original_campaigns/compose.mtc.yaml run --rm setup python3 /opt/mtc/prepare_scaling.py --output /work/mtc/scaling-NUEVO
-python3 mtc/run_scaling.py --fixtures /work/mtc/scaling-NUEVO --runs 3
+python3 campaigns/original_campaigns/mtc_exploratory_scaling/run.py --fixtures /work/mtc/scaling-NUEVO --runs 3
 ```
 
 Genera N=1,4,16,64,256,1024. Las primeras 16 identidades conservan las claves del

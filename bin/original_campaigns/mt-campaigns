@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 STATE_DIR="$REPO/.mt-state"
 STATE_FILE="$STATE_DIR/campaign-progress.tsv"
 ROOTS_FILE="$STATE_DIR/campaign-roots.env"
@@ -66,7 +66,7 @@ STEPS='00.doctor
 
 usage() {
   cat <<'EOF'
-Usage: scripts/manage-campaigns.sh COMMAND [ARGUMENTS]
+Usage: bin/original_campaigns/mt-campaigns COMMAND [ARGUMENTS]
 
 Commands:
   init [NAME]                  create a new persistent battery state
@@ -157,12 +157,12 @@ EOF
 
 command_for() {
   case "$1" in
-    00.doctor) echo "scripts/manage-containers.sh doctor && git status --short && git rev-parse HEAD";;
-    01.base-build) echo "scripts/manage-containers.sh build base";;
+    00.doctor) echo "bin/original_campaigns/mt-containers doctor && git status --short && git rev-parse HEAD";;
+    01.base-build) echo "bin/original_campaigns/mt-containers build base";;
     02.base-fixtures) echo "docker compose -f docker/original_campaigns/compose.yaml run --rm setup";;
-    03.compact-build) echo "scripts/manage-containers.sh build compact";;
+    03.compact-build) echo "bin/original_campaigns/mt-containers build compact";;
     04.compact-fixtures) echo "docker compose -f docker/original_campaigns/compose.compact.yaml run --rm setup";;
-    05.mtc-build) echo "scripts/manage-containers.sh build profile && scripts/manage-containers.sh build mtc";;
+    05.mtc-build) echo "bin/original_campaigns/mt-containers build profile && bin/original_campaigns/mt-containers build mtc";;
     06.mtc-fixtures) echo "docker compose -f docker/original_campaigns/compose.mtc.yaml run --rm setup";;
     07.measurement-image) echo "docker build -f docker/original_campaigns/Dockerfile.measurement --build-arg BASE_IMAGE=mt-tls-mtc:local -t mt-tls-measurement:local . && docker run --rm --network none -v \"$REPO/artifacts:/work:ro\" mt-tls-measurement:local sh /opt/measurement/tests.sh";;
     08.network-image) echo "python3 -m campaigns.common.image_chain network";;
@@ -194,7 +194,7 @@ command_for() {
     92.pcma-b-audit) echo "campaigns/original_campaigns/pcma_stage_b/run_pcma_stage_b.sh --audit --results \"$B_RESULTS\" && campaigns/original_campaigns/pcma_stage_b/run_pcma_stage_b.sh --check-model --results \"$B_RESULTS\"";;
     93.pcma-b-publication) echo "campaigns/original_campaigns/pcma_stage_b/run_pcma_stage_b.sh --analyze --results \"$B_RESULTS\" --output \"$B_RESULTS/analysis\" && campaigns/original_campaigns/pcma_stage_b/run_pcma_stage_b.sh --tables --results \"$B_RESULTS\" --output \"$B_RESULTS/tables\"";;
     100.capture-optional) echo "python3 campaigns/original_campaigns/handshake_capture/run.py --root \"$CAPTURE_ROOT\" && python3 campaigns/original_campaigns/handshake_capture/validate.py \"$CAPTURE_ROOT\"";;
-    110.archive-results) echo "python3 scripts/archive-results.py --campaign controlled-n16=\"$N16_ROOT\" --campaign scaling=\"$SCALING_ROOT\" --campaign network-latency=\"$LATENCY_ROOT\" --campaign network-bandwidth=\"$BANDWIDTH_ROOT\" --campaign packet-loss=\"$LOSS_ROOT\" --campaign combined-network=\"$COMBINED_ROOT\" --campaign pcma-stage-a=\"$PCMA_ROOT\" --campaign pcma-stage-a2=\"$A2_RESULTS\" --campaign pcma-stage-b1=\"$B_RESULTS\"";;
+    110.archive-results) echo "python3 bin/original_campaigns/mt-archive --campaign controlled-n16=\"$N16_ROOT\" --campaign scaling=\"$SCALING_ROOT\" --campaign network-latency=\"$LATENCY_ROOT\" --campaign network-bandwidth=\"$BANDWIDTH_ROOT\" --campaign packet-loss=\"$LOSS_ROOT\" --campaign combined-network=\"$COMBINED_ROOT\" --campaign pcma-stage-a=\"$PCMA_ROOT\" --campaign pcma-stage-a2=\"$A2_RESULTS\" --campaign pcma-stage-b1=\"$B_RESULTS\"";;
     *) return 1;;
   esac
 }

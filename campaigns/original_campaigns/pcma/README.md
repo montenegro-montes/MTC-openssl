@@ -10,11 +10,11 @@ is deployable or faster than TLS.
 
 ## 2. Relationship to Compact cold and warm
 
-The current implementation is defined by `compact/prepare.py`,
-`integration/mt_wire.c`, `compact/compact.c`, `compact/patch.py`, and
-`compact/scenarios.py`.
+The current implementation is defined by `src/compact/prepare.py`,
+`src/integration/mt_wire.c`, `src/compact/compact.c`, `src/compact/patch.py`, and
+`src/compact/scenarios.py`.
 
-`compact/prepare.py:credential()` encodes `MTC2`: DNS identity, validity,
+`src/compact/prepare.py:credential()` encodes `MTC2`: DNS identity, validity,
 SHA-256 of DER SPKI, and serverAuth purpose. `tree()` hashes leaves as
 `SHA-256(00 || credential)`, parents as `SHA-256(01 || left || right)`, and
 duplicates an unpaired right node. It emits one complete `MTP1` proof per leaf.

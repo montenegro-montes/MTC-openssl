@@ -1,8 +1,8 @@
-"""Host-side Docker orchestration. Run after prepare_scaling.py has completed."""
+"""Host-side Docker orchestration. Run after /opt/mtc/prepare_scaling.py has completed."""
 import argparse,csv,datetime,json,os,subprocess
 from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument('--fixtures',default='/work/mtc/scaling-20260910');p.add_argument('--runs',type=int,default=3);p.add_argument('--sizes',nargs='+',type=int,default=[1,4,16,64,256,1024]);a=p.parse_args()
-root=Path(__file__).resolve().parents[1];out=root/'artifacts/results'/('mtc-scaling-'+datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'));out.mkdir()
+root=Path(__file__).resolve().parents[3];out=root/'artifacts/results'/('mtc-scaling-'+datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'));out.mkdir()
 image=subprocess.check_output(['docker','image','inspect','mt-tls-mtc:local','--format','{{.Id}}'],text=True).strip();runs=[]
 scenarios=[f'{f}-{s}' for f in ['classic','pq'] for s in ['compact-warm','compact-cold','mtc-experimental-standalone','mtc-experimental-landmark']]
 base=['docker','compose','-f',str(root/'docker/original_campaigns/compose.mtc.yaml')]

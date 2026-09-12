@@ -23,7 +23,7 @@ def parse_metrics(log):
 
 def source_hashes():
     files=list((ROOT/'campaigns/original_campaigns/pcma_stage_b').rglob('*'))
-    files += [ROOT/x for x in ('compact/compact.c','compact/compact.h','integration/mt_wire.c','integration/mt_wire.h','codigoOriginal/C/crypto/merkle.c','codigoOriginal/C/crypto/merkle.h','campaigns/original_campaigns/pcma/core.py','campaigns/original_campaigns/pcma/cache.py','campaigns/original_campaigns/pcma/workloads.py','campaigns/original_campaigns/pcma_stage_a2/formats.py','campaigns/original_campaigns/combined_network_campaign/network.py','campaigns/original_campaigns/combined_network_campaign/config.py')]
+    files += [ROOT/x for x in ('src/compact/compact.c','src/compact/compact.h','src/integration/mt_wire.c','src/integration/mt_wire.h','codigoOriginal/C/crypto/merkle.c','codigoOriginal/C/crypto/merkle.h','campaigns/original_campaigns/pcma/core.py','campaigns/original_campaigns/pcma/cache.py','campaigns/original_campaigns/pcma/workloads.py','campaigns/original_campaigns/pcma_stage_a2/formats.py','campaigns/original_campaigns/combined_network_campaign/network.py','campaigns/original_campaigns/combined_network_campaign/config.py')]
     return {str(p.relative_to(ROOT)):digest(p) for p in files if p.is_file() and '__pycache__' not in p.parts}
 
 def command(args,**kw):

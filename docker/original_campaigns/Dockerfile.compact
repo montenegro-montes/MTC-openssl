@@ -1,6 +1,6 @@
 # Build the original Dockerfile first; previous binaries remain intact.
 FROM mt-tls-lab:local
-COPY compact /opt/compact
+COPY src/compact /opt/compact
 RUN cp -a /opt/src/openssl /opt/src/openssl-compact && \
     python3 /opt/compact/patch.py /opt/src/openssl-compact && \
     cd /opt/src/openssl-compact && perl configdata.pm --reconfigure && make -j2 apps/openssl && \

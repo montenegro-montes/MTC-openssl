@@ -59,4 +59,4 @@ timers. Comparing both series can reveal instrumentation disturbance, but
 successive Docker Desktop blocks do not isolate that cost causally. These are
 local exploratory results without latency or bandwidth emulation.
 
-See the [profiling results](../docs/profile-results.md).
+See the [profiling results](../../docs/profile-results.md).

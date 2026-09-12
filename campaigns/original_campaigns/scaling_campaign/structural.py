@@ -1,7 +1,7 @@
 """Inspect serialized fixtures, independently of TLS timings."""
 import csv,hashlib,json,math,sys
 from pathlib import Path
-sys.path.insert(0,str(Path(__file__).resolve().parents[3]/'mtc'))
+sys.path.insert(0,str(Path(__file__).resolve().parents[3]/'src/mtc'))
 from core import certificate_parts,from_pem,items,content,root as mtc_root,cover,evaluate
 sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
 def write(path,rows):

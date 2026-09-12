@@ -1,6 +1,6 @@
 # Comprobación Merkle en TLS 1.3: primera etapa
 
-Implementada en `integration/`, sin modificar los fuentes recibidos de `codigoOriginal/C/`.
+Implementada en `src/integration/`, sin modificar los fuentes recibidos de `codigoOriginal/C/`.
 El parche añade `-merkle_root` a s_client y `-merkle_proof` a s_server de OpenSSL
 3.5.8. Se aplica al construir la imagen; falla si los puntos de inserción no
 coinciden. El ejecutable original sigue en `/opt/openssl/bin/openssl`; el

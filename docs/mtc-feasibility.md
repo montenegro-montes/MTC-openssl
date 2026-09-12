@@ -1,7 +1,7 @@
 # Feasibility: MTC -05 on OpenSSL 3.5.8
 
 Pre-implementation analysis, 10 September 2026. Preserved baseline:
-`v0.3.0-profile` (`dc152ad`). SHA-256 inventory: `mtc/preservation.json`. The
+`v0.3.0-profile` (`dc152ad`). SHA-256 inventory: `src/mtc/preservation.json`. The
 original, Compact, and profiling phases were inspected together with their
 generators, verifiers, metrics, and the OpenSSL source used inside the image.
 

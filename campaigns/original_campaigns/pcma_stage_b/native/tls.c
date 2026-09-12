@@ -1,7 +1,7 @@
 /* Reuse the exact existing Compact trust, credential and warm implementation.
    No source rewriting: this translation unit also exports compact_client/server.
    PCMA registers a separate extension and separate verification callbacks. */
-#include "../../../compact/compact.c"
+#include "../../../../src/compact/compact.c"
 #include "tls.h"
 #define PC_EXT 0xffa7u
 typedef struct { Config *c; PcCache cache; char *path; } PcContext;

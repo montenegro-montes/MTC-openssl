@@ -5,7 +5,7 @@ ignored by Git. Before resetting that directory for a clean reconstruction,
 create a verified publication snapshot under `results/` with:
 
 ```sh
-python3 scripts/archive-results.py --clean-artifacts
+python3 bin/original_campaigns/mt-archive --clean-artifacts
 ```
 
 Only deliberately selected publication outputs belong in Git, inside a
@@ -27,8 +27,8 @@ Verify the snapshot and confirm that no `artifacts/` paths remain tracked before
 committing or pushing selected results:
 
 ```sh
-python3 scripts/check-published-artifacts.py
-python3 scripts/archive-results.py --verify results/campaign-snapshot-<timestamp>-<hash>
+python3 bin/original_campaigns/mt-check-publication
+python3 bin/original_campaigns/mt-archive --verify results/campaign-snapshot-<timestamp>-<hash>
 ```
 
 `.gitignore` does not affect files already tracked. Use `git rm --cached` to

@@ -1,7 +1,8 @@
 **
 !docker/
-!docker/Dockerfile
-!docker/openssl.cnf
+!docker/original_campaigns/
+!docker/original_campaigns/Dockerfile
+!docker/original_campaigns/openssl.cnf
 !scripts/
 !scripts/**
 
@@ -12,23 +13,25 @@
 !codigoOriginal/C/crypto/*.c
 !codigoOriginal/C/crypto/*.h
 
-!compact/
-!compact/**
+!src/
+!src/compact/
+!src/compact/**
 
-!integration/
-!integration/*.c
-!integration/*.h
-!integration/*.py
+!src/integration/
+!src/integration/*.c
+!src/integration/*.h
+!src/integration/*.py
 
 !campaigns/
-!campaigns/pcma/
-!campaigns/pcma/**
-!campaigns/pcma_stage_a2/
-!campaigns/pcma_stage_a2/**
-!campaigns/pcma_stage_b/
-!campaigns/pcma_stage_b/**
-!campaigns/combined_network_campaign/
-!campaigns/combined_network_campaign/**
+!campaigns/original_campaigns/
+!campaigns/original_campaigns/pcma/
+!campaigns/original_campaigns/pcma/**
+!campaigns/original_campaigns/pcma_stage_a2/
+!campaigns/original_campaigns/pcma_stage_a2/**
+!campaigns/original_campaigns/pcma_stage_b/
+!campaigns/original_campaigns/pcma_stage_b/**
+!campaigns/original_campaigns/combined_network_campaign/
+!campaigns/original_campaigns/combined_network_campaign/**
 
 !tests/
 !tests/*.c

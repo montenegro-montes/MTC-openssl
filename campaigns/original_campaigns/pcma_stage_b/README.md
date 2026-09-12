@@ -22,7 +22,7 @@ not tune policies or protocol behavior after seeing Stage-B results.
 ## 2. Confirmed Compact warm and PCMA TLS flows
 
 See [PROTOCOL.md](PROTOCOL.md) for source functions, trust checks, native OpenSSL
-boundaries and byte-for-byte layouts. The existing `compact/compact.c` source is
+boundaries and byte-for-byte layouts. The existing `src/compact/compact.c` source is
 included unchanged by `native/tls.c`; it exports the original warm/cold functions
 alongside the new PCMA functions. No existing OpenSSL app or scenario module is
 patched by this laboratory.
@@ -190,7 +190,7 @@ root-length framing. Audit checks this. Record-stream savings can differ due
 to TLS records/fragmentation. PQ's proof-only metric is unavailable, not zero.
 
 CPU/monotonic timers use the same process-clock and message/BIO accounting
-principles as `compact/metrics.c`. Setup and app/process/HTTP windows are not
+principles as `src/compact/metrics.c`. Setup and app/process/HTTP windows are not
 interchangeable with handshake timing; this driver does not issue HTTP.
 Subtimers overlap: lookup is inside reconstruction, and range lookup is inside
 partial generation. Native PCMA defensively repeats Merkle verification while

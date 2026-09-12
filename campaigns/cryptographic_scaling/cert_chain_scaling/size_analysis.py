@@ -2,7 +2,7 @@
 """Measure real DER objects and model MTC sizes with the real -05 encoder."""
 import argparse,csv,json,sys
 from pathlib import Path
-HERE=Path(__file__).resolve();REPO=HERE.parents[3];sys.path.insert(0,str(REPO/"mtc"))
+HERE=Path(__file__).resolve();REPO=HERE.parents[3];sys.path.insert(0,str(REPO/"src/mtc"))
 from core import certificate,certificate_parts,cover,proof
 from config import MTC_PROFILE_MAP,PROFILES
 def write(path,rows,fields=None):

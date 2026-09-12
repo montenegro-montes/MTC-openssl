@@ -164,13 +164,13 @@ Two shell entry points centralize routine operation from the repository root:
 
 ```sh
 # Docker images, Compose projects, services, logs and cleanup
-scripts/manage-containers.sh doctor
-scripts/manage-containers.sh menu
+bin/original_campaigns/mt-containers doctor
+bin/original_campaigns/mt-containers menu
 
 # Persistent, step-by-step experiment battery
-scripts/manage-campaigns.sh init
-scripts/manage-campaigns.sh status
-scripts/manage-campaigns.sh next
+bin/original_campaigns/mt-campaigns init
+bin/original_campaigns/mt-campaigns status
+bin/original_campaigns/mt-campaigns next
 ```
 
 The campaign manager records every step as `pending`, `running`, `completed`,
@@ -193,15 +193,20 @@ and [Docker management](docker/README.md) for the full command reference.
 │   ├── cryptographic_scaling/  Compose definitions for the second study group
 │   └── README.md               Docker category and operation index
 ├── artifacts/       local certificates, keys, fixtures, and results
-├── compact/         Compact Merkle credential implementation
-├── mtc/             MTC-experimental implementation
-├── integration/     Merkle wire format and OpenSSL integration
-├── profiling/       detailed timing instrumentation
+├── bin/
+│   └── original_campaigns/  management and publication commands
+├── src/             implementation grouped by component
+│   ├── integration/ Merkle wire format and OpenSSL integration
+│   ├── compact/     Compact Merkle credentials
+│   ├── mtc/         MTC-experimental
+│   └── profiling/   timing instrumentation
 ├── codigoOriginal/  received C, Bash, and MTC prototype sources
 ├── tests/           TLS integration tests
 ├── scripts/         shared laboratory automation
 └── docs/            protocol, methodology, validation, and result documents
 ```
+
+Start with the [architecture and review guide](docs/architecture.md) for code responsibilities, dependencies, and migrated commands.
 
 See [campaigns](campaigns/README.md) for experiment entry points,
 [Docker](docker/README.md) for images and services, and

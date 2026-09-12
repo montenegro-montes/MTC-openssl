@@ -5,10 +5,10 @@ and end-to-end TLS success have not been established during preparation.
 
 ## Confirmed existing Compact warm flow
 
-The authoritative implementation is `compact/compact.c`, included **without
-modification** by `native/tls.c`. `compact/patch.py` adds the command-line options
+The authoritative implementation is `src/compact/compact.c`, included **without
+modification** by `native/tls.c`. `src/compact/patch.py` adds the command-line options
 to the copied OpenSSL `apps/s_client.c` / `apps/s_server.c`; it does not replace
-native CertificateVerify or Finished verification. `compact/scenarios.py` and
+native CertificateVerify or Finished verification. `src/compact/scenarios.py` and
 the chained scenario definitions in `campaigns/original_campaigns/controlled_n16_campaign/scenarios.py`
 select the configured OpenSSL executable. Existing measurement code launches a
 new `s_client` per sample and has no persistent Merkle-node cache.

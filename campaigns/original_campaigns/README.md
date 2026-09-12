@@ -22,3 +22,5 @@ Commands must be run from the repository root using the new
 `campaigns/original_campaigns/<name>/` paths. The campaign manager already
 uses these locations. Existing artifacts and publication snapshots have not
 been moved or rewritten.
+
+The [exploratory MTC scaling runner](mtc_exploratory_scaling/README.md) is kept separately from the controlled scaling study.

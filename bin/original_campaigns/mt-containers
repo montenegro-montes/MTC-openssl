@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$REPO"
 
 COMPOSE_FILES="
@@ -20,7 +20,7 @@ capture:docker/original_campaigns/compose.capture.yaml
 
 usage() {
   cat <<'EOF'
-Usage: scripts/manage-containers.sh COMMAND [TARGET] [OPTIONS]
+Usage: bin/original_campaigns/mt-containers COMMAND [TARGET] [OPTIONS]
 
 Commands:
   list                         list Compose targets and purposes
@@ -44,7 +44,7 @@ Targets: base compact profile mtc measurement scaling latency bandwidth loss
          combined capture
 
 This tool does not delete artifacts or campaign results. Use
-scripts/archive-results.py --clean-artifacts only after archiving results.
+bin/original_campaigns/mt-archive --clean-artifacts only after archiving results.
 EOF
 }
 

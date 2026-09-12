@@ -2,8 +2,9 @@
 !docker/
 !docker/original_campaigns/
 !docker/original_campaigns/Dockerfile.mtc
-!mtc/
-!mtc/*.py
-!mtc/*.c
-!mtc/*.h
-!mtc/*.sh
+!src/
+!src/mtc/
+!src/mtc/*.py
+!src/mtc/*.c
+!src/mtc/*.h
+!src/mtc/*.sh

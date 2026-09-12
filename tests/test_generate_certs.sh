@@ -30,12 +30,12 @@ chmod +x "$tmp/bin/openssl" "$tmp/bin/mt_bundle"
 
 export PATH="$tmp/bin:$PATH"
 export WORK_ROOT="$tmp/work"
-export MERKLE_SCRIPT="$repo/scripts/generate-merkle.sh"
+export MERKLE_SCRIPT="$repo/scripts/fixtures/generate-merkle.sh"
 export MT_BUNDLE="$tmp/bin/mt_bundle"
 export MOCK_LOG="$tmp/openssl.log"
 export MOCK_BUNDLE_LOG="$tmp/bundle.log"
 
-bash "$repo/scripts/generate-certs.sh" \
+bash "$repo/scripts/fixtures/generate-certs.sh" \
   --profile ecdsa-p384 --algorithm EC \
   --pkeyopt ec_paramgen_curve:P-384 \
   --digest sha384 --sigopt ecdsa_nonce_type:1 --days 45
@@ -53,13 +53,13 @@ grep -q '^pkeyopt=ec_paramgen_curve:P-384$' "$tmp/work/certs/ecdsa-p384/generati
 grep -q '^sigopt=ecdsa_nonce_type:1$' "$tmp/work/certs/ecdsa-p384/generation-parameters.txt"
 
 before=$(wc -l <"$MOCK_LOG")
-bash "$repo/scripts/generate-certs.sh" \
+bash "$repo/scripts/fixtures/generate-certs.sh" \
   --profile ecdsa-p384 --algorithm EC --pkeyopt ec_paramgen_curve:P-256
 test "$(wc -l <"$MOCK_LOG")" -eq "$before"
 
 export WORK_ROOT="$tmp/default-work"
 mkdir -p "$WORK_ROOT"
-bash "$repo/scripts/generate-certs.sh"
+bash "$repo/scripts/fixtures/generate-certs.sh"
 test -f "$WORK_ROOT/certs/classic/server.pem"
 test -f "$WORK_ROOT/certs/pq/server.pem"
 test -f "$WORK_ROOT/merkle/classic/root.bin"
@@ -69,12 +69,12 @@ grep -q '^pkeyopt=ec_paramgen_curve:P-256$' "$WORK_ROOT/certs/classic/generation
 grep -q '^algorithm=ML-DSA-65$' "$WORK_ROOT/certs/pq/generation-parameters.txt"
 
 export WORK_ROOT="$tmp/work"
-if bash "$repo/scripts/generate-certs.sh" --profile ../escape --algorithm EC \
+if bash "$repo/scripts/fixtures/generate-certs.sh" --profile ../escape --algorithm EC \
   >"$tmp/invalid.out" 2>"$tmp/invalid.err"; then
   echo 'invalid profile unexpectedly accepted' >&2
   exit 1
 fi
 test ! -e "$tmp/escape"
 
-bash "$repo/scripts/generate-certs.sh" --help | grep -q -- '--pkeyopt OPTION'
+bash "$repo/scripts/fixtures/generate-certs.sh" --help | grep -q -- '--pkeyopt OPTION'
 echo 'PASS configurable certificate generation'

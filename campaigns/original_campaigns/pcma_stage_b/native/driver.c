@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "tls.h"
-#include "../../../compact/compact.h"
+#include "../../../../src/compact/compact.h"
 #include <openssl/err.h>
 #include <openssl/crypto.h>
 #include <openssl/objects.h>

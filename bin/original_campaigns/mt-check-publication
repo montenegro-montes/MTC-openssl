@@ -3,7 +3,7 @@
 import subprocess
 from pathlib import Path
 
-repo = Path(__file__).resolve().parents[1]
+repo = Path(__file__).resolve().parents[2]
 tracked = subprocess.check_output(["git", "ls-files", "artifacts"], cwd=repo, text=True).splitlines()
 if tracked:
     raise SystemExit("Generated artifacts must not be tracked:\n" + "\n".join(tracked))

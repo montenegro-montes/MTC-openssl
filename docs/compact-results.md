@@ -53,7 +53,7 @@ separar el coste de representación de clave, parser, política y prueba Merkle.
 - [Comparaciones e intervalos](../artifacts/results/compact-20260909T162401146258Z/comparisons.csv)
 - [Metadatos y hashes](../artifacts/results/compact-20260909T162401146258Z/metadata.json)
 - [Informe de ejecución](../artifacts/results/compact-20260909T162401146258Z/report.md)
-- [Instrucciones](../README.compact.md) y [método](compact-methodology.md).
+- [Instrucciones](../src/compact/README.compact.md) y [método](compact-methodology.md).
 
 Los enlaces a artifacts apuntan a resultados locales excluidos de Git; este
 documento conserva las cifras principales. Se conservaron las ejecuciones
