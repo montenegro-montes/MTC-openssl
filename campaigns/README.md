@@ -66,3 +66,38 @@ Use the exact variable and commands shown in each package README. Never combine
 results produced from different source commits without recording that
 distinction. Do not commit private keys, packet captures, temporary Docker files
 or large raw result directories.
+
+## Start over without an archive
+
+From the repository root, run:
+
+```sh
+bin/original_campaigns/mt-campaigns reset-all
+```
+
+Read the warning and type `RESET ALL` to confirm. Any other answer or end of
+input cancels before Docker is contacted. There is no `--yes` bypass. The same
+action is available as option 6 in the campaign menu, even without an initialized
+battery. Stop active campaign processes first.
+
+The reset deletes `artifacts/` and `.mt-state/` without making a backup or
+publication snapshot. It removes containers, networks and volumes labelled with
+the laboratory Compose projects (including temporary `pcmab*` Stage B projects
+and `certchainscaling`) and removes `mt-tls-*` image tags. Docker cleanup must
+succeed before local files are deleted. A failure can leave Docker partially
+cleaned; inspect the error before retrying.
+
+Source files and published `results/` remain intact. Fixtures/results configured
+outside `artifacts/` are not deleted. Other projects and the shared Docker build
+cache are preserved; this is a reset of laboratory data and images, not a purge
+of the Docker installation. Future builds can reuse that cache.
+
+Then initialize a new battery and advance one step at a time:
+
+```sh
+bin/original_campaigns/mt-campaigns init
+bin/original_campaigns/mt-campaigns next
+```
+
+A new battery records its normal progress and measurement outputs. The reset
+itself creates no backup of discarded data.

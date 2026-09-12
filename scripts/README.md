@@ -12,3 +12,8 @@ Use the commands in [`bin/original_campaigns/`](../bin/original_campaigns/) for 
 
 The base Dockerfile installs these files under `/opt/lab/`, preserving their
 runtime names. Study-specific runners and analyses belong in `campaigns/`.
+
+`maintenance/reset_lab.py` implements the destructive `mt-campaigns reset-all`
+action. It requires the literal confirmation `RESET ALL`, uses Docker Compose
+labels to select laboratory resources and deletes only the fixed local paths
+`artifacts/` and `.mt-state/`. See [campaign management](../campaigns/README.md).

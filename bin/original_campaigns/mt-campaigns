@@ -77,6 +77,7 @@ Commands:
   next                         execute the first pending/failed step
   mark STEP STATUS             set pending/completed/failed/skipped manually
   retry STEP                   mark pending and execute again
+  reset-all                   discard local data and lab Docker resources; requires RESET ALL
   reset [--yes]                remove progress only; never removes artifacts
   archive-clean [--yes]        archive completed results, then clean artifacts
   menu                         interactive interface
@@ -227,15 +228,16 @@ next_step() {
 }
 
 menu() {
-  require_state
   while :; do
-    echo; echo "Campaign manager: 1 status | 2 run next | 3 run step | 4 show step | 5 mark step | 0 exit"
+    echo; echo "Campaign manager: 1 status | 2 run next | 3 run step | 4 show step | 5 mark step | 6 reset all | 7 initialize | 0 exit"
     printf 'Selection: '; read -r choice
     case "$choice" in
       1) show_status;; 2) next_step || true;;
       3) printf 'Step: '; read -r id; run_step "$id" || true;;
       4) printf 'Step: '; read -r id; load_roots; command_for "$id";;
       5) printf 'Step: '; read -r id; printf 'Status: '; read -r value; has_step "$id" && set_status "$id" "$value";;
+      6) python3 "$REPO/scripts/maintenance/reset_lab.py" || true;;
+      7) init_state;;
       0) return;; *) echo "Invalid selection";;
     esac
   done
@@ -248,6 +250,7 @@ case "$cmd" in
   run) [ "$#" -eq 1 ] || { usage; exit 2; }; run_step "$1";; next) next_step;;
   mark) [ "$#" -eq 2 ] || { usage; exit 2; }; require_state; has_step "$1" || exit 2; set_status "$1" "$2";;
   retry) [ "$#" -eq 1 ] || { usage; exit 2; }; require_state; set_status "$1" pending; run_step "$1";;
+  reset-all) [ "$#" -eq 0 ] || { echo "reset-all requires interactive confirmation; no options accepted" >&2; exit 2; }; python3 "$REPO/scripts/maintenance/reset_lab.py";;
   reset) [ "${1:-}" = "--yes" ] || { printf 'Delete local campaign progress? [y/N] '; read -r a; case "$a" in y|Y) :;; *) exit 1;; esac; }; rm -f "$STATE_FILE" "$ROOTS_FILE"; echo "Progress reset";;
   archive-clean)
     [ "${1:-}" = "--yes" ] || { printf 'Archive this battery and delete artifacts? [y/N] '; read -r a; case "$a" in y|Y) :;; *) exit 1;; esac; }
