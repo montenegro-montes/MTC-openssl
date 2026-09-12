@@ -1,5 +1,6 @@
 #include "mtc.h"
 #include <openssl/pem.h>
+#include <openssl/core_names.h>
 #include <openssl/x509v3.h>
 #include <stdio.h>
 #include <string.h>
@@ -59,6 +60,24 @@ static int message(const MTCConfig *c,const Signer *signer,uint64_t start,uint64
     put(out+pos,timestamp,8);pos+=8;out[pos++]=(unsigned char)b;memcpy(out+pos,log,b);pos+=b;
     put(out+pos,start,8);pos+=8;put(out+pos,end,8);pos+=8;memcpy(out+pos,root,32);*n=pos+32;return 1;
 }
+/* Signer policy only. The Merkle tree and leaf hashes remain SHA-256. */
+static const char *ec_signer_digest(EVP_PKEY *key){
+    char group[80];size_t length=0;
+    if(!key || !EVP_PKEY_is_a(key,"EC") ||
+       !EVP_PKEY_get_utf8_string_param(key,OSSL_PKEY_PARAM_GROUP_NAME,group,sizeof(group),&length))return NULL;
+    if(!strcmp(group,"prime256v1") || !strcmp(group,"secp256r1") || !strcmp(group,"P-256"))return "SHA256";
+    if(!strcmp(group,"secp384r1") || !strcmp(group,"P-384"))return "SHA384";
+    if(!strcmp(group,"secp521r1") || !strcmp(group,"P-521"))return "SHA512";
+    return NULL;
+}
+static int supported_signer_key(EVP_PKEY *key){
+    static const char *names[]={"mldsa44","ML-DSA-44","mldsa65","ML-DSA-65","mldsa87","ML-DSA-87",
+        "slhdsasha2128s","SLH-DSA-SHA2-128s","slhdsasha2192s","SLH-DSA-SHA2-192s","slhdsasha2256s","SLH-DSA-SHA2-256s"};
+    if(!key)return 0;
+    if(EVP_PKEY_is_a(key,"EC"))return ec_signer_digest(key)!=NULL;
+    for(size_t i=0;i<sizeof(names)/sizeof(names[0]);i++)if(EVP_PKEY_is_a(key,names[i]))return 1;
+    return 0;
+}
 static int sigcheck(MTCConfig *c,Slice sigs,uint64_t start,uint64_t end,const unsigned char root[32],uint64_t timestamp){
     Slice prev={NULL,0},id,sig;unsigned valid=0;unsigned char msg[400];size_t n;
     while(sigs.n){
@@ -69,7 +88,7 @@ static int sigcheck(MTCConfig *c,Slice sigs,uint64_t start,uint64_t end,const un
         prev=id;
         for(unsigned i=0;i<c->count;i++)if(id.n==c->signers[i].idlen&&!memcmp(id.p,c->signers[i].binary,id.n)){
             EVP_MD_CTX *md=EVP_MD_CTX_new();Signer *s=&c->signers[i];int ok=0;
-            if(md&&message(c,s,start,end,root,timestamp,msg,&n)&&EVP_DigestVerifyInit_ex(md,NULL,EVP_PKEY_is_a(s->key,"EC")?"SHA256":NULL,NULL,NULL,s->key,NULL))
+            if(md&&supported_signer_key(s->key)&&message(c,s,start,end,root,timestamp,msg,&n)&&EVP_DigestVerifyInit_ex(md,NULL,ec_signer_digest(s->key),NULL,NULL,s->key,NULL))
                 ok=EVP_DigestVerify(md,sig.p,sig.n,msg,n)==1;
             EVP_MD_CTX_free(md);if(ok)valid|=1u<<i;
         }
@@ -89,7 +108,7 @@ MTCConfig *mtc_load(const char *path,int landmark){
         const unsigned char *p;
         if(!vector(&s,1,&x)||!ascii(x,c->signers[i].id)||!id_encode(c->signers[i].id,c->signers[i].binary,&c->signers[i].idlen)||!vector(&s,2,&x))goto end;
         p=x.p;c->signers[i].key=d2i_PUBKEY(NULL,&p,(long)x.n);
-        if(!c->signers[i].key||p!=x.p+x.n||(!EVP_PKEY_is_a(c->signers[i].key,"EC")&&!EVP_PKEY_is_a(c->signers[i].key,"mldsa65")&&!EVP_PKEY_is_a(c->signers[i].key,"ML-DSA-65")))goto end;
+        if(!c->signers[i].key||p!=x.p+x.n||!supported_signer_key(c->signers[i].key))goto end;
     }
     if(strcmp(c->caid,c->signers[0].id)||!strcmp(c->signers[0].id,c->signers[1].id))goto end;
     if(!number(&s,2,&c->log)||c->log!=1||!number(&s,8,&c->min)||!number(&s,8,&c->max)||c->min!=(1ULL<<48)||c->max<c->min||c->max-c->min>=1024)goto end;

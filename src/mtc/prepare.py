@@ -1,23 +1,33 @@
 """Create immutable initial issuance snapshots from the SAME compact population."""
-import argparse,json,os,subprocess,time
+import argparse,json,os,shutil,subprocess,time
 from pathlib import Path
 from core import *
+from crypto_profiles import crypto_profile, PAPER1_PROFILES, TREE_HASH
 OPENSSL='/opt/openssl/bin/openssl'
 def command(*args,data=None):return subprocess.run([OPENSSL,*map(str,args)],input=data,capture_output=True,check=True).stdout
 def keygen(path,family):
-    command('genpkey','-algorithm','EC' if family=='classic' else 'mldsa65',*(['-pkeyopt','ec_paramgen_curve:P-256'] if family=='classic' else []),'-out',path)
+    profile=crypto_profile(family)
+    command('genpkey','-algorithm',profile['implementation_algorithm'],*(['-pkeyopt','ec_paramgen_curve:'+profile['curve']] if profile['curve'] else []),'-out',path)
 def sign(path,data,family):
+    profile=crypto_profile(family)
     tmp=path.parent/'sign-input.tmp';tmp.write_bytes(data)
-    try:return command('pkeyutl','-sign','-rawin','-inkey',path,'-in',tmp,*(['-digest','sha256'] if family=='classic' else []))
+    try:return command('pkeyutl','-sign','-rawin','-inkey',path,'-in',tmp,*(['-digest',profile['digest']] if profile['digest'] else []))
     finally:tmp.unlink()
-def prepare(out,batch,family,n):
-    begin=time.perf_counter();out.mkdir();caid='32473.'+('1' if family=='classic' else '2');ids=[caid,'32473.'+('3' if family=='classic' else '4')]
+def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
+    profile=crypto_profile(family)
+    if not 1<=n<=1024:raise ValueError('Unsupported MTC population')
+    if originals is None and family in PAPER1_PROFILES:raise ValueError('Paper-1 requires an explicit same-profile X.509 population')
+    begin=time.perf_counter();out.mkdir();caid=profile['ca_id'];ids=list(profile['cosigner_ids'])
     keys=[];public=[]
     for i in range(2):
-        key=out/f'cosigner-{i}.key';keygen(key,family);keys.append(key)
+        key=out/f'cosigner-{i}.key'
+        if signer_keys is None:keygen(key,family)
+        else:shutil.copyfile(signer_keys[i],key)
+        keys.append(key)
         public.append(command('pkey','-in',key,'-pubout','-outform','DER'))
         (out/f'cosigner-{i}.spki').write_bytes(public[-1])
-    originals=[Path('/work/certs')/family/'server.pem']+[batch/family/'issued'/f'{i}.pem' for i in range(1,n)]
+    if originals is None:originals=[Path('/work/certs')/family/'server.pem']+[batch/family/'issued'/f'{i}.pem' for i in range(1,n)]
+    if len(originals)!=n:raise ValueError('Population length differs from N')
     certs=[from_pem(p.read_bytes()) for p in originals]
     tbs=[mtc_tbs(c,caid,i) for i,c in enumerate(certs)];entries=[entry(t) for t in tbs]
     log=out/'log';log.mkdir()
@@ -65,6 +75,8 @@ def prepare(out,batch,family,n):
         'setup_ms':(time.perf_counter()-begin)*1000,'sizes':sizes,'trust_file_bytes':len(config),
         'ca_key_note':'Separate from directly-signing X509 CA as required by MTC -05 section 5.4',
         'changed_fields':['issuer','serialNumber','signature algorithm','signatureValue','old authorityKeyIdentifier omitted']}
+    if family in PAPER1_PROFILES:meta.update(profile=family,standard_name=profile['standard_name'],implementation_algorithm=profile['implementation_algorithm'],security_level=profile['security_level'],merkle_hash=TREE_HASH,mtc_modes=['landmark','standalone'])
+    if metadata:meta.update(metadata)
     (out/'manifest.json').write_text(json.dumps(meta,indent=2)+'\n');return meta
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--batch',type=Path,default=Path('/work/compact/batch16'));p.add_argument('--output',type=Path,required=True)

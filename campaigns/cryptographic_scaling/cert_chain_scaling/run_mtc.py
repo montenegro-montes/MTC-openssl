@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Filtered manual MTC runner over preserved scaling fixtures."""
-import argparse,json,os,subprocess
+import argparse,json,os,subprocess,sys
 from pathlib import Path
-from config import IMAGE,MTC_PROFILE_MAP,TREE_SIZES
+from config import IMAGE,LEGACY_MTC_PROFILE_MAP as MTC_PROFILE_MAP,TREE_SIZES
 REPO=Path(__file__).resolve().parents[3];ARTIFACTS=REPO/"artifacts";COMPOSE=["docker","compose","-f",str(REPO/"docker/original_campaigns/compose.scaling.yaml")]
-def main():
+def legacy_main():
  p=argparse.ArgumentParser();p.add_argument("--fixtures",type=Path,required=True,help="Scaling root containing batchN directories");p.add_argument("--output",type=Path,required=True);p.add_argument("--profile",choices=MTC_PROFILE_MAP,default="mldsa65");p.add_argument("--scenario",choices=["landmark","standalone"],default="landmark");p.add_argument("--tree-size",type=int,choices=TREE_SIZES,required=True);p.add_argument("--campaigns",type=int,default=1);p.add_argument("--repetitions",type=int,default=30);p.add_argument("--warmups",type=int,default=5);p.add_argument("--seed",type=int,default=51000);p.add_argument("--image",default=IMAGE);p.add_argument("--execute",action="store_true");a=p.parse_args()
  fixtures=a.fixtures.resolve();output=a.output.resolve()
  try:fixture_container="/work/"+str(fixtures.relative_to(ARTIFACTS.resolve()));result_container="/work/results/"+str(output.relative_to((ARTIFACTS/"results").resolve()))
@@ -19,4 +19,10 @@ def main():
    subprocess.run(COMPOSE+["up","-d","--force-recreate","--wait","server"],env=env,check=True)
    subprocess.run(COMPOSE+["run","--rm","client","python3","/opt/measurement/measure.py","--runs",str(a.repetitions),"--warmup",str(a.warmups),"--seed",str(seed),"--image-id",image_id,"--scenarios",scenario],env=env,check=True)
   finally:subprocess.run(COMPOSE+["down"],env=env,check=False)
+def main():
+ # Historical scenario names and measurement controls remain an explicit path.
+ if "--legacy" in sys.argv:
+  sys.argv.remove("--legacy");legacy_main();return
+ workflow=REPO/"campaigns/cryptographic_scaling/mtc_profile_scaling/workflow.py"
+ subprocess.run([sys.executable,str(workflow),"validate",*sys.argv[1:]],check=True)
 if __name__=="__main__":main()

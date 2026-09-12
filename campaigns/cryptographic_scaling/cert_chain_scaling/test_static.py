@@ -12,8 +12,8 @@ class StaticTests(unittest.TestCase):
    self.assertEqual(crossover_status(profile,True,[{}],False),"OUTSIDE_SEARCH_RANGE")
    self.assertEqual(crossover_status(profile,True,[{}],True),"CROSSED")
   for supplied in (False,True):
-   self.assertEqual(crossover_status("slhdsa128s",supplied,[],False),"UNSUPPORTED_MTC_PROFILE")
+   self.assertEqual(crossover_status("unknown-profile",supplied,[],False),"UNSUPPORTED_MTC_PROFILE")
  def test_matrix(self):
   self.assertEqual(DEPTHS,(2,3,4,5));self.assertEqual(len(PROFILES),9)
-  self.assertEqual(MTC_PROFILE_MAP,{"ecdsa-p256":"classic","mldsa65":"pq"})
+  self.assertEqual(MTC_PROFILE_MAP,{name:name for name in PROFILES})
 if __name__=="__main__":unittest.main()

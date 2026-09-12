@@ -1,0 +1,31 @@
+# Same server-network-namespace capture strategy as the original capture campaign.
+services:
+  server:
+    image: ${PROTOCOL_IMAGE:?}
+    volumes:
+      - ${PROTOCOL_CODE:?}:/protocol:ro
+      - ${PROTOCOL_FIXTURE:?}:/fixture:ro
+      - ${PROTOCOL_KEY:?}:/server.key:ro
+      - ${PROTOCOL_OUTPUT:?}:/capture
+    entrypoint: [python3, /protocol/capture.py]
+    command: [--inside, server, --mode, "${PROTOCOL_MODE}", --profile, "${PROTOCOL_PROFILE}"]
+    healthcheck:
+      test: [CMD, test, -f, /capture/server.ready]
+      interval: 1s
+      retries: 30
+  capture:
+    image: ${PROTOCOL_CAPTURE_IMAGE:?}
+    network_mode: service:server
+    cap_add: [NET_RAW, NET_ADMIN]
+    volumes:
+      - ${PROTOCOL_OUTPUT:?}:/capture
+    entrypoint: [tcpdump]
+    command: [-i, eth0, -s, "0", -U, -w, /capture/handshake.pcap, "tcp port 4433"]
+  client:
+    image: ${PROTOCOL_IMAGE:?}
+    volumes:
+      - ${PROTOCOL_CODE:?}:/protocol:ro
+      - ${PROTOCOL_FIXTURE:?}:/fixture:ro
+      - ${PROTOCOL_OUTPUT:?}:/capture
+    entrypoint: [python3, /protocol/capture.py]
+    command: [--inside, client, --mode, "${PROTOCOL_MODE}", --profile, "${PROTOCOL_PROFILE}"]

@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# Manual coordinator only: scientific source, fixtures and outputs remain immutable.
+set -euo pipefail
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+cd "$REPO"
+STATE="$REPO/.mt-state/cert-scaling"
+CONFIG="$STATE/paths.env"
+CHAIN=campaigns/cryptographic_scaling/cert_chain_scaling
+MTC=campaigns/cryptographic_scaling/mtc_profile_scaling/workflow.py
+STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 70.mtc-all 80.crossover 90.audit)
+fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+usage() {
+ cat <<'HELP'
+Uso: bin/cryptographic_scaling/mt-cert-scaling [COMANDO]
+  menu                      menú interactivo (opción predeterminada)
+  protocol                  abrir el menú separado de validación de protocolo
+  init [FECHA]              guardar rutas; no ejecutar ni generar fixtures
+  status                    rutas, etapas y progreso de certificados
+  list                      etapas disponibles
+  show ETAPA                mostrar comando sin ejecutarlo
+  run ETAPA                 ejecutar una única etapa y guardar su log
+  set VARIABLE RUTA         seleccionar una ruta existente o una salida nueva
+
+Variables: CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID
+           MTC_ALL STATIC_ROOT AUDIT
+Las etapas aceptan número (70) o nombre completo (70.mtc-all).
+No hay ejecución automática de la matriz TLS, borrado ni reinicio destructivo.
+Para continuar una campaña manual usa init con su fecha y set para sus rutas.
+HELP
+}
+load() { [[ -f "$CONFIG" ]] || fail 'Primero ejecuta init [FECHA].'; source "$CONFIG"; }
+save() {
+ local key
+ (umask 077; : > "$CONFIG.tmp"
+ for key in STAMP CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT; do
+  printf '%s=%q\n' "$key" "${!key}" >> "$CONFIG.tmp"
+ done
+ mv "$CONFIG.tmp" "$CONFIG")
+}
+init() {
+ [[ ! -e "$CONFIG" ]] || fail 'Ya hay configuración. Usa status y set; no se sobrescribe.'
+ STAMP=${1:-$(date -u +%Y%m%dT%H%M%SZ)}
+ [[ "$STAMP" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Fecha/nombre no válido.'
+ CHAIN_FIXTURES="artifacts/cert-chain-scaling/fixtures-$STAMP"
+ CHAIN_VALID="artifacts/results/cert-chain-validation-$STAMP.json"
+ ENVIRONMENT="artifacts/cert-chain-scaling/environment-$STAMP.json"
+ SUPPORT="artifacts/cert-chain-scaling/algorithm_support-$STAMP.csv"
+ MTC16="artifacts/paper1-mtc/n16-$STAMP"
+ MTC_VALID="artifacts/results/paper1-mtc-n16-$STAMP"
+ MTC_ALL="artifacts/paper1-mtc/all-$STAMP"
+ STATIC_ROOT="artifacts/results/paper1-crossover-$STAMP"
+ AUDIT="artifacts/results/paper1-crossover-audit-$STAMP.json"
+ mkdir -p "$STATE"; save
+ printf 'Rutas guardadas. No se ha ejecutado ninguna campaña.\n'
+}
+select_step() {
+ local entry
+ for entry in "${STEPS[@]}"; do
+  if [[ "$1" == "$entry" || "$1" == "${entry%%.*}" ]]; then STEP=$entry; return; fi
+ done
+ fail "Etapa desconocida: $1"
+}
+plan() {
+ select_step "$1"
+ case "$STEP" in
+  10.*) OUT=$ENVIRONMENT; CMD=(python3 "$CHAIN/inspect_environment.py" --output "$ENVIRONMENT" --support-output "$SUPPORT");;
+  20.*) OUT=$CHAIN_FIXTURES; CMD=(python3 "$CHAIN/generate_fixtures.py" --output "$CHAIN_FIXTURES");;
+  30.*) OUT=$CHAIN_VALID; CMD=(python3 "$CHAIN/validate.py" "$CHAIN_FIXTURES" --output "$CHAIN_VALID");;
+  40.*) OUT=''; CMD=(bin/original_campaigns/mt-containers build mtc);;
+  50.*) OUT=$MTC16; CMD=(python3 "$MTC" generate --output "$MTC16" --execute);;
+  60.*) OUT=$MTC_VALID; CMD=(python3 "$MTC" validate --fixtures "$MTC16" --output "$MTC_VALID" --execute);;
+  70.*) OUT=$MTC_ALL; CMD=(python3 "$MTC" generate --sizes 1 4 16 64 256 1024 --seed-fixtures "$MTC16" --validated-n16 "$MTC_VALID/validation.json" --output "$MTC_ALL" --execute);;
+  80.*) OUT=$STATIC_ROOT; CMD=(python3 "$CHAIN/size_analysis.py" "$CHAIN_FIXTURES" --mtc-fixtures "$MTC_ALL" --output "$STATIC_ROOT");;
+  90.*) OUT=$AUDIT; CMD=(python3 "$CHAIN/validate.py" "$CHAIN_FIXTURES" --analysis "$STATIC_ROOT" --output "$AUDIT");;
+ esac
+}
+show_command() { printf '%q ' "${CMD[@]}"; printf '\n'; }
+progress() {
+ local root=$1 dir count
+ [[ -d "$root/population" ]] || return 0
+ printf '\nPoblación %s (objetivo por perfil: %s):\n' "$root" "$2"
+ for dir in "$root"/population/*; do
+  [[ -d "$dir" ]] || continue
+  count=$(find "$dir" -maxdepth 1 -type f -name '*.pem' ! -name ca.pem | wc -l | tr -d ' ')
+  printf '  %-16s %s certificados\n' "${dir##*/}" "$count"
+ done
+ printf 'Llegar al objetivo no significa que los objetos MTC estén terminados.\n'
+}
+status() {
+ load
+ local key step state
+ for key in CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT; do
+  printf '%-16s %s\n' "$key" "${!key}"
+ done
+ printf '\nEtapas (salida existente no implica validación):\n'
+ for step in "${STEPS[@]}"; do
+  plan "$step"; state='pendiente/no ejecutada por este lanzador'
+  [[ ! -f "$STATE/$STEP.status" ]] || state=$(cat "$STATE/$STEP.status")
+  [[ -z "$OUT" || ! -e "$OUT" ]] || state="$state; salida existente"
+  printf '  %-20s %s\n' "$STEP" "$state"
+ done
+ progress "$MTC16" 16
+ progress "$MTC_ALL" 1024
+ [[ ! -d "$STATE/lock" ]] || printf '\nHay un bloqueo de ejecución. Revisa el proceso y su log antes de intervenir.\n'
+}
+require_path() { [[ -e "$1" ]] || fail "Falta entrada: $1"; }
+preflight() {
+ [[ -z "$OUT" || ! -e "$OUT" ]] || fail "La salida ya existe: $OUT. No se sobrescribe ni se reanuda. Consulta status o usa set con otra ruta."
+ case "$STEP" in
+  10.*) [[ ! -e "$SUPPORT" ]] || fail "Ya existe $SUPPORT";;
+  30.*) require_path "$CHAIN_FIXTURES";;
+  60.*) require_path "$MTC16/manifest.json";;
+  70.*) require_path "$MTC_VALID/validation.json"; require_path "$MTC16/manifest.json";;
+  80.*) require_path "$CHAIN_VALID"; require_path "$MTC_ALL/manifest.json"; require_path "$MTC_VALID/validation.json"
+    python3 - "$CHAIN_VALID" "$MTC_VALID/validation.json" <<'PY'
+import json,sys
+for path in sys.argv[1:]:
+    data=json.load(open(path))
+    if data.get('passed') is not True:
+        raise SystemExit('La validación no indica passed=true: '+path)
+PY
+    ;;
+  90.*) require_path "$STATIC_ROOT/analysis.json"; require_path "$CHAIN_FIXTURES";;
+ esac
+}
+run() (
+ load; plan "$1"; preflight
+ mkdir "$STATE/lock" 2>/dev/null || fail 'Otra etapa está en marcha (o quedó un bloqueo tras una interrupción).'
+ trap 'rmdir "$STATE/lock" 2>/dev/null || true' EXIT
+ local log rc monitor
+ log="$STATE/$STEP-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
+ printf 'running; log=%s\n' "$log" > "$STATE/$STEP.status"
+ printf 'Etapa: %s\nLog: %s\n' "$STEP" "$log"; show_command
+ # Monitor only new output: no edits to the running scientific implementation.
+ (
+  while sleep 30; do
+   printf '[%s] Sigue en ejecución: %s\n' "$(date +%H:%M:%S)" "$STEP"
+   case "$STEP" in 50.*) progress "$MTC16" 16;; 70.*) progress "$MTC_ALL" 1024;; esac
+  done
+ ) & monitor=$!
+ trap 'kill "$monitor" 2>/dev/null || true; rmdir "$STATE/lock" 2>/dev/null || true' EXIT
+ trap 'printf "interrupted; log=%s\n" "$log" > "$STATE/$STEP.status"; exit 130' INT TERM
+ set +e
+ PYTHONUNBUFFERED=1 "${CMD[@]}" 2>&1 | tee "$log"
+ rc=${PIPESTATUS[0]}
+ set -e
+ kill "$monitor" 2>/dev/null || true
+ if [[ "$rc" == 0 ]]; then
+  printf 'completed; log=%s\n' "$log" > "$STATE/$STEP.status"
+  printf 'COMPLETED %s\n' "$STEP"
+ else
+  printf 'failed (exit %s); log=%s\n' "$rc" "$log" > "$STATE/$STEP.status"
+  printf 'FAILED %s (exit %s). Se conserva toda la salida.\n' "$STEP" "$rc"
+ fi
+ exit "$rc"
+)
+set_path() {
+ load
+ [[ ! -d "$STATE/lock" ]] || fail 'No cambies rutas durante una etapa.'
+ case "$1" in CHAIN_FIXTURES|CHAIN_VALID|ENVIRONMENT|SUPPORT|MTC16|MTC_VALID|MTC_ALL|STATIC_ROOT|AUDIT) ;;
+  *) fail 'Variable de ruta desconocida.';;
+ esac
+ [[ -n "$2" ]] || fail 'Ruta vacía.'
+ printf -v "$1" '%s' "$2"; save
+ # Recorded exits belong to the previous path configuration, not the new one.
+ local file
+ for file in "$STATE"/*.status; do
+  [[ ! -f "$file" ]] || mv "$file" "$file.previous-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+ done
+ printf 'Ruta guardada. Logs anteriores conservados.\n'
+}
+menu() {
+ local choice value key
+ while true; do
+  printf '\nCert scaling: 1 Inicializar  2 Estado/progreso  3 Ver comando\n              4 Ejecutar etapa  5 Cambiar ruta  6 Protocolo MTC  0 Salir\n'
+  read -r -p '> ' choice || return 0
+  case "$choice" in
+   1) read -r -p 'Fecha/nombre (vacío = nuevo): ' value; "$0" init "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
+   2) "$0" status || true;;
+   3|4) printf '%s\n' "${STEPS[@]}"; read -r -p 'Número de etapa: ' value
+    if [[ "$choice" == 3 ]]; then "$0" show "$value" || true; else "$0" run "$value" || true; fi;;
+   5) read -r -p 'Variable (ver status): ' key; read -r -p 'Ruta: ' value; "$0" set "$key" "$value" || true;;
+   6) "$REPO/bin/cryptographic_scaling/mt-protocol-validation" menu || true;;
+   0) return 0;;
+  esac
+ done
+}
+case "${1:-menu}" in
+ init) init "${2:-$(date -u +%Y%m%dT%H%M%SZ)}";;
+ status) status;;
+ list) printf '%s\n' "${STEPS[@]}";;
+ show) load; plan "${2:?Indica etapa}"; show_command;;
+ run) run "${2:?Indica etapa}";;
+ set) set_path "${2:?Indica variable}" "${3:?Indica ruta}";;
+ protocol) exec "$REPO/bin/cryptographic_scaling/mt-protocol-validation" menu;;
+ menu) menu;;
+ help|--help|-h) usage;;
+ *) usage; exit 2;;
+esac

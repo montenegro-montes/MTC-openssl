@@ -17,11 +17,76 @@ and MTC tree depth are separate dimensions. Exact boundaries are documented in
 | 5 | P-521 | ML-DSA-87 | SLH-DSA-SHA2-256s |
 
 Standard names and implementation identifiers are recorded separately. TLS eligibility
-is detected from the actual image, not inferred from key generation. The existing
-MTC-experimental issuer supports P-256 (`classic`) and ML-DSA-65 (`pq`) only.
-Other profiles remain in the static X.509 design and receive `UNSUPPORTED_MTC_PROFILE` in
-crossover output. Falcon/FN-DSA and SLH-DSA fast variants are extension points,
-not default profiles.
+is detected from the actual image, not inferred from key generation. The explicit
+Paper-1 MTC registry prepares all nine profiles with the same real signature
+algorithm as X.509. The historical `classic`/`pq` aliases retain their original
+P-256/ML-DSA-65 meaning. See the [N=16 functional gate](../mtc_profile_scaling/README.md)
+before generating MTC fixtures or executing comparisons. Provider/TLS support still
+requires manual validation; the mapping alone is not evidence of success.
+
+## Bash coordinator (recommended)
+
+Use `bin/cryptographic_scaling/mt-cert-scaling` for an interactive menu, persistent
+paths, per-stage logs and progress counters. It only runs the stage you select.
+It does not launch a performance matrix. Initialization and status never invoke
+Docker or generate fixtures. Source files used by the N=16 hash gate are untouched
+by this coordinator.
+
+For the existing manual campaign:
+
+```sh
+bin/cryptographic_scaling/mt-cert-scaling init 20260912T203417Z
+bin/cryptographic_scaling/mt-cert-scaling status
+bin/cryptographic_scaling/mt-cert-scaling menu
+```
+
+The date selects `artifacts/paper1-mtc/n16-DATE`, `all-DATE` and
+`artifacts/results/paper1-mtc-n16-DATE`. It does not infer completion from directory
+existence. For the separately generated X.509 fixtures, set the actual paths via
+the menu's **Cambiar ruta** option (`CHAIN_FIXTURES` and `CHAIN_VALID`). The latter
+must refer to their successful validation JSON, often inside the fixture root.
+Other paths can be changed with `set VARIABLE PATH`; previous execution logs are
+preserved. Initialization refuses to replace existing coordinator state.
+
+Option **6 — Protocolo MTC** opens the separate protocol-validation menu;
+`bin/cryptographic_scaling/mt-cert-scaling protocol` opens it directly. It has its
+own state and initially uses legacy pq N=16 fixtures. It does not require this
+campaign's X.509 chain generation or crossover. See the
+[protocol workflow](../../protocol_validation/README.md) for dependencies and gates.
+
+Stages:
+
+| Number | Action |
+|---|---|
+| 10 | Inspect measurement image and algorithms |
+| 20 | Generate X.509 fixtures |
+| 30 | Validate X.509 fixtures |
+| 40 | Build MTC image using current dependencies |
+| 50 | Generate nine-profile N=16 fixtures |
+| 60 | Validate N=16, 18 TLS handshakes |
+| 70 | Generate all sizes after the N=16 gate |
+| 80 | Static sizes and crossover using successful validations |
+| 90 | Audit X.509 fixtures and analysis output presence |
+
+`show 70` prints the exact command; `run 70` executes it. While generation runs,
+the coordinator prints a heartbeat and certificate counters every 30 seconds.
+These counters are not a completion percentage: MTC objects are generated after
+the population. Run `status` from another terminal to inspect a process started
+manually too; heartbeat monitoring only applies to newly launched steps.
+
+Do not rerun stages already completed manually or currently running. For the
+existing all-size generation, wait for successful completion, configure the X.509
+paths, then select stage **80**. Outputs are immutable: failures preserve partial
+outputs; select a fresh path before a new attempt. A process lock serializes runs
+started by this coordinator, but cannot detect independently launched campaigns.
+A hard interruption may leave `.mt-state/cert-scaling/lock`; inspect the process
+and log before manually removing that empty lock directory.
+
+For a fresh campaign, run `init` without a date and review the saved paths.
+The required measurement/profile base images must already exist. Stage 40 rebuilds
+MTC only; do not select it during an active campaign. Stage 90 invokes Docker for
+X.509 verification; it does not validate performance results or prove draft
+compliance. TLS performance commands below remain separate manual operations.
 
 Define fresh immutable locations:
 
@@ -60,61 +125,25 @@ python3 campaigns/cryptographic_scaling/cert_chain_scaling/validate.py "$CHAIN_F
 python3 campaigns/cryptographic_scaling/cert_chain_scaling/size_analysis.py "$CHAIN_FIXTURES" --output "$STATIC_ROOT"
 ```
 
-To include MTC sizes and X.509–MTC crossover, first prepare fixtures with the
-[original Merkle population scaling campaign](../../original_campaigns/scaling_campaign/README.md),
-located at `campaigns/original_campaigns/scaling_campaign/`. This is separate
-from the Paper-1 certificate-chain campaign and from the exploratory MTC runner.
-
-The dependency is **fixture generation and structural validation**, not the
-full scaling timing campaign. The base, Compact and MTC fixtures and the
-measurement image must already be prepared (original battery steps through
-`07.measurement-image`). With an initialized battery, inspect its state:
+To include MTC sizes and X.509–MTC crossover, first run the separate
+[Paper-1 MTC profile preparation and N=16 gate](../mtc_profile_scaling/README.md).
+It generates N=16 for nine algorithms and requires 18 successful handshakes
+(one per mode/profile) before the remaining sizes. It does not require the
+original scaling campaign. Set `MTC_SCALING_ROOT` to the new complete fixture
+root produced after that gate. Choose a new analysis output directory:
 
 ```sh
-bin/original_campaigns/mt-campaigns status
-```
-
-If these stages are still pending, run them in order; stop on any failure:
-
-```sh
-mkdir -p artifacts/results
-bin/original_campaigns/mt-campaigns run 20.scaling-init &&
-bin/original_campaigns/mt-campaigns run 21.scaling-tests-before &&
-bin/original_campaigns/mt-campaigns run 22.scaling-generate
-```
-
-- `20.scaling-init` creates the scaling campaign metadata.
-- `21.scaling-tests-before` runs the regression gate and records the image ID;
-  its tests do include TLS connections inside the container.
-- `22.scaling-generate` generates populations N=1,4,16,64,256,1024 and runs
-  `structural.py` to validate the resulting Compact/MTC fixtures.
-
-Only proceed when `22.scaling-generate` completes. Do not rerun completed
-stages over immutable outputs. Steps `23.scaling-preflight` through
-`26.scaling-analysis` belong to the full scaling measurement campaign and are
-not required for this static comparison. Fixture generation itself can be
-expensive and is a manual operation.
-
-Obtain the actual fixture directory recorded by that campaign, from the
-repository root:
-
-```sh
-. .mt-state/campaign-roots.env
-MTC_SCALING_ROOT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["host"])' "$SCALING_ROOT/fixture-location.json")
-```
-
-`SCALING_ROOT` contains the campaign metadata; `MTC_SCALING_ROOT` contains the
-`batch1`, `batch4`, …, `batch1024` fixture directories. They are different
-paths. For a different battery, read its own `fixture-location.json` rather
-than using the current battery's state.
-
-Then run the combined static analysis. If the X.509-only command above already
-created `STATIC_ROOT`, assign a **new output path** first, for example
-`STATIC_ROOT="${STATIC_ROOT}-with-mtc"`; existing analyses are not overwritten.
-
-```sh
+STATIC_ROOT="artifacts/results/cert-chain-with-mtc-$STAMP"
 python3 campaigns/cryptographic_scaling/cert_chain_scaling/size_analysis.py "$CHAIN_FIXTURES" --mtc-fixtures "$MTC_SCALING_ROOT" --output "$STATIC_ROOT"
 ```
+
+For historical **two-profile** reproduction only, the
+[original scaling campaign](../../original_campaigns/scaling_campaign/README.md)
+uses steps `20.scaling-init`, `21.scaling-tests-before`, `22.scaling-generate`
+after its base prerequisites through `07.measurement-image`. Its fixture path is
+recorded in `$SCALING_ROOT/fixture-location.json` (`host` field). Pass
+`--legacy-mtc-fixtures` explicitly to analyze those `classic`/`pq` directories;
+they cannot supply the seven additional profiles. Existing outputs remain intact.
 
 This writes `key_sizes.csv`, `certificate_sizes.csv`, `chain_sizes.csv`,
 `mtc_sizes.csv`, and `crossover.csv`. It measures real DER objects. MTC powers
@@ -125,7 +154,7 @@ The crossover status distinguishes absent data from implementation limits:
 
 | Status | Meaning |
 |---|---|
-| `MTC_FIXTURES_NOT_PROVIDED` | P-256 or ML-DSA-65 is supported, but `--mtc-fixtures` was omitted |
+| `MTC_FIXTURES_NOT_PROVIDED` | A configured profile is supported, but `--mtc-fixtures` was omitted |
 | `MISSING_MTC_FIXTURES` | A directory was supplied, but no matching MTC landmark fixtures were found for that supported profile |
 | `UNSUPPORTED_MTC_PROFILE` | The MTC issuer does not implement this profile, independently of fixture availability |
 | `CROSSED` | The model reaches the X.509 size within the evaluated range |
@@ -146,12 +175,8 @@ column -s, -t < "$STATIC_ROOT/crossover.csv" | less -S
 python3 campaigns/cryptographic_scaling/cert_chain_scaling/run.py --fixtures "$CHAIN_FIXTURES" --output "artifacts/results/cert-chain-functional-$STAMP" --profile ecdsa-p256 --depth 3 --campaigns 1 --repetitions 2 --warmups 0 --execute
 ```
 
-Representative MTC N=16 landmark and standalone checks use the filtered MTC
-runner and existing immutable scaling fixtures:
-
-```sh
-python3 campaigns/cryptographic_scaling/cert_chain_scaling/run_mtc.py --fixtures "$MTC_SCALING_ROOT" --output "artifacts/results/mtc-functional-$STAMP" --profile mldsa65 --scenario landmark --tree-size 16 --repetitions 2 --warmups 0 --execute
-```
+MTC functional validation uses the [dedicated N=16 sequence](../mtc_profile_scaling/README.md).
+It is separate from the X.509 performance commands below.
 
 7. Run one algorithm only:
 
@@ -179,13 +204,8 @@ python3 campaigns/cryptographic_scaling/cert_chain_scaling/run.py --fixtures "$C
 python3 campaigns/cryptographic_scaling/cert_chain_scaling/run.py --fixtures "$CHAIN_FIXTURES" --output "$TLS_ROOT" --campaigns 5 --repetitions 30 --warmups 5 --full-matrix --execute
 ```
 
-11. Run optional MTC standalone separately. Preview by omitting `--execute`:
-
-```sh
-python3 campaigns/cryptographic_scaling/cert_chain_scaling/run_mtc.py --fixtures "$MTC_SCALING_ROOT" --output "artifacts/results/mtc-standalone-$STAMP" --profile mldsa65 --scenario standalone --tree-size 16 --campaigns 5 --repetitions 30 --warmups 5
-```
-
-Do not mix standalone output into the primary X.509 result root.
+11. MTC standalone is included in the dedicated functional gate. Further MTC
+performance matrices are deferred until all nine profiles pass that gate.
 
 12. Audit fixtures and static outputs:
 
@@ -226,9 +246,9 @@ the exact same image ID and OpenSSL version; the builder writes its manifest onl
 chain verification. These static checks are not TLS handshakes.
 
 Standardized SLH-DSA remains in key, SPKI, DER, signature and D=2..5 chain-size
-analysis and standalone validation. MTC crossover remains restricted to the
-existing P-256/ML-DSA-65 issuer implementation; other rows retain
-`UNSUPPORTED_MTC_PROFILE`. SPHINCS+ names, hybrids and SLH-DSA fast variants
+analysis and standalone validation. MTC crossover uses the nine explicit same-algorithm profiles. Missing fixtures
+receive `MISSING_MTC_FIXTURES`; unvalidated TLS capability is not inferred from
+this mapping. SPHINCS+ names, hybrids and SLH-DSA fast variants
 never substitute for the configured standardized algorithms.
 
 For the former OpenSSL 3.5.8 stack, absent SLH-DSA TLS schemes mean explicit
