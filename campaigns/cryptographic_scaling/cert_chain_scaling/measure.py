@@ -2,6 +2,14 @@
 """Measure one X.509 chain with randomized warmup/measured rounds."""
 import argparse,csv,json,os,re,subprocess,time
 from pathlib import Path
+from config import PROFILES
+from capabilities import STANDARD
+
+def profile_metadata(profile, depth):
+ config=PROFILES[profile]
+ return {"profile":profile,"family":config["family"],"algorithm":STANDARD.get(profile,config.get("standard_name",config["algorithm"])),
+         "implementation_algorithm":config["algorithm"],"security_level":config["level"],"certificate_depth":depth,"TLS_signature_supported":True}
+
 OPENSSL="/opt/measurement/openssl.sh"
 def main():
  p=argparse.ArgumentParser();p.add_argument("--runs",type=int,required=True);p.add_argument("--warmups",type=int,required=True);p.add_argument("--scenario",required=True);p.add_argument("--campaign",required=True);p.add_argument("--seed",type=int,required=True);a=p.parse_args()
@@ -18,7 +26,7 @@ def main():
    if len(paths)!=1:raise RuntimeError("missing server metrics")
    server=json.loads(paths[0].read_text());(out/"server-metrics"/(key+".json")).write_text(paths[0].read_text())
    if client["reused"] or server["reused"] or client["certificate_message_bytes"]!=server["certificate_message_bytes"]:raise RuntimeError("endpoint invariant failed")
-   row={"campaign":a.campaign,"scenario":a.scenario,"algorithm":os.environ["CERT_PROFILE_NAME"],"family":"X.509","security_level":"","chain_depth":int(os.environ["CERT_DEPTH_VALUE"]),"tree_size":"","mtc_profile":"","round":round_id,"repetition":round_id,"is_warmup":is_warm,"seed":a.seed,"fixture_hash":os.environ["FIXTURE_SHA256"],"image_id":os.environ["IMAGE_ID"],"git_commit":os.environ["SOURCE_COMMIT"],"client_random":key,"handshake_wall_ms":client["handshake_wall_ms"],"client_cpu_ms":client["handshake_cpu_ms"],"server_cpu_ms":server["handshake_cpu_ms"],"authentication_processing_wall_ms":client["components"]["peer_auth"]["wall_ms"],"authentication_processing_cpu_ms":client["components"]["peer_auth"]["cpu_ms"],"certificate_message_bytes":client["certificate_message_bytes"],"certificate_verify_message_bytes":client["certificate_verify_message_bytes"],"tls_bio_read_bytes":client["transport_read_bytes"],"tls_bio_written_bytes":client["transport_written_bytes"],"process_http_wall_ms":process_ms,"success":1}
+   row={"campaign":a.campaign,"scenario":a.scenario,**profile_metadata(os.environ["CERT_PROFILE_NAME"],int(os.environ["CERT_DEPTH_VALUE"])),"chain_depth":int(os.environ["CERT_DEPTH_VALUE"]),"tree_size":"","mtc_profile":"","round":round_id,"repetition":round_id,"is_warmup":is_warm,"seed":a.seed,"fixture_hash":os.environ["FIXTURE_SHA256"],"image_id":os.environ["IMAGE_ID"],"git_commit":os.environ["SOURCE_COMMIT"],"client_random":key,"handshake_wall_ms":client["handshake_wall_ms"],"client_cpu_ms":client["handshake_cpu_ms"],"server_cpu_ms":server["handshake_cpu_ms"],"authentication_processing_wall_ms":client["components"]["peer_auth"]["wall_ms"],"authentication_processing_cpu_ms":client["components"]["peer_auth"]["cpu_ms"],"certificate_message_bytes":client["certificate_message_bytes"],"certificate_verify_message_bytes":client["certificate_verify_message_bytes"],"tls_bio_read_bytes":client["transport_read_bytes"],"tls_bio_written_bytes":client["transport_written_bytes"],"process_http_wall_ms":process_ms,"success":1}
    (warm if is_warm else rows).append(row)
  for name,data in [("observations.csv",rows),("warmups.csv",warm)]:
   with (out/name).open("w",newline="") as f:w=csv.DictWriter(f,fieldnames=list((data or rows)[0]));w.writeheader();w.writerows(data)

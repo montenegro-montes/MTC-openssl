@@ -9,6 +9,13 @@ python3 /opt/compact/test_tls.py
 PROFILE_DETAIL=1 python3 /opt/profiling/test_tls.py
 sh /opt/profiling/test_timer.sh
 sh /opt/mtc/test_verifier.sh
+cc -std=c11 -D_POSIX_C_SOURCE=200809L -I/opt/openssl/include /opt/mtc/test_security.c \
+  -L/opt/openssl/lib -Wl,-rpath,/opt/openssl/lib -lssl -lcrypto -o /tmp/mtc-security-test
+for family in classic pq; do
+  for mode in standalone landmark; do
+    /tmp/mtc-security-test "/work/mtc/batch16-v2/$family/$mode-0000.pem" "/work/certs/$family/server.pem"
+  done
+done
 python3 /opt/mtc/test_tls.py
 printf 'Saved security suites on the measurement-only executable\n'
 python3 /opt/measurement/test_saved.py compact

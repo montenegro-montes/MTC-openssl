@@ -49,6 +49,6 @@ def main():
         cert_spki=run_bytes("pkey","-pubin","-outform","DER",input=run_bytes("x509","-in",path,"-pubkey","-noout"))
         certificate_checks[name]={"signature_algorithms":algorithms,"spki_sha256":hashlib.sha256(cert_spki).hexdigest(),"key_matches_certificate":cert_spki==(a.output/f"{name}-spki.der").read_bytes()}
     files={x.name:hash_file(x) for x in sorted(a.output.iterdir()) if x.is_file()}
-    meta={"schema":1,"profile":a.profile,"security_level":profile["level"],"family":profile["family"],"requested_algorithm":profile["algorithm"],"curve":profile.get("curve"),"digest":profile.get("digest"),"depth_including_root":a.depth,"transmitted_certificates":len(chain),"root_transmitted":False,"validity_days":a.days,"openssl":run("version","-a"),"certificate_checks":certificate_checks,"files_sha256":files}
+    meta={"schema":2,"image_id":os.environ.get("FIXTURE_IMAGE_ID"),"source_commit":os.environ.get("FIXTURE_SOURCE_COMMIT"),"generator_sha256":hash_file(Path(__file__)),"config_sha256":hash_file(Path(__file__).with_name("config.py")),"profile":a.profile,"security_level":profile["level"],"family":profile["family"],"requested_algorithm":profile["algorithm"],"curve":profile.get("curve"),"digest":profile.get("digest"),"depth_including_root":a.depth,"transmitted_certificates":len(chain),"root_transmitted":False,"validity_days":a.days,"openssl":run("version","-a"),"certificate_checks":certificate_checks,"files_sha256":files}
     (a.output/"manifest.json").write_text(json.dumps(meta,indent=2)+"\n")
 if __name__=="__main__":main()

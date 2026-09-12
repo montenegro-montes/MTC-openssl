@@ -21,7 +21,7 @@ def main():
   if r["algorithm"] in {"ecdsa-p256","mldsa65"} and r["depth"] in {"2","5"}:ax.axhline(int(r["tls_certificate_message_bytes"]),linewidth=.6,linestyle="--",alpha=.5)
  ax.set_xscale("log",base=2);ax.set(xlabel="Merkle population N",ylabel="MTC landmark TLS Certificate bytes");ax.legend();fig.tight_layout();fig.savefig(a.output/"mtc-scaling.pdf");plt.close(fig)
  if a.measurements and (a.measurements/"summary.csv").is_file():
-  summary=rows(a.measurements/"summary.csv");labels=[r["scenario"] for r in summary]
+  summary=rows(a.measurements/"summary.csv");summary=[r for r in summary if r.get("TLS_signature_supported") in ("True","true","1")];labels=[r["scenario"] for r in summary]
   for filename,column,ylabel in [("authentication-processing.pdf","authentication_processing_wall_ms_median_of_campaign_medians","Authentication processing wall ms"),("tls-authentication-bytes.pdf","certificate_message_bytes_median_of_campaign_medians","TLS Certificate message bytes")]:
    fig,ax=plt.subplots(figsize=(8,4));ax.bar(labels,[float(r[column]) for r in summary]);ax.set_ylabel(ylabel);ax.tick_params(axis="x",rotation=45);fig.tight_layout();fig.savefig(a.output/filename);plt.close(fig)
  measured=[r for r in mtc if r["evidence"]=="measured fixture"]
@@ -31,5 +31,6 @@ def main():
    g=[r for r in measured if r["mtc_profile"]==mode and r["algorithm"]=="mldsa65"]
    if g:ax.plot([int(r["tree_size"]) for r in g],[int(r["tls_certificate_message_bytes"]) for r in g],marker="o",label=mode)
   ax.set_xscale("log",base=2);ax.set(xlabel="Merkle population N",ylabel="TLS Certificate message bytes");ax.legend();fig.tight_layout();fig.savefig(a.output/"mtc-standalone-vs-landmark.pdf");plt.close(fig)
+ (a.output/'captions.txt').write_text('Certificate and chain-size plots are static serialization results, including SLH-DSA.\nTLS performance plots include only validated observations supported by the recorded image. Algorithms without an exposed TLS signature scheme are unavailable, not zero or failed performance. Consult summary-algorithm_support.csv for the tested stack.\n')
  print(a.output)
 if __name__=="__main__":main()

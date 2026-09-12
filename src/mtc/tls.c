@@ -1,6 +1,7 @@
 #include "mtc.c"
 #define CONTEXT (SSL_EXT_TLS_ONLY|SSL_EXT_TLS1_3_ONLY|SSL_EXT_CLIENT_HELLO|SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS|SSL_EXT_TLS1_3_CERTIFICATE)
-typedef struct {MTCConfig *trust;unsigned char id[80],list[83];size_t n;int server;} TLSConfig;
+typedef int (*SecurityCallback)(const SSL *,const SSL_CTX *,int,int,int,void *,void *);
+typedef struct {SecurityCallback previous_security;MTCConfig *trust;unsigned char id[80],list[83];size_t n;int server;} TLSConfig;
 typedef struct {int matched,available,confirmed;} TLSState;
 static int ci=-1,si=-1;
 static void config_free(void *parent,void *ptr,CRYPTO_EX_DATA *ad,int idx,long l,void *arg){TLSConfig *c=ptr;(void)parent;(void)ad;(void)idx;(void)l;(void)arg;if(c){mtc_free(c->trust);OPENSSL_free(c);}}
@@ -42,6 +43,26 @@ end:
     if(ok)fprintf(stderr,"MTC verification: OK\nMTC_VERIFY {\"mtc_credential_auth_ms\":%.6f}\n",tick()-begin);
     return ok;
 }
+/* The MTC signatureValue is a proof, not an X.509 CA signature. Allow only
+   the local MTC proof OID at the CA-digest gate. Keep key strength, peer-chain,
+   CertificateVerify and every other policy decision in the original callback. */
+static int proof_algorithm(const X509_ALGOR *alg){
+    const ASN1_OBJECT *obj=NULL;char oid[80];
+    if(!alg)return 0;
+    X509_ALGOR_get0(&obj,NULL,NULL,alg);
+    return obj && OBJ_obj2txt(oid,sizeof(oid),obj,1)>0
+        && strcmp(oid,"1.3.6.1.4.1.44363.47.0")==0;
+}
+static int mtc_security(const SSL *ssl,const SSL_CTX *ctx,int op,int bits,int nid,void *other,void *ex){
+    const SSL_CTX *active=ctx?ctx:(ssl?SSL_get_SSL_CTX(ssl):NULL);
+    TLSConfig *c=ci>=0 && active?SSL_CTX_get_ex_data(active,ci):NULL;
+    if(c && c->server && op==SSL_SECOP_CA_MD && other){
+        const X509_ALGOR *alg=NULL;X509 *cert=other;
+        X509_get0_signature(NULL,&alg,cert);
+        if(proof_algorithm(alg) && proof_algorithm(X509_get0_tbs_sigalg(cert)))return 1;
+    }
+    return c && c->previous_security?c->previous_security(ssl,ctx,op,bits,nid,other,ex):0;
+}
 static int install(SSL_CTX *ctx,TLSConfig *c){
     if(ci<0)ci=SSL_CTX_get_ex_new_index(0,NULL,NULL,NULL,config_free);
     if(si<0)si=SSL_get_ex_new_index(0,NULL,NULL,NULL,state_free);
@@ -49,6 +70,7 @@ static int install(SSL_CTX *ctx,TLSConfig *c){
     put(c->list,c->n+1,2);c->list[2]=(unsigned char)c->n;memcpy(c->list+3,c->id,c->n);
     if(!SSL_CTX_add_custom_ext(ctx,MTC_EXT,CONTEXT,add,NULL,c,parse,c))return 0;
     if(!c->server)SSL_CTX_set_cert_verify_callback(ctx,verify,c);
+    else {c->previous_security=SSL_CTX_get_security_callback(ctx);SSL_CTX_set_security_callback(ctx,mtc_security);}
     return 1;
 }
 int mtc_client(SSL_CTX *ctx,const char *path,int landmark){

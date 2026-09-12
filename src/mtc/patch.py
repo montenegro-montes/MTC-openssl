@@ -24,7 +24,7 @@ for app in ['s_client','s_server']:
     }
 '''
     else:
-        anchor='    SSL_CTX_set_verify(ctx, s_server_verify, verify_callback);'
+        anchor='    if (!set_cert_key_stuff(ctx, s_cert, s_key, s_chain, build_chain))'
         code='''    if (mtc_file || mtc_landmark_mode) {
         if (!mtc_file || mt_file || compact_a || compact_b || mt_incompatible || enable_server_rpk || ctx2
             || !mtc_server(ctx,mtc_file)) {

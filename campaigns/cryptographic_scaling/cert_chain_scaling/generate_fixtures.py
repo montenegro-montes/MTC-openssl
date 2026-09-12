@@ -13,6 +13,11 @@ def main():
  if a.plan:
   print(json.dumps({"output":str(out),"commands":commands},indent=2));return
  out.parent.mkdir(parents=True,exist_ok=True)
- for command in commands:subprocess.run(command,check=True)
+ image_id=json.loads(subprocess.check_output(["docker","image","inspect",a.image],text=True))[0]["Id"]
+ commit=subprocess.check_output(["git","rev-parse","HEAD"],cwd=REPO,text=True).strip()
+ for command in commands:
+  command[command.index(a.image)]=image_id
+  command[3:3]=["-e","FIXTURE_IMAGE_ID="+image_id,"-e","FIXTURE_SOURCE_COMMIT="+commit]
+  subprocess.run(command,check=True)
  print(out)
 if __name__=="__main__":main()
