@@ -3,8 +3,8 @@ FROM debian:bookworm-slim
 #ARG LIBOQS_VERSION=0.14.0
 #ARG OQS_PROVIDER_VERSION=0.10.0
 ARG OPENSSL_VERSION=3.4.7
-ARG LIBOQS_VERSION=0.15.0
-ARG OQS_PROVIDER_VERSION=0.11.0
+ARG LIBOQS_VERSION=0.16.0
+ARG OQS_PROVIDER_VERSION=main
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake ninja-build git ca-certificates perl python3 pkg-config && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/src
 RUN git clone --depth 1 --branch openssl-${OPENSSL_VERSION} https://github.com/openssl/openssl.git && \
@@ -44,7 +44,8 @@ RUN cc -Wall -Wextra -Werror -I/opt/openssl/include /opt/mt/tests/extension_serv
 COPY scripts/runtime/client.sh scripts/runtime/server.sh scripts/runtime/benchmark-initial.py scripts/fixtures/generate-certs.sh scripts/fixtures/generate-merkle.sh scripts/lib/scenario.sh /opt/lab/
 RUN mv /opt/lab/benchmark-initial.py /opt/lab/benchmark.py
 RUN openssl list -providers && \
-    openssl list -signature-algorithms | grep -Eiq 'mldsa44|ML-DSA' && \
-    openssl list -tls-signature-algorithms | grep -q slhdsasha2128s
+    openssl list -signature-algorithms -provider oqsprovider | grep -Eiq 'mldsa44|ML-DSA' && \
+    openssl list -signature-algorithms -provider oqsprovider | grep -q slhdsasha2128s && \
+    openssl list -tls-signature-algorithms | tr ':' '\n' | grep -qx slhdsasha2128s
 WORKDIR /work
 CMD ["openssl", "version", "-a"]
