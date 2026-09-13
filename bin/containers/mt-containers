@@ -38,6 +38,7 @@ Commands:
   images                       list mt-tls-* images
   inspect-image IMAGE          show image identity and creation metadata
   remove-images [--yes]        remove project images after stopping projects
+  reset-images [--yes|--dry-run] remove project containers/images and unused <none> images
   clean [--yes]                stop every project and remove orphan containers
   menu                         interactive menu
 
@@ -100,7 +101,7 @@ compose() {
 confirm() {
   [ "${1:-}" = "--yes" ] && return 0
   printf 'Continue? [y/N] '
-  read -r answer
+  read -r answer || return 1
   case "$answer" in y|Y|yes|YES) return 0;; *) echo "Cancelled"; return 1;; esac
 }
 
@@ -148,13 +149,13 @@ project_down() {
   containers=$(docker ps -aq --filter "label=com.docker.compose.project=$project")
   if [ -n "$containers" ]; then
     # Deliberate word splitting passes each Docker ID as one argument.
-    docker rm -f $containers
+    docker rm -f $containers || return
   else
     echo "No containers for Compose project $project"
   fi
   networks=$(docker network ls -q --filter "label=com.docker.compose.project=$project")
   if [ -n "$networks" ]; then
-    docker network rm $networks
+    docker network rm $networks || return
   else
     echo "No networks for Compose project $project"
   fi
@@ -168,6 +169,60 @@ all_down() {
   done
 }
 
+reset_images() {
+  local option=${1:-} tags ids containers='' id image target remaining
+  case "$option" in ''|--yes|--dry-run) ;; *) echo 'ERROR: Usage: reset-images [--yes|--dry-run]' >&2; return 2;; esac
+  tags=$(docker image ls --filter reference='mt-tls-*' --format '{{.Repository}}:{{.Tag}}') || return
+  ids=$(docker image ls --no-trunc --filter reference='mt-tls-*' -q | sort -u) || return
+  local inventory
+  inventory=$(docker ps -a --no-trunc --format '{{.ID}} {{.Image}}') || return
+  while read -r id image; do
+    [[ -n "$id" ]] || continue
+    case "$image" in
+      mt-tls-*) containers="$containers $id";;
+      *) if [[ -n "$ids" ]] && printf '%s\n' "$ids" | grep -Fxq "$image"; then containers="$containers $id"; fi;;
+    esac
+  done <<< "$inventory"
+  echo 'Project image tags selected:'
+  printf '%s\n' "${tags:-<none found>}"
+  echo 'Unused untagged images currently selected by Docker:'
+  docker image ls --filter dangling=true || return
+  echo 'WARNING: This stops/removes project containers and their writable layers, removes mt-tls-* image tags, and prunes ALL unused untagged (<none>) images on the active Docker daemon, including images from other projects.'
+  echo 'Campaign files and results on the host are preserved. Images must be rebuilt before running campaigns again.'
+  [[ "$option" != --dry-run ]] || return 0
+  confirm "$option" || return 1
+  # Stop known Compose projects plus ephemeral/dynamic project-image containers.
+  for target in $(targets); do project_down "$target" || return; done
+  if [[ -n "$containers" ]]; then
+    # Some containers were already removed by project_down.
+    for id in $containers; do
+      if docker container inspect "$id" >/dev/null 2>&1; then docker rm -f "$id" || return; fi
+    done
+  fi
+  # Remove tags, not image IDs: preserve unrelated aliases of a shared image.
+  # Retry parents after child images have been removed; stop if no progress.
+  while [[ -n "$tags" ]]; do
+    remaining=''
+    for image in $tags; do
+      if ! docker image rm "$image"; then remaining="$remaining $image"; fi
+    done
+    if [[ -n "$remaining" ]]; then
+      local before_count after_count
+      before_count=$(printf '%s\n' $tags | wc -l)
+      after_count=$(printf '%s\n' $remaining | wc -l)
+      if [[ "$before_count" -eq "$after_count" ]]; then
+        echo 'ERROR: Some project images remain in use or have dependent images. Inspect the Docker errors above; cleanup is incomplete.' >&2
+        return 1
+      fi
+    fi
+    tags=$remaining
+  done
+  docker image prune --force || return
+  remaining=$(docker image ls --filter reference='mt-tls-*' -q) || return
+  [[ -z "$remaining" ]] || { echo 'ERROR: Project images remain; another build may be active.' >&2; return 1; }
+  echo 'Project image reset completed. Untagged images referenced by other containers and build cache are retained by Docker.'
+}
+
 menu() {
   while :; do
     cat <<'EOF'
@@ -176,6 +231,7 @@ Container manager
   1) doctor       2) ps all       3) images
   4) build        5) up           6) logs
   7) shell        8) down         9) clean all
+  10) reset project images + unused <none> images
   0) exit
 EOF
     printf 'Selection: '; read -r choice
@@ -186,14 +242,14 @@ EOF
       6) printf 'Target: '; read -r t; "$0" logs "$t";;
       7) printf 'Target: '; read -r t; printf 'Service: '; read -r s; "$0" shell "$t" "$s";;
       8) printf 'Target: '; read -r t; "$0" down "$t";;
-      9) "$0" clean;; 0) return;; *) echo "Invalid selection";;
+      9) "$0" clean;; 10) "$0" reset-images || true;; 0) return;; *) echo "Invalid selection";;
     esac
   done
 }
 
 cmd=${1:-help}; shift || true
 case "$cmd" in
- ps|images|inspect-image|down|remove-images|clean) mt_docker_ready || exit 1;;
+ ps|images|inspect-image|down|remove-images|reset-images|clean) mt_docker_ready || exit 1;;
  build-chain) mt_compose_ready || exit 1;;
 esac
 case "$cmd" in
@@ -217,6 +273,7 @@ case "$cmd" in
   run) [ "$#" -ge 2 ] || { usage; exit 2; }; t=$1; s=$2; shift 2; compose "$t" run --rm "$s" "$@" ;;
   images) docker image ls --filter reference='mt-tls-*' ;;
   inspect-image) [ "$#" -eq 1 ] || { usage; exit 2; }; docker image inspect "$1" ;;
+  reset-images) [[ "$#" -le 1 ]] || { usage; exit 2; }; reset_images "${1:-}";;
   remove-images)
     yes=${1:-}; echo "This stops projects and removes local mt-tls-* images."; confirm "$yes"
     all_down

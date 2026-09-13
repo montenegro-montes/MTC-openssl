@@ -41,3 +41,22 @@ preserved. Dangling images cannot reliably be attributed to this lab, so that
 option explicitly includes other projects' dangling images. Images referenced by
 other containers are not force-removed; Docker may refuse their removal. This is
 not a global `docker system prune` and does not delete unrelated tagged images.
+
+## Reset project images
+
+```sh
+bin/containers/mt-containers reset-images --dry-run
+bin/containers/mt-containers reset-images
+```
+
+Also available as option 10 in `mt-containers menu`. The command previews image
+tags, warns and asks for confirmation. It removes known project containers and
+containers using project images, then removes `mt-tls-*` image tags and prunes
+unused untagged (`<none>`) images. Untagged-image pruning applies to the entire
+active Docker daemon, including other projects, because an untagged image cannot
+reliably be attributed to this repository. Images referenced by other containers
+and build cache remain. Unrelated tags on shared images are preserved.
+
+`--yes` explicitly bypasses confirmation. Host fixtures, results and launcher
+state remain unchanged; this is an image reset, not a campaign data reset.
+Rebuild the required images with `mt-prepare run ALL` or `mt-install` afterward.
