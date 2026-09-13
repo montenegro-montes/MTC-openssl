@@ -3,6 +3,7 @@
 set -euo pipefail
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$REPO"
+source "$REPO/bin/lib/docker-preflight.sh"
 STATE="$REPO/.mt-state/cert-scaling"
 CONFIG="$STATE/paths.env"
 CHAIN=campaigns/cryptographic_scaling/cert_chain_scaling
@@ -107,6 +108,11 @@ status() {
 }
 require_path() { [[ -e "$1" ]] || fail "Falta entrada: $1"; }
 preflight() {
+ case "$STEP" in
+  10.*|20.*|30.*|90.*) mt_images_required mt-tls-measurement:local || return 1;;
+  40.*) mt_compose_ready && mt_image_required mt-tls-profile:local || return 1;;
+  50.*|60.*|70.*) mt_images_required mt-tls-mtc:local || return 1;;
+ esac
  [[ -z "$OUT" || ! -e "$OUT" ]] || fail "La salida ya existe: $OUT. No se sobrescribe ni se reanuda. Consulta status o usa set con otra ruta."
  case "$STEP" in
   10.*) [[ ! -e "$SUPPORT" ]] || fail "Ya existe $SUPPORT";;

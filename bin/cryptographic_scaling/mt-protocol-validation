@@ -3,6 +3,7 @@ set -euo pipefail
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 SELF="$REPO/bin/cryptographic_scaling/mt-protocol-validation"
 cd "$REPO"
+source "$REPO/bin/lib/docker-preflight.sh"
 STATE="$REPO/.mt-state/protocol-validation"
 CONFIG="$STATE/paths.env"
 STEPS=(10.offline-existing 20.offline-landmark 30.offline-standalone 40.capture-landmark 50.extract-landmark 60.validate-wire-landmark 70.report-landmark 80.capture-standalone 90.extract-standalone 100.validate-wire-standalone 110.report-standalone 120.negative)
@@ -81,6 +82,11 @@ if d.get('overall')!='PASS':raise SystemExit('Validación previa no superada: '+
 PY
 }
 preflight() {
+ case "$STEP" in
+  40.*|80.*) mt_compose_ready && mt_image_required mt-tls-measurement:local && mt_image_required mt-tls-capture:local || return 1;;
+  50.*|90.*) mt_images_required mt-tls-capture:local || return 1;;
+  *) mt_images_required mt-tls-measurement:local || return 1;;
+ esac
  [[ ! -e "$OUT" ]] || fail "Salida existente: $OUT. Se conserva; usa un CAP nuevo para repetir."
  [[ -f "$FIX/manifest.json" && -f "$KEY" ]] || fail 'Faltan fixtures o clave. Configura FIX y KEY; no se generan automáticamente.'
  python3 - "$FIX/manifest.json" <<'PY'

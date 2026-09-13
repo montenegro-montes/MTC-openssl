@@ -6,6 +6,7 @@ STATE_DIR="$REPO/.mt-state"
 STATE_FILE="$STATE_DIR/campaign-progress.tsv"
 ROOTS_FILE="$STATE_DIR/campaign-roots.env"
 cd "$REPO"
+source "$REPO/bin/lib/docker-preflight.sh"
 
 STEPS='00.doctor
 01.base-build
@@ -211,6 +212,26 @@ show_status() {
   echo; echo "Result roots:"; sed -n '/_ROOT=/p;/PCMA_FIXTURES=/p;/SCALING_FIXTURES=/p' "$ROOTS_FILE"
 }
 
+stage_docker_preflight() {
+ case "$1" in
+  13.*|20.*|30.*|40.*|50.*|60.*|70.*|71.*|72.*|73.*|80.*|81.*|82.*|83.*|90.*|92.*|93.*|110.*) return 0;;
+  01.*|08.*|21.*|31.*|41.*|51.*|61.*) mt_compose_ready;;
+  03.*) mt_images_required mt-tls-lab:local && mt_compose_ready;;
+  05.*) mt_images_required mt-tls-compact:local && mt_compose_ready;;
+  91.*)
+   local image
+   image=$(python3 -c 'import json; print(json.load(open("campaigns/original_campaigns/pcma_stage_b/configs/stage-b1.json"))["image"])') || return
+   mt_images_required "$image" && mt_compose_ready;;
+  02.*) mt_images_required mt-tls-lab:local && mt_compose_ready;;
+  04.*) mt_images_required mt-tls-compact:local && mt_compose_ready;;
+  06.*|07.*) mt_images_required mt-tls-mtc:local && mt_compose_ready;;
+  10.*|11.*|12.*|22.*|23.*|24.*|25.*|26.*) mt_images_required mt-tls-measurement:local && mt_compose_ready;;
+  32.*|33.*|34.*|42.*|43.*|44.*|52.*|53.*|54.*|55.*|62.*|63.*|64.*|65.*) mt_images_required mt-tls-network:latency && mt_compose_ready;;
+  100.*) mt_images_required mt-tls-measurement:local mt-tls-capture:local && mt_compose_ready;;
+  *) mt_compose_ready;;
+ esac
+}
+
 run_step() {
   local id=$1 command rc
   load_roots
@@ -218,6 +239,7 @@ run_step() {
     id=$(awk -F '\t' -v number="$id" '{split($1,parts,"."); if (parts[1]+0==number+0) {print $1; exit}}' "$STATE_FILE")
   fi
   has_step "$id" || { echo "Unknown step: $id" >&2; exit 2; }
+  stage_docker_preflight "$id" || return 1
   command=$(command_for "$id")
   echo "==> $id — $(description "$id")"; echo "+ $command"
   set_status "$id" running
@@ -264,7 +286,7 @@ menu() {
       3) printf 'Step: '; read -r id; run_step "$id" || true;;
       4) printf 'Step: '; read -r id; load_roots; command_for "$id";;
       5) printf 'Step: '; read -r id; printf 'Status: '; read -r value; has_step "$id" && set_status "$id" "$value";;
-      6) python3 "$REPO/scripts/maintenance/reset_lab.py" || true;;
+      6) (mt_docker_ready && python3 "$REPO/scripts/maintenance/reset_lab.py") || true;;
       7) init_state;;
       8) printf 'Number of pending stages: '; read -r value; (run_batch "$value") || true;;
       9) (run_batch ALL) || true;;
@@ -284,7 +306,7 @@ case "$cmd" in
     else usage; exit 2; fi;; next) next_step;;
   mark) [ "$#" -eq 2 ] || { usage; exit 2; }; require_state; has_step "$1" || exit 2; set_status "$1" "$2";;
   retry) [ "$#" -eq 1 ] || { usage; exit 2; }; require_state; set_status "$1" pending; run_step "$1";;
-  reset-all) [ "$#" -eq 0 ] || { echo "reset-all requires interactive confirmation; no options accepted" >&2; exit 2; }; python3 "$REPO/scripts/maintenance/reset_lab.py";;
+  reset-all) [ "$#" -eq 0 ] || { echo "reset-all requires interactive confirmation; no options accepted" >&2; exit 2; }; mt_docker_ready || exit 1; python3 "$REPO/scripts/maintenance/reset_lab.py";;
   reset) [ "${1:-}" = "--yes" ] || { printf 'Delete local campaign progress? [y/N] '; read -r a; case "$a" in y|Y) :;; *) exit 1;; esac; }; rm -f "$STATE_FILE" "$ROOTS_FILE"; echo "Progress reset";;
   archive-clean)
     [ "${1:-}" = "--yes" ] || { printf 'Archive this battery and delete artifacts? [y/N] '; read -r a; case "$a" in y|Y) :;; *) exit 1;; esac; }

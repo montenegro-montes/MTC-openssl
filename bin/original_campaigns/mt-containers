@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$REPO"
+source "$REPO/bin/lib/docker-preflight.sh"
 
 COMPOSE_FILES="
 base:docker/original_campaigns/compose.yaml
@@ -83,7 +84,19 @@ project_name() {
 }
 
 targets() { printf '%s\n' base compact profile mtc measurement scaling latency bandwidth loss combined capture; }
-compose() { local f; f=$(compose_file "$1"); shift; docker compose -f "$f" "$@"; }
+compose() {
+ local f target=$1 action=$2 parent=''
+ f=$(compose_file "$target") || return; shift 2
+ mt_compose_inputs "$f" "$action" "$@" || return
+ if [[ "$action" == build ]]; then
+  case "$target" in
+   compact) parent=mt-tls-lab:local;; profile) parent=mt-tls-compact:local;; mtc) parent=mt-tls-profile:local;;
+   measurement) parent=mt-tls-mtc:local;; capture|latency|bandwidth|loss|combined) parent=mt-tls-measurement:local;;
+  esac
+  [[ -z "$parent" ]] || mt_image_required "$parent" || return
+ fi
+ docker compose -f "$f" "$action" "$@"
+}
 confirm() {
   [ "${1:-}" = "--yes" ] && return 0
   printf 'Continue? [y/N] '
@@ -108,6 +121,7 @@ EOF
 }
 
 doctor() {
+  mt_compose_ready || return
   local failed=0
   command -v docker >/dev/null || { echo "FAIL docker command missing"; failed=1; }
   if command -v docker >/dev/null; then
@@ -179,6 +193,10 @@ EOF
 
 cmd=${1:-help}; shift || true
 case "$cmd" in
+ ps|images|inspect-image|down|remove-images|clean) mt_docker_ready || exit 1;;
+ build-chain) mt_compose_ready || exit 1;;
+esac
+case "$cmd" in
   help|-h|--help) usage ;;
   list) list_targets ;;
   doctor) doctor ;;
@@ -192,7 +210,7 @@ case "$cmd" in
   down)
     target=${1:-all}; if [ "$target" = all ]; then all_down; else project_down "$target"; fi ;;
   restart) [ "$#" -ge 1 ] || { usage; exit 2; }; t=$1; shift; compose "$t" up -d --force-recreate "$@" ;;
-  logs) [ "$#" -ge 1 ] || { usage; exit 2; }; t=$1; shift; compose "$t" logs -f --tail=200 "$@" ;;
+  logs) [ "$#" -ge 1 ] || { usage; exit 2; }; t=$1; shift; compose "$t" logs "$@" -f --tail=200 ;;
   shell)
     [ "$#" -ge 2 ] || { usage; exit 2; }; t=$1; s=$2; shift 2
     if [ "$#" -gt 0 ]; then compose "$t" exec "$s" "$@"; else compose "$t" exec "$s" sh; fi ;;
