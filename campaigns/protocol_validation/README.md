@@ -1,7 +1,8 @@
 # Manual MTC protocol-conformance validation
 
-**Preparation only. No validation, TLS, Docker, capture, build or fixture generation
-was executed when preparing these files.** Wording: protocol-conformance validation
+**No new TLS, Docker, capture, build or fixture generation was executed for the
+2026-09-13 validation refinement. Pure-Python tests and one existing landmark
+PCAP were checked offline; see the supplemental review below.** Wording: protocol-conformance validation
 against the implemented subset of `draft-ietf-plants-merkle-tree-certs-05`.
 Never interpret an overall PASS as full IETF draft compliance.
 
@@ -276,19 +277,17 @@ image or the host environment.
   support is not assumed. `-showcerts` exposes a reserialized received X509; the
   client does not preserve original raw DER. Compare its hash with the captured
   DER while documenting that limitation. Do not claim raw C-byte retention.
-- tshark handles standard TLS framing/decryption; it is **not** assumed to decode
-  the private proof. `extract_pcap.py` parses raw reassembled handshake bytes from
-  PDML itself. If the installed version omits them, it stops with UNRESOLVED;
-  there is no fallback to fixture bytes. Retain PDML/stderr for adapting extraction
-  to that exact tshark version. Capture/decryption/extractor compatibility remains
-  untested. CertificateVerify scheme is recorded, not mapped to guessed PQ IDs.
+- tshark handles TLS framing/decryption. `extract_pcap.py` uses decoded PDML
+  child fields for Certificate DER and structure; the parent handshake `value`
+  may be empty. Independent transcript checks instead use `jsonraw` exact bytes
+  and preserve duplicate JSON keys. No fixture supplies transcript payload.
 - Extraction records sequential TLS record numbers with packet numbers, handshake
   types/lengths, Certificate and CertificateVerify sizes, MTCProof and DER sizes,
   TCP stream and reassembly completion packet. All stream packet IDs and PDML
   are retained; completion packet alone is not a complete fragment attribution.
-- Endpoint logs supply CertificateVerify/Finished acceptance evidence; there is no
-  second independent cryptographic TLS-transcript verifier. `protocol-report.json`
-  combines this with offline proof verification, rather than fabricating it.
+- Endpoint acceptance and independent verification are separate layers.
+  `verify_tls_transcript.py` provides optional offline verification; absent
+  supplemental evidence remains NOT_EXECUTED in old reports.
 - MCF1 is local out-of-band storage. The private 0xffa7 CH/EE/CertificateEntry
   negotiation is checked against source behavior, not claimed to implement the
   complete recommended trust_anchors extension. Draft OIDs/UTF8String are expressly
@@ -346,3 +345,112 @@ error stops the batch. Existing outputs are never overwritten. A failed stage
 with existing evidence requires inspection and a fresh campaign where appropriate;
 `run ALL` does not automatically repair or resume partial captures. Batch locks
 prevent another stage, batch or configuration change during execution.
+
+## Supplemental offline validation (2026-09-13)
+
+The exact revisions inspected are **MTC-05** and **trust-anchor-ids-04**, from the
+preserved local copies, not a newer draft. [FIELD_MAP.md](FIELD_MAP.md) lists exact
+sections and restrictions. TLS calculations follow [RFC 8446](https://www.rfc-editor.org/rfc/rfc8446.html),
+§§4.4.1, 4.4.3, 4.4.4 and 7.1.
+
+### Observed evidence and limitations
+
+The requested baseline `artifacts/protocol-validation/20260913T124747Z/` was absent
+from this checkout. Its historical PQ PASS results could not be rechecked.
+Another existing run, `20260913T142141Z`, has positive ML-DSA-65 landmark and
+standalone JSON reports; it is **different evidence**, not a replacement baseline.
+The existing landmark PCAP (13,979 bytes) was inspected offline using host
+**tshark 4.6.8**. Its jsonraw exposes all seven exact handshake messages, even though
+its preserved PDML has empty parent values. This does not establish jsonraw
+compatibility for the historical container's tshark 4.0.17.
+
+For that landmark capture only, independent server Finished and client Finished
+checks passed with SHA384 using the matching client-random keylog entries.
+CertificateVerify exact input and wire SPKI extraction were prepared; real PQ
+signature verification was **NOT_EXECUTED** because the existing provider-enabled
+OpenSSL environment was not launched. The supplemental result is **PARTIAL**, not
+a complete independent TLS verification PASS. No secret values enter reports or docs.
+The real supplemental JSON was written only to `/tmp/mtc-landmark-independent-final.json`.
+It is local review output, not committed scientific evidence.
+
+The private **0xffa7** codepoint remains experimental; TA-04 ExtensionType is
+**TBD**. The observed single-candidate CH/EE lists and zero-length first-entry
+confirmation support **PASS_EXPERIMENTAL_CODEPOINT** for this restricted semantic
+mapping. The client sends individual CA.1.log.landmark, not recommended group
+CA.2.log.landmark: MTC-05 §8.2.1 remains unresolved. The native implementation
+also lacks general group membership and retry, and rejects an empty requested list
+although TA-04 permits it. No negotiation behavior was changed to hide these gaps.
+
+Timestamp reports separate (a) zero timestamp used for MTCProof signatures,
+(b) checkpoint uint64 encoding and signed range, (c) unproven actual signing-time
+and largest-observed-tree assertions, and (d) the native nonfuture local policy.
+There is no invented maximum-age rule. The three existing NOT_IMPLEMENTED areas
+remain unchanged: general revoked-range database, evolving multi-landmark
+distribution and public independent cosigner ecosystem.
+
+### Status vocabulary and compatibility
+
+- PASS: that specific layer has observed successful evidence.
+- PASS_EXPERIMENTAL_CODEPOINT: observed single-candidate structures/selection match,
+  while 0xffa7 remains private. Not full trust_anchors or MTC compliance.
+- LOCAL_POLICY: source-identified local rule; execution status is separate.
+- UNRESOLVED: a mapping or assertion is still unsupported by sufficient evidence.
+- NOT_EXECUTED: no corresponding verification result, including old report fields.
+- NOT_APPLICABLE: no such signature/checkpoint in this mode.
+- NOT_IMPLEMENTED: outside the supported implementation/verifier scope.
+- PARTIAL: some independent checks passed but others were not executed/supported.
+- NOT_READY_EXACT_TRANSCRIPT_BYTES_UNAVAILABLE: exact supported handshake bytes
+  could not be recovered. The verifier does not synthesize missing bytes.
+- FAIL: an executed check failed; an operational inability is not a signature PASS.
+
+`report.py` preserves legacy object/transport evidence and adds `validation_layers`.
+Without `--independent-report`, independent CV/Finished statuses remain NOT_EXECUTED.
+With one, capture, keylog, metadata and wire-object digests must match. A supplied
+independent FAIL makes the joined report fail. An old object's `draft_checks` remains
+historical evidence; new detailed layers do not silently rewrite its assertions.
+A top-level PASS continues to mean **implemented-subset conformance** for object,
+transport structure and endpoint authentication, with other statuses explicitly separate.
+
+### Manual offline commands (not a new capture)
+
+Use fresh output names **outside** the original protocol-evidence directories.
+Do not run `run ALL` to obtain supplemental transcript evidence.
+
+```sh
+# Set to an existing capture; this is the alternative run inspected here.
+CAPTURE="artifacts/protocol-validation/20260913T142141Z/landmark"
+REVIEW="artifacts/protocol-review/$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$REVIEW"
+
+# Host-side exact-byte/Finished verification; CV remains NOT_EXECUTED unless
+# --openssl points to an existing provider-enabled executable.
+PYTHONDONTWRITEBYTECODE=1 python3 campaigns/protocol_validation/verify_tls_transcript.py   "$CAPTURE" --output "$REVIEW/independent.json"   --tshark /Applications/Wireshark.app/Contents/MacOS/tshark
+
+# Optional join of old object evidence and new independent evidence.
+PYTHONDONTWRITEBYTECODE=1 python3 campaigns/protocol_validation/report.py   --capture "$CAPTURE" --extraction "$CAPTURE/extracted"   --object-report "$CAPTURE/object-validation.json"   --independent-report "$REVIEW/independent.json"   --output "$REVIEW/protocol-report.json"
+```
+
+For an independent PQ CertificateVerify check in the already-built capture image
+(which inherits measurement/OpenSSL/provider tooling), the following is prepared
+**for manual execution only; it was not run during development**. It starts no
+TLS server/client and has no network access. It still starts a container, so it
+is excluded from this task's low-resource execution allowance. If the old tshark
+cannot expose exact bytes, preserve the NOT_READY result; do not rebuild here.
+
+```sh
+CAPTURE_IMAGE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["capture_image_id"])' "$CAPTURE/metadata.json")
+docker run --rm --network none   -e PYTHONDONTWRITEBYTECODE=1   -v "$PWD:/repo:ro" -v "$PWD/$REVIEW:/review" -w /repo   --entrypoint python3 "$CAPTURE_IMAGE"   campaigns/protocol_validation/verify_tls_transcript.py "$CAPTURE"   --openssl /opt/mtc/openssl.sh --output /review/independent-pq.json
+```
+
+No full final protocol workflow is needed to join this evidence. Rechecking object
+timestamp details would require a fresh offline `validate_mtc.py` report with the
+original trust inputs/provider, not changing the historical object report.
+
+Lightweight regression command:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover   -s campaigns/protocol_validation -p 'test_offline_semantics.py' -v
+```
+
+The tests use tiny synthetic byte strings and mocked cryptographic subprocesses;
+20 passing unit tests are **not** 20 new TLS/cryptographic experiment results.

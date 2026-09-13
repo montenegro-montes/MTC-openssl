@@ -1,8 +1,8 @@
 # Implemented-subset field map and decoder specification
 
 Target: local `src/mtc/reference/draft-ietf-plants-merkle-tree-certs-05.txt`.
-This is preparation, not a result or a full IETF compliance claim. All check
-statuses remain **UNRESOLVED (not executed)** until the operator supplies evidence.
+This is preparation, not a result or a full IETF compliance claim. Checks without observed evidence remain **NOT_EXECUTED**. Source mappings alone
+do not establish a runtime PASS.
 The table maps the actual initial-issuance prototype, including its restrictions.
 
 Notation: U8/U16/U32/U48/U64 are unsigned big-endian integers of 1/2/4/6/8 bytes.
@@ -38,9 +38,9 @@ separate blocks for derived and out-of-band data; it is not one concatenated obj
 | landmark identifier | mtc.c:mtc_load / tls.c | TLS signal CA.1.log.landmark, base128 ID | 8.2 | individual landmark trust anchor | For local log1/landmark1 require CA.1.1.1 | yes | **Absent from MTCProof**; only configuration/transport names it |
 | tree size / root / signer keys | prepare.py / mtc.c | OOB only; root also derived from proof | 6.3, 6.4, 7.1–7.4 | trusted state | Trust supplied explicitly; bind via signatures | yes | No N, root or issuer SPKI embedded as separate MTCProof fields |
 | TLS Certificate | src/mtc/patch.py, tls.c | Standard TLS1.3 type11,U24 body,V8 context,V24 list; entry V24 DER,V16 extensions | 8 (RFC8446 framing) | certificate transport | Extract exact DER from decrypted/reassembled packet bytes | yes | Payload MTC is experimental; TLS framing remains native |
-| 0xffa7 CH/EE | src/mtc/tls.c:add/parse | Private extension U16 type,U16 length; V16 list of V8 IDs | UNRESOLVED_MAPPING | local trust negotiation, concepts8.1/8.2 | Same expected ID advertised/selected, canonical encoded bytes | local only | Complete trust_anchors draft protocol not validated; do not equate private code point to standard |
-| 0xffa7 CertificateEntry | src/mtc/tls.c:add/parse | U16 type=0xffa7,U16 length=0 | UNRESOLVED_MAPPING | local confirmation | Required on entry0 only, after matching EE | local only | Prototype-specific additional negotiation gate |
-| CertificateVerify / Finished | native OpenSSL via patch.py | Standard TLS1.3 type15/type20 | 8 (RFC8446) | possession/transcript authentication | Endpoint success + decrypted message order; actual CV scheme recorded | yes | Cryptographic transcript verification not independently duplicated |
+| 0xffa7 CH/EE | src/mtc/tls.c:add/parse | Private extension U16 type,U16 length; V16 list of V8 IDs | TA-04 3, 4.1–4.3; MTC-05 8.1/8.2 | exact individual-ID subset | Same expected ID advertised/selected, canonical encoded bytes | local only | Complete trust_anchors draft protocol not validated; do not equate private code point to standard |
+| 0xffa7 CertificateEntry | src/mtc/tls.c:add/parse | U16 type=0xffa7,U16 length=0 | TA-04 4.1/4.2 | first-entry selection confirmation | Required on entry0 only, after matching EE | local only | Prototype-specific additional negotiation gate |
+| CertificateVerify / Finished | native OpenSSL via patch.py | Standard TLS1.3 type15/type20 | 8 (RFC8446) | possession/transcript authentication | Endpoint success + decrypted message order; actual CV scheme recorded | yes | Optional exact-byte offline verifier; separate endpoint and independent results |
 
 ## Checklist classification
 
@@ -49,9 +49,10 @@ Runtime reports classify checked rules PASS/FAIL only after execution.
 landmark groups, consistency monitoring, revocation database, public cosigner
 operations, general MTC PKIX path building. These are not failures of this scoped
 prototype. `NOT_APPLICABLE`: TLS checks in an offline-only object report.
-`UNRESOLVED`: the three private/local encodings above, independent validation of
-TLS signature-scheme negotiation, and offline checkpoint freshness (the native
-loader also rejects future timestamps). Operational CA identity persistence across
+`UNRESOLVED`: recommended landmark-group advertisement and independent evidence
+for the checkpoint signer's actual signing time/largest observed tree. MCF1 remains
+a local storage format, not a claim about a draft wire encoding. Current-clock
+checkpoint policy is LOCAL_POLICY, not an unresolved maximum-age draft rule. Operational CA identity persistence across
 independent fixture roots is outside a one-object check; preserve each trust root.
 
 A successful object check means the configured keys authenticate the reconstructed
@@ -59,3 +60,46 @@ entry. It does not establish that those keys are trusted by a public ecosystem.
 The offline validator is intentionally stricter about the initial cover than the
 general C standalone verifier; this is a workflow scope restriction, not a draft
 requirement. Runtime reports retain unresolved mappings even when checked rules pass.
+
+## Pinned specification review (2026-09-13)
+
+Only the preserved `draft-ietf-plants-merkle-tree-certs-05.txt` and
+`draft-ietf-tls-trust-anchor-ids-04.txt` in `src/mtc/reference/` were used for
+MTC/trust-anchor requirements. No newer draft was substituted.
+
+| Source sections | Interpretation and evidence boundary |
+| --- | --- |
+| TA-04 §3 | Binary ID is the DER RELATIVE-OID contents, without tag/length. Decode minimal base-128 components, not a hard-coded byte match. |
+| TA-04 §4.1 | The actual type names are RequestedTrustAnchorList (CH, unordered, may be empty) and AvailableTrustAnchorList (EE, nonempty, server preference order). No lexical ordering requirement applies to these lists. |
+| TA-04 §4.2 | Matching candidate selection is acknowledged by an empty extension on the first CertificateEntry only. MTC subset has exactly one entry. Length and payload are both checked. |
+| TA-04 §4.3 | General retry and candidate enumeration are not implemented. A singleton EE list has trivial preference order. Native code rejects an empty CH list, although the draft permits it. |
+| TA-04 §11.1 | ExtensionType is TBD. 0xffa7 is private/experimental, never an IANA assignment. |
+| MTC-05 §8.1, §8.2 | Standalone uses CA ID. Individual landmark uses CA.1.log.landmark. |
+| MTC-05 §8.2.1 | Recommended group is CA.2.log.landmark. Current native code uses individual CA.1.1.1, not a group. No group membership algorithm or retry was added. |
+| MTC-05 §6.2, §7.2 | MTCProof cosignature input timestamp must be uint64 zero, already cryptographically verified this way. Landmark proof has no such signatures. |
+| MTC-05 §5.3.1, §5.3.2 | Nonzero timestamp states POSIX signing time, start=0, and end=largest tree observed by the signer. Encoding and signed range are checked; actual signing time and signer history are not independently observable from a single certificate/checkpoint. |
+
+The local MCF1 checkpoint records uint64 timestamp, size and root. Offline validation
+verifies its signatures over start=0/end=configured size. The native loader enforces
+`timestamp > 0 && timestamp <= time(NULL)`. There is **no maximum-age threshold**.
+Neither this source inspection nor an offline signature check proves that the native
+clock check was executed for a new run. Reports retain `execution_status=NOT_EXECUTED`
+for this local-policy layer. The offline decoder's nonzero checkpoint requirement is
+also a local storage restriction: MTC-05 generally allows zero subtree timestamps.
+
+`PASS_EXPERIMENTAL_CODEPOINT` applies only when observed CH, EE and CertificateEntry
+bytes pass structure checks and match the configured individual anchor. It does not
+resolve the §8.2.1 group recommendation or prove complete trust_anchors behavior.
+For the inspected alternative capture, CA=32473.112, log=1, landmark=1 gives
+individual 32473.112.1.1.1 and recommended group 32473.112.2.1.1. Landmark number 1
+comes from this prototype's fixed native configuration, not from MTCProof; log is
+also decoded from the certificate serial. Historical PQ uses its own CA ID.
+
+Independent TLS input follows RFC 8446 §§4.4.1, 4.4.3, 4.4.4 and 7.1. The transcript
+contains exact handshake headers and bodies, never record headers, JSON rendering,
+PDML reconstruction or fixture bytes. The current verifier accepts only the seven
+messages CH, SH, EE, Certificate, CV, server Finished, client Finished in a single
+IPv4 flow with correct directions, AES-256-GCM/SHA384, no HRR/PSK/client auth/tickets.
+Other shapes report missing exact supported transcript evidence rather than inventing
+bytes. CV uses wire SPKI and an explicit scheme/OID mapping (ML-DSA 0x0904–0x0906;
+ECDSA 0x0403/0x0503/0x0603); unsupported schemes remain NOT_IMPLEMENTED.

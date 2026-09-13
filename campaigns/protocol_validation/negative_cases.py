@@ -7,6 +7,13 @@ import sys
 from pathlib import Path
 from validate_mtc import core,save,sha
 
+def classify_validator(returncode, report):
+    if returncode == 0 and report.get('overall') == 'PASS':
+        return 'ACCEPT', 'PASS', None
+    if returncode == 1 and report.get('overall') == 'FAIL' and report.get('failure_kind') == 'INVALID_OBJECT':
+        return 'REJECT', 'FAIL', report.get('error')
+    return 'ERROR', report.get('overall'), report.get('error', 'Validator process/report inconsistency')
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--fixtures',type=Path,required=True);p.add_argument('--output',type=Path,required=True)
@@ -46,10 +53,7 @@ def main():
         (log_dir/'validator.stderr.log').write_text(result.stderr)
         try:report=json.loads(report_path.read_text())
         except (OSError,ValueError):return 'ERROR',None,'Validator did not produce a readable JSON report'
-        if result.returncode==0 and report.get('overall')=='PASS':return 'ACCEPT','PASS',None
-        if result.returncode==1 and report.get('overall')=='FAIL' and report.get('failure_kind')=='INVALID_OBJECT':
-            return 'REJECT','FAIL',report.get('error')
-        return 'ERROR',report.get('overall'),report.get('error','Validator process/report inconsistency')
+        return classify_validator(result.returncode,report)
     observed,validator_result,reason=invoke([str(base),'--trust',str(a.fixtures/'trust.bin'),'--mode','standalone','--profile',a.profile,'--openssl',a.openssl,'--output',str(baseline)],baseline,a.output)
     control=dict(case='positive-control',expected='ACCEPT',observed=observed,test_result='PASS' if observed=='ACCEPT' else 'FAIL',validator_result=validator_result,reason=reason)
     if observed!='ACCEPT':

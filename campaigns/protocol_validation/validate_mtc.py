@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from semantics import timestamp_checks
 
 REPO=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(REPO/'src/mtc'))
@@ -154,7 +155,13 @@ def validate(args):
         sender_match=args.sender.read_bytes()==raw;require(sender_match,'sender/wire DER mismatch')
     checks=[dict(section=s,rule=r,status='PASS') for s,r in [('6.2','DER/proof complete parse and canonical lengths'),('5.1','experimental issuer name'),('6.2','serial/log/index and proof algorithm'),('5.2.1 / 7.2','SPKI-bound reconstructed entry'),('4.3.2','inclusion proof fold'),('5.3.1 / 5.3.3','required signatures verified'),('6.3' if args.mode=='standalone' else '6.4.4','mode-specific trust')]]
     checks += [dict(section=s,rule=r,status='NOT_IMPLEMENTED') for s,r in [('7.5','general revoked-range database'),('6.4','evolving multi-landmark distribution'),('5.3 / 7.3','public independent cosigner ecosystem')]]
-    checks += [dict(section='8',rule='private 0xffa7 vs recommended trust_anchors protocol',status='UNRESOLVED'),dict(section='5.3.1',rule='checkpoint timestamp freshness (native loader checks current time)',status='UNRESOLVED'),dict(section='8',rule='TLS transport (offline object only)',status='NOT_APPLICABLE')]
+    timestamps=timestamp_checks(args.mode,state['checkpoint'])
+    checks += [dict(section='8',rule='trust_anchors mapping requires captured transport evidence',status='NOT_EXECUTED'),
+               dict(section='6.2 / 7.2',rule='MTCProof signatures use timestamp zero',status=timestamps['mtcproof']['status']),
+               dict(section='5.3.1',rule='checkpoint timestamp encoding and authenticated range',status=timestamps['checkpoint']['status']),
+               dict(section='5.3.1 / 5.3.2',rule='actual signing time and largest observed tree are signer assertions',status='UNRESOLVED' if state['checkpoint'] else 'NOT_APPLICABLE'),
+               dict(section='local',rule='native checkpoint nonfuture policy, no maximum age',status='LOCAL_POLICY'),
+               dict(section='8',rule='TLS transport (offline object only)',status='NOT_APPLICABLE')]
     return dict(draft=core.DRAFT,claim='implemented-subset conformance',scope='offline object; not full IETF compliance',
         overall='PASS',mode=args.mode,profile=args.profile,parse_complete=True,trailing_bytes=0,length_fields_valid=True,
         tree_size=state['n'],leaf_index=index,log_number=state['log'],subtree=[start,end],proof_hash_count=len(siblings)//32,
@@ -165,7 +172,8 @@ def validate(args):
         landmark_id_location='TLS signal and local trust configuration; absent from MTCProof' if args.mode=='landmark' else None,
         mtc_wire_sha256=sha(raw),trust_sha256=sha(args.trust.read_bytes()),sender_wire_match=sender_match,
         receiver_sha256=None,receiver_limitation='native verifier does not retain original DER bytes',
-        draft_checks=dict(implemented_rules=7,passed=7,failed=0,not_implemented=3,unresolved=2,checks=checks),
+        timestamp_draft_requirement=timestamps, timestamp_local_policy=timestamps['local_policy'],
+        draft_checks=dict(implemented_rules=sum(x['status']=='PASS' for x in checks),passed=sum(x['status']=='PASS' for x in checks),failed=0,not_implemented=3,unresolved=sum(x['status']=='UNRESOLVED' for x in checks),checks=checks),
         limits=['initial issuance log=1, N<=1024, SHA-256, two configured signers',
                 'Certificate validity/hostname and TLS CertificateVerify/Finished require the separate TLS validation',
                 'standalone with authority.bin has no independent expected root; signatures authenticate computed root'])

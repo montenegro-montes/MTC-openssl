@@ -372,6 +372,7 @@ def main():
             'compose.yaml',
             'validate_mtc.py',
             'extract_pcap.py',
+            'semantics.py',
         )
     ]
 

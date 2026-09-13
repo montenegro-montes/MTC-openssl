@@ -18,6 +18,7 @@ import xml.etree.ElementTree as ET
 
 from validate_mtc import Reader, require, sha, save
 import core
+from semantics import trust_mapping
 
 
 def xml_fields(node, name):
@@ -312,7 +313,7 @@ def extract(a):
     require(all(row['length'] > 0 for row in finished), 'empty Finished message')
 
     # Exact wire object and endpoint evidence
-    outer, _ = core.certificate_parts(der)
+    outer, tbs = core.certificate_parts(der)
     payload_length = len(outer[2][1]) - 1
 
     receiver = a.capture / 'receiver-reserialized.der'
@@ -369,12 +370,15 @@ def extract(a):
         receiver_limitation=(
             '-showcerts reserializes the received X509; original raw input not retained'
         ),
+        trust_anchors_semantic_mapping=trust_mapping(
+            ch_ext[0xffa7]['data'], ee_ext[0xffa7]['data'], [cert_ext[0xffa7]],
+            p['ca_id'], meta['mode'], int.from_bytes(tbs[1][1], 'big') >> 48, 1),
         endpoint_authentication=True,
         tls_version='TLSv1.3',
         cipher='TLS_AES_256_GCM_SHA384',
         key_exchange='X25519',
         unresolved=[
-            'Private 0xffa7 is not a verified implementation of the complete trust_anchors extension',
+            'Private 0xffa7 supports only exact individual-ID selection; MTC-05 recommended landmark groups and complete trust_anchors behavior remain outside the implementation',
             'CertificateVerify/Finished cryptographic acceptance is endpoint evidence, not independent transcript verification',
         ],
     )
