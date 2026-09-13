@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Shared image recipes only; no original campaign state, fixtures or runners.
+set -euo pipefail
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+SELF="$REPO/bin/cryptographic_scaling/mt-prepare"
+cd "$REPO"
+source "$REPO/bin/lib/docker-preflight.sh"
+STATE="$REPO/.mt-state/cryptographic-setup"
+IMAGES=(mt-tls-lab:local mt-tls-compact:local mt-tls-profile:local mt-tls-mtc:local mt-tls-measurement:local mt-tls-capture:local)
+FILES=(Dockerfile Dockerfile.compact Dockerfile.profile Dockerfile.mtc Dockerfile.measurement Dockerfile.capture)
+fail() { echo "ERROR: $*" >&2; exit 1; }
+list() {
+ local i
+ for i in "${!IMAGES[@]}"; do printf '%s  %-30s %s\n' "$((i+1))" "${IMAGES[i]}" "${FILES[i]}"; done
+ echo 'No fixture generation, regression suites, TLS handshakes or captures are run.'
+}
+python_ready() {
+ command -v python3 >/dev/null || fail 'Python 3 is required.'
+ python3 -c 'import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("matplotlib") else "ERROR: matplotlib is required for plots. Install it in this Python environment: python3 -m pip install matplotlib")'
+}
+prepare() (
+ local selection=$1 rebuild=$2 last=5 start=0 i log rc parent
+ [[ "$selection" == ALL || "$selection" =~ ^[1-6]$ ]] || fail 'Select stage 1..6 or ALL.'
+ # run N prepares missing ancestors too; rebuild N rebuilds N after preparing ancestors.
+ if [[ "$selection" != ALL ]]; then last=$((selection-1)); fi
+ mt_compose_ready || exit 1
+ python_ready
+ mkdir -p "$STATE"
+ mkdir "$STATE/lock" 2>/dev/null || fail 'Setup is active or its lock needs inspection.'
+ trap 'rmdir "$STATE/lock" 2>/dev/null || true' EXIT
+ for ((i=start;i<=last;i++)); do
+  if [[ "$rebuild" == no || ( "$selection" != ALL && "$i" != "$last" ) ]]; then
+   if docker image inspect "${IMAGES[i]}" >/dev/null 2>&1; then printf 'REUSE %s\n' "${IMAGES[i]}"; continue; fi
+  fi
+  if ((i)); then parent=${IMAGES[i-1]}; mt_image_required "$parent" || exit 1; fi
+  log="$STATE/stage-$((i+1))-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
+  printf 'BUILD %s\nLog: %s\n' "${IMAGES[i]}" "$log"
+  set +e
+  docker build -f "docker/original_campaigns/${FILES[i]}" -t "${IMAGES[i]}" . 2>&1 | tee "$log"
+  local codes=("${PIPESTATUS[@]}")
+  set -e
+  rc=${codes[0]}; [[ "$rc" != 0 ]] || rc=${codes[1]}
+  [[ "$rc" == 0 ]] || exit "$rc"
+ done
+ echo 'Prerequisites prepared. Continue with mt-cert-scaling; no campaign has been run.'
+)
+menu() {
+ local choice value
+ while true; do
+  printf '\nCryptographic scaling prerequisites\n1 List  2 Status  3 Prepare ALL missing  4 Prepare through stage\n5 Rebuild through ALL  0 Exit\n'
+  read -r -p '> ' choice || return 0
+  case "$choice" in
+   1) list;; 2) "$SELF" status || true;; 3) "$SELF" run ALL || true;;
+   4) list; read -r -p 'Stage number: ' value; "$SELF" run "$value" || true;;
+   5) "$SELF" rebuild ALL || true;; 0) return 0;;
+  esac
+ done
+}
+case "${1:-menu}" in
+ menu) menu;; list) list;;
+ run|rebuild) [[ "$#" == 2 ]] || fail 'Usage: run N|ALL or rebuild N|ALL'; flag=no; [[ "$1" != rebuild ]] || flag=yes; prepare "$2" "$flag";;
+ show) [[ "${2:-}" =~ ^[1-6]$ ]] || fail 'Stage required: 1..6'; i=$(($2-1)); printf 'docker build -f %q -t %q .\n' "docker/original_campaigns/${FILES[i]}" "${IMAGES[i]}";;
+ status) mt_compose_ready || exit 1; python_ready; for image in "${IMAGES[@]}"; do if docker image inspect "$image" >/dev/null 2>&1; then echo "AVAILABLE $image"; else echo "MISSING $image"; fi; done;;
+ help|--help|-h) echo 'Usage: mt-prepare [menu|list|status|show N|run N|run ALL|rebuild N|rebuild ALL]'; echo 'Prepares cryptographic-scaling images without original campaigns. Existing images are reused; rebuild is explicit.';;
+ *) fail 'Unknown command; use help.';;
+esac

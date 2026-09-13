@@ -6,42 +6,51 @@ cd "$REPO"
 source "$REPO/bin/lib/docker-preflight.sh"
 STATE="$REPO/.mt-state/protocol-validation"
 CONFIG="$STATE/paths.env"
-STEPS=(10.offline-existing 20.offline-landmark 30.offline-standalone 40.capture-landmark 50.extract-landmark 60.validate-wire-landmark 70.report-landmark 80.capture-standalone 90.extract-standalone 100.validate-wire-standalone 110.report-standalone 120.negative)
+STEPS=(10.offline-existing 20.offline-landmark 30.offline-standalone 40.capture-landmark 50.extract-landmark 60.validate-wire-landmark 70.report-landmark 80.capture-standalone 90.extract-standalone 100.validate-wire-standalone 110.report-standalone 120.invalid-input-stress)
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-load() { [[ -f "$CONFIG" ]] || fail 'Ejecuta init primero.'; source "$CONFIG"; }
+load() { [[ -f "$CONFIG" ]] || fail 'Run init first.'; unset PROFILE; source "$CONFIG"; PROFILE=${PROFILE:-pq}; }
 save() {
  local key
  (umask 077
- for key in STAMP FIX KEY CAP; do printf '%s=%q\n' "$key" "${!key}"; done > "$CONFIG.tmp"
+ for key in STAMP FIX KEY CAP PROFILE; do printf '%s=%q\n' "$key" "${!key}"; done > "$CONFIG.tmp"
  mv "$CONFIG.tmp" "$CONFIG")
 }
 init() {
- [[ ! -e "$CONFIG" ]] || fail 'Ya hay estado; usa status y set.'
+ [[ ! -e "$CONFIG" ]] || fail 'State already exists; use status and set.'
  STAMP=${1:-$(date -u +%Y%m%dT%H%M%SZ)}
- [[ "$STAMP" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Nombre no válido.'
- FIX=artifacts/mtc/batch16-v2/pq; KEY=artifacts/certs/pq/server.key
+ [[ "$STAMP" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid name.'
+ if [[ "${2:-paper1}" == legacy ]]; then
+  PROFILE=pq; FIX=artifacts/mtc/batch16-v2/pq; KEY=artifacts/certs/pq/server.key
+ else
+  local cert_config="$REPO/.mt-state/cert-scaling/paths.env" root
+  [[ -f "$cert_config" ]] || fail 'Initialize mt-cert-scaling first; its N=16 fixture path is required. Use init-legacy only for historical pq fixtures.'
+  root=$( (source "$cert_config"; printf '%s' "$MTC16") )
+  case "$root" in artifacts/*) ;; *) fail 'Paper-1 MTC16 must be a relative path under artifacts/.';; esac
+  PROFILE=mldsa65; FIX="$root/batch16/mtc/$PROFILE"; KEY="$root/population/$PROFILE/0.key"
+ fi
  CAP="artifacts/protocol-validation/$STAMP"
  mkdir -p "$STATE"; save
- printf 'Configuración guardada. Perfil inicial: pq (ML-DSA-65 histórico), N=16. Revisa FIX y KEY con status.\n'
+ printf 'Configuration saved. Profile: %s, N=16. Check FIX and KEY with status.\n' "$PROFILE"
 }
 plan() {
+ [[ "$1" != 120.negative ]] || set -- 120.invalid-input-stress
  local item found=0 mode script
  for item in "${STEPS[@]}"; do
   if [[ "$1" == "$item" || "$1" == "${item%%.*}" ]]; then STEP=$item; found=1; break; fi
  done
- [[ "$found" == 1 ]] || fail 'Etapa desconocida.'
+ [[ "$found" == 1 ]] || fail 'Unknown stage.'
  local args=() image=mt-tls-measurement:local
  case "$STEP" in
   10.*|20.*|30.*)
    mode=standalone; [[ "$STEP" != 20.* ]] || mode=landmark
    OUT="$CAP/$STEP.json"; script=validate_mtc.py
-   args=("$FIX/$mode-0000.der" --trust "$FIX/trust.bin" --profile pq --mode "$mode" --output "$OUT")
-   if [[ "$STEP" == 10.* ]]; then args=("$FIX/standalone-0000.der" --trust "$FIX/authority.bin" --profile pq --mode standalone --output "$OUT");
+   args=("$FIX/$mode-0000.der" --trust "$FIX/trust.bin" --profile "$PROFILE" --mode "$mode" --output "$OUT")
+   if [[ "$STEP" == 10.* ]]; then args=("$FIX/standalone-0000.der" --trust "$FIX/authority.bin" --profile "$PROFILE" --mode standalone --output "$OUT");
    else args+=(--entry "$FIX/log/000000.entry"); fi;;
   40.*|80.*)
    mode=landmark; [[ "$STEP" != 80.* ]] || mode=standalone
    OUT="$CAP/$mode"
-   CMD=(bash campaigns/protocol_validation/capture_handshake.sh --mode "$mode" --profile pq --fixture-dir "$FIX" --server-key "$KEY" --output "$OUT" --execute)
+   CMD=(bash campaigns/protocol_validation/capture_handshake.sh --mode "$mode" --profile "$PROFILE" --fixture-dir "$FIX" --server-key "$KEY" --output "$OUT" --execute)
    return;;
   50.*|90.*)
    mode=landmark; [[ "$STEP" != 90.* ]] || mode=standalone
@@ -50,35 +59,35 @@ plan() {
   60.*|100.*)
    mode=landmark; [[ "$STEP" != 100.* ]] || mode=standalone
    OUT="$CAP/$mode/object-validation.json"; script=validate_mtc.py
-   args=("$CAP/$mode/extracted/mtc-wire.bin" --trust "$FIX/trust.bin" --entry "$FIX/log/000000.entry" --sender "$FIX/$mode-0000.der" --profile pq --mode "$mode" --output "$OUT");;
+   args=("$CAP/$mode/extracted/mtc-wire.bin" --trust "$FIX/trust.bin" --entry "$FIX/log/000000.entry" --sender "$FIX/$mode-0000.der" --profile "$PROFILE" --mode "$mode" --output "$OUT");;
   70.*|110.*)
    mode=landmark; [[ "$STEP" != 110.* ]] || mode=standalone
    OUT="$CAP/$mode/protocol-report.json"; script=report.py
    args=(--capture "$CAP/$mode" --extraction "$CAP/$mode/extracted" --object-report "$CAP/$mode/object-validation.json" --output "$OUT");;
-  120.*) OUT="$CAP/negative"; script=negative_cases.py; args=(--fixtures "$FIX" --profile pq --output "$OUT");;
+  120.*) OUT="$CAP/invalid-input-stress"; script=negative_cases.py; args=(--fixtures "$FIX" --profile "$PROFILE" --output "$OUT");;
  esac
  CMD=(docker run --rm --network none -v "$REPO:/repo:ro" -v "$REPO/$CAP:/repo/$CAP" -w /repo --entrypoint python3 "$image" "campaigns/protocol_validation/$script" "${args[@]}")
 }
 show() { printf '%q ' "${CMD[@]}"; printf '\n'; }
 status() {
  load
- printf 'FIX=%s\nKEY=%s\nCAP=%s\nPerfil: pq histórico, N=16. Imágenes: mt-tls-measurement:local y mt-tls-capture:local.\n' "$FIX" "$KEY" "$CAP"
+ printf 'FIX=%s\nKEY=%s\nCAP=%s\nProfile: %s, N=16. Images: mt-tls-measurement:local and mt-tls-capture:local.\n' "$FIX" "$KEY" "$CAP" "$PROFILE"
  local step
  for step in "${STEPS[@]}"; do
   plan "$step"; printf '%-29s ' "$STEP"
-  if [[ -f "$STATE/$STEP.status" ]]; then cat "$STATE/$STEP.status"; else printf 'pendiente/no ejecutada por este lanzador\n'; fi
-  [[ ! -e "$OUT" ]] || printf '  Salida existente: %s (no prueba por sí sola que haya pasado).\n' "$OUT"
+  if [[ -f "$STATE/$STEP.status" ]]; then cat "$STATE/$STEP.status"; else printf 'pending/not executed by this launcher\n'; fi
+  [[ ! -e "$OUT" ]] || printf '  Existing output: %s (not proof of successful validation).\n' "$OUT"
  done
- [[ ! -d "$STATE/lock" ]] || printf 'Hay un bloqueo de ejecución; consulta el proceso/log.\n'
+ [[ ! -d "$STATE/lock" ]] || printf 'An execution lock exists; inspect the process/log.\n'
 }
 passed() {
  python3 - "$1" <<'PY'
 import json,sys
 from pathlib import Path
 p=Path(sys.argv[1])
-if not p.is_file():raise SystemExit('Falta validación previa: '+str(p))
+if not p.is_file():raise SystemExit('Missing prerequisite validation: '+str(p))
 d=json.loads(p.read_text())
-if d.get('overall')!='PASS':raise SystemExit('Validación previa no superada: '+str(p))
+if d.get('overall')!='PASS':raise SystemExit('Prerequisite validation did not pass: '+str(p))
 PY
 }
 preflight() {
@@ -87,23 +96,25 @@ preflight() {
   50.*|90.*) mt_images_required mt-tls-capture:local || return 1;;
   *) mt_images_required mt-tls-measurement:local || return 1;;
  esac
- [[ ! -e "$OUT" ]] || fail "Salida existente: $OUT. Se conserva; usa un CAP nuevo para repetir."
- [[ -f "$FIX/manifest.json" && -f "$KEY" ]] || fail 'Faltan fixtures o clave. Configura FIX y KEY; no se generan automáticamente.'
- python3 - "$FIX/manifest.json" <<'PY'
+ [[ ! -e "$OUT" ]] || fail "Output exists: $OUT. It is preserved; use a new CAP for another attempt."
+ [[ -f "$FIX/manifest.json" && -f "$KEY" ]] || fail 'Fixtures or server key are missing. Run bin/cryptographic_scaling/mt-protocol-validation status and configure FIX and KEY using set or the menu. Initialization does not generate fixtures. See campaigns/protocol_validation/README.md (Before the first run).'
+ python3 - "$FIX/manifest.json" "$PROFILE" <<'PY'
 import json,sys
-m=json.load(open(sys.argv[1]))
-if m.get('tree_size')!=16 or m.get('crypto_family')!='pq' or m.get('ca_id')!='32473.2':
-    raise SystemExit('Este flujo inicial requiere pq histórico, CA 32473.2, N=16; no Paper-1 mldsa65.')
+sys.path.insert(0,'src/mtc')
+from crypto_profiles import crypto_profile
+m=json.load(open(sys.argv[1]));p=crypto_profile(sys.argv[2])
+if m.get('tree_size')!=16 or m.get('profile',m.get('crypto_family'))!=sys.argv[2] or m.get('ca_id')!=p['ca_id'] or m.get('cosigner_ids')!=list(p['cosigner_ids']):
+    raise SystemExit('N=16 fixture identity does not match the configured profile.')
 PY
  case "$STEP" in
   20.*) passed "$CAP/10.offline-existing.json";;
   30.*) passed "$CAP/20.offline-landmark.json";;
   40.*) passed "$CAP/20.offline-landmark.json"; passed "$CAP/30.offline-standalone.json";;
-  50.*) [[ -f "$CAP/landmark/metadata.json" ]] || fail 'Falta captura landmark.';;
+  50.*) [[ -f "$CAP/landmark/metadata.json" ]] || fail 'Landmark capture is missing.';;
   60.*) passed "$CAP/landmark/extracted/extraction.json";;
   70.*) passed "$CAP/landmark/object-validation.json";;
   80.*) passed "$CAP/landmark/protocol-report.json";;
-  90.*) [[ -f "$CAP/standalone/metadata.json" ]] || fail 'Falta captura standalone.';;
+  90.*) [[ -f "$CAP/standalone/metadata.json" ]] || fail 'Standalone capture is missing.';;
   100.*) passed "$CAP/standalone/extracted/extraction.json";;
   110.*) passed "$CAP/standalone/object-validation.json";;
   120.*) passed "$CAP/30.offline-standalone.json";;
@@ -111,7 +122,7 @@ PY
 }
 run_step() (
  load; plan "$1"
- mkdir "$STATE/lock" 2>/dev/null || fail 'Otra etapa está activa o quedó un bloqueo tras una interrupción.'
+ mkdir "$STATE/lock" 2>/dev/null || fail 'Another stage is active or a lock remains after interruption.'
  trap 'rmdir "$STATE/lock" 2>/dev/null || true' EXIT
  preflight
  mkdir -p "$CAP"
@@ -119,7 +130,7 @@ run_step() (
  log="$STATE/$STEP-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
  printf 'running; log=%s\n' "$log" > "$STATE/$STEP.status"
  trap 'printf "interrupted; log=%s\n" "$log" > "$STATE/$STEP.status"; exit 130' INT TERM
- printf 'Etapa %s\nLog %s\n' "$STEP" "$log"; show
+ printf 'Stage %s\nLog %s\n' "$STEP" "$log"; show
  set +e
  PYTHONUNBUFFERED=1 "${CMD[@]}" 2>&1 | tee "$log"
  rc=${PIPESTATUS[0]}
@@ -130,50 +141,56 @@ run_step() (
 )
 set_path() {
  load
- [[ ! -d "$STATE/lock" ]] || fail 'No cambies rutas durante una etapa.'
- case "$1" in FIX|KEY|CAP) ;; *) fail 'Variables: FIX KEY CAP';; esac
- # Relative artifact paths keep container and host references identical.
- case "$2" in artifacts/*) ;; *) fail 'Usa una ruta relativa bajo artifacts/.';; esac
- case "/$2/" in */../*|*/./*|*//*|*$'\n'*) fail 'Ruta no normalizada.';; esac
- if [[ "$1" == CAP ]]; then
-  case "$2" in artifacts/protocol-validation/*) ;; *) fail 'CAP debe estar bajo artifacts/protocol-validation/.';; esac
+ [[ ! -d "$STATE/lock" ]] || fail 'Do not change paths while a stage is running.'
+ case "$1" in FIX|KEY|CAP|PROFILE) ;; *) fail 'Variables: FIX KEY CAP PROFILE';; esac
+ [[ ! -d "$CAP" ]] || fail 'Evidence already exists: use new for another campaign; previous state is preserved.'
+ if [[ "$1" == PROFILE ]]; then
+  case "$2" in pq|classic|mldsa65|ecdsa-p256|slhdsa128s) PROFILE=$2; save; return;; *) fail 'Supported capture profiles: pq classic mldsa65 ecdsa-p256 slhdsa128s.';; esac
  fi
- [[ ! -d "$CAP" ]] || fail 'Ya hay evidencias: usa new para otra campaña; se conserva el estado anterior.'
+ # Relative artifact paths keep container and host references identical.
+ case "$2" in artifacts/*) ;; *) fail 'Use a relative path under artifacts/.';; esac
+ case "/$2/" in */../*|*/./*|*//*|*$'\n'*) fail 'Path is not normalized.';; esac
+ if [[ "$1" == CAP ]]; then
+  case "$2" in artifacts/protocol-validation/*) ;; *) fail 'CAP must be under artifacts/protocol-validation/.';; esac
+ fi
+ [[ ! -d "$CAP" ]] || fail 'Evidence already exists: use new for another campaign; previous state is preserved.'
  printf -v "$1" '%s' "$2"; save
 }
 new_campaign() {
  local name=${1:-$(date -u +%Y%m%dT%H%M%SZ)}
- [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Nombre no válido.'
- [[ ! -d "$STATE/lock" ]] || fail 'Hay una etapa activa o un bloqueo pendiente.'
- [[ ! -e "artifacts/protocol-validation/$name" ]] || fail 'La salida de esa campaña ya existe.'
+ [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid name.'
+ [[ ! -d "$STATE/lock" ]] || fail 'A stage is active or a lock needs inspection.'
+ [[ ! -e "artifacts/protocol-validation/$name" ]] || fail 'That campaign output already exists.'
+ [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] || fail 'Initialize mt-cert-scaling before starting a new Paper-1 protocol campaign.'
  if [[ -d "$STATE" ]]; then mv "$STATE" "$STATE.saved-$(date -u +%Y%m%dT%H%M%SZ)-$$"; fi
  init "$name"
 }
 menu() {
  local choice value key
  while true; do
-  printf '\nProtocol validation: 1 Inicializar  2 Estado  3 Ver comando\n                     4 Ejecutar etapa  5 Cambiar ruta  6 Nueva campaña  0 Volver\n'
+  printf '\nProtocol validation: 1 Initialize  2 Status  3 Show command\n                     4 Run stage  5 Change path  6 New campaign  0 Back\n'
   read -r -p '> ' choice || return 0
   case "$choice" in
-   1) read -r -p 'Fecha/nombre (vacío=nuevo): ' value; "$SELF" init "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
+   1) read -r -p 'Date/name (empty=new): ' value; "$SELF" init "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
    2) "$SELF" status || true;;
-   3|4) printf '%s\n' "${STEPS[@]}"; read -r -p 'Número: ' value
+   3|4) printf '%s\n' "${STEPS[@]}"; read -r -p 'Number: ' value
      if [[ "$choice" == 3 ]]; then "$SELF" show "$value" || true; else "$SELF" run "$value" || true; fi;;
-   5) read -r -p 'Variable FIX, KEY o CAP: ' key; read -r -p 'Ruta relativa: ' value; "$SELF" set "$key" "$value" || true;;
-   6) read -r -p 'Fecha/nombre nuevo (vacío=nuevo): ' value; "$SELF" new "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
+   5) read -r -p 'Variable FIX, KEY, CAP or PROFILE: ' key; read -r -p 'Relative path: ' value; "$SELF" set "$key" "$value" || true;;
+   6) read -r -p 'New date/name (empty=new): ' value; "$SELF" new "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
    0) return 0;;
   esac
  done
 }
 case "${1:-menu}" in
  init) init "${2:-$(date -u +%Y%m%dT%H%M%SZ)}";;
+ init-legacy) init "${2:-$(date -u +%Y%m%dT%H%M%SZ)}" legacy;;
  new) new_campaign "${2:-$(date -u +%Y%m%dT%H%M%SZ)}";;
  status) status;;
  list) printf '%s\n' "${STEPS[@]}";;
- show) load; plan "${2:?Indica etapa}"; show;;
- run) run_step "${2:?Indica etapa}";;
- set) set_path "${2:?Variable}" "${3:?Ruta}";;
+ show) load; plan "${2:?Stage required}"; show;;
+ run) run_step "${2:?Stage required}";;
+ set) set_path "${2:?Variable required}" "${3:?Path required}";;
  menu) menu;;
- help|--help|-h) printf 'Uso: %s [menu|init [FECHA]|new [FECHA]|status|list|show ETAPA|run ETAPA|set FIX/KEY/CAP RUTA]\nPreparación manual: init/status/show no ejecutan Docker. Sin builds, borrado ni matrices.\n' "$SELF";;
- *) fail 'Comando desconocido; usa help.';;
+ help|--help|-h) printf 'Usage: %s [menu|init [NAME]|init-legacy [NAME]|new [NAME]|status|list|show STAGE|run STAGE|set FIX/KEY/CAP/PROFILE VALUE]\nSTAGE accepts a number (10) or full name (10.offline-existing).\nManual workflow: init/status/show do not invoke Docker. No builds, deletion or matrices.\n' "$SELF";;
+ *) fail 'Unknown command; use help.';;
 esac

@@ -21,7 +21,7 @@ capture:docker/original_campaigns/compose.capture.yaml
 
 usage() {
   cat <<'EOF'
-Usage: bin/original_campaigns/mt-containers COMMAND [TARGET] [OPTIONS]
+Usage: bin/containers/mt-containers COMMAND [TARGET] [OPTIONS]
 
 Commands:
   list                         list Compose targets and purposes
@@ -45,7 +45,7 @@ Targets: base compact profile mtc measurement scaling latency bandwidth loss
          combined capture
 
 This tool does not delete artifacts or campaign results. Use
-bin/original_campaigns/mt-archive --clean-artifacts only after archiving results.
+bin/artifacts/mt-archive --clean-artifacts only after archiving results.
 EOF
 }
 

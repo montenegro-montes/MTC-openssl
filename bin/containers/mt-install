@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+set -euo pipefail
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+SELF="$REPO/bin/containers/mt-install"
+cd "$REPO"
+source "$REPO/bin/lib/docker-preflight.sh"
+STATE="$REPO/.mt-state/install"
+IMAGES=(mt-tls-lab:local mt-tls-compact:local mt-tls-profile:local mt-tls-mtc:local mt-tls-measurement:local mt-tls-network:latency mt-tls-capture:local)
+FILES=(Dockerfile Dockerfile.compact Dockerfile.profile Dockerfile.mtc Dockerfile.measurement Dockerfile.network Dockerfile.capture)
+fail() { echo "ERROR: $*" >&2; exit 1; }
+list() {
+ local i
+ for i in "${!IMAGES[@]}"; do printf '%s  %-30s %s\n' "$((i+1))" "${IMAGES[i]}" "${FILES[i]}"; done
+}
+select_stage() { [[ "$1" =~ ^[1-7]$ ]] || fail 'Stage must be 1..7.'; INDEX=$(($1-1)); }
+show_stage() {
+ select_stage "$1"
+ printf 'docker build -f %q -t %q .\n' "docker/original_campaigns/${FILES[INDEX]}" "${IMAGES[INDEX]}"
+}
+build_stage() {
+ local index=$1 parent='' rc log
+ case "$index" in 0) ;; 6) parent=${IMAGES[4]};; *) parent=${IMAGES[index-1]};; esac
+ [[ -z "$parent" ]] || mt_image_required "$parent" || return
+ log="$STATE/build-$((index+1))-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
+ printf 'Building %s\nLog: %s\n' "${IMAGES[index]}" "$log"
+ set +e
+ docker build -f "docker/original_campaigns/${FILES[index]}" -t "${IMAGES[index]}" . 2>&1 | tee "$log"
+ local codes=("${PIPESTATUS[@]}")
+ set -e
+ rc=${codes[0]}; [[ "$rc" != 0 ]] || rc=${codes[1]}
+ [[ "$rc" == 0 ]] || return "$rc"
+ echo "COMPLETED $((index+1)): ${IMAGES[index]}"
+}
+install_stages() (
+ local selection=$1 limit=${2:-} i count=0
+ if [[ "$selection" == --count ]]; then [[ "$limit" =~ ^[1-9][0-9]{0,5}$ ]] || fail 'Count must be 1..999999.';
+ elif [[ "$selection" != ALL ]]; then select_stage "$selection"; fi
+ mt_docker_ready || exit 1
+ mkdir -p "$STATE"
+ mkdir "$STATE/lock" 2>/dev/null || fail 'An installation/cleanup is active or its lock needs inspection.'
+ trap 'rmdir "$STATE/lock" 2>/dev/null || true' EXIT
+ if [[ "$selection" != ALL && "$selection" != --count ]]; then build_stage "$INDEX"; exit; fi
+ for i in "${!IMAGES[@]}"; do
+  if docker image inspect "${IMAGES[i]}" >/dev/null 2>&1; then echo "EXISTS: ${IMAGES[i]}"; continue; fi
+  # A child invocation is unnecessary: this subshell runs with errexit enabled.
+  build_stage "$i"
+  count=$((count+1))
+  if [[ "$selection" == --count && "$count" -ge "$limit" ]]; then break; fi
+ done
+ echo "Completed: $count missing images built. Use run N to rebuild a specific image."
+)
+cleanup() (
+ local include=${1:-} id ref project answer lab_images actual selected nc=0 ni=0
+ [[ -z "$include" || "$include" == --dangling ]] || fail 'Use clean [--dangling].'
+ mt_docker_ready || exit 1
+ mkdir -p "$STATE"
+ mkdir "$STATE/lock" 2>/dev/null || fail 'An installation/cleanup is active or its lock needs inspection.'
+ trap 'rmdir "$STATE/lock" 2>/dev/null || true' EXIT
+ local containers=() images=()
+ lab_images=$(docker image ls --filter 'reference=mt-tls-*' --no-trunc -q)
+ while IFS= read -r id; do
+  [[ -n "$id" ]] || continue
+  ref=$(docker inspect --format '{{.Config.Image}}' "$id")
+  project=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$id")
+  actual=$(docker inspect --format '{{.Image}}' "$id")
+  selected=0
+  if printf '%s\n' "$lab_images" | grep -Fx "$actual" >/dev/null; then selected=1; fi
+  case "$ref:$project" in mt-tls-*:*|*:mt|*:mtcompact|*:mtprofile|*:mtclab|*:controlledn16|*:mtscaling|*:mtlatency|*:mtbandwidth|*:mtloss|*:mtcombined|*:mtcapture|*:mtcprotocol-*) selected=1;; esac
+  if [[ "$selected" == 1 ]]; then containers[nc]=$id; nc=$((nc+1)); fi
+ done < <(docker ps -aq)
+ while IFS= read -r id; do if [[ -n "$id" ]]; then images[ni]=$id; ni=$((ni+1)); fi; done < <(
+  { docker image ls --filter 'reference=mt-tls-*' -q
+    if [[ "$include" == --dangling ]]; then docker image ls --filter dangling=true -q; fi
+  } | sort -u
+ )
+ echo 'Containers to stop and remove:'
+ if ((nc)); then for id in "${containers[@]}"; do docker inspect --format '{{.Id}} {{.Name}} {{.Config.Image}}' "$id"; done; fi
+ echo 'Images to remove:'
+ if ((ni)); then for id in "${images[@]}"; do docker image inspect --format '{{.Id}} {{json .RepoTags}}' "$id"; done; fi
+ if [[ "$include" == --dangling ]]; then
+  echo 'WARNING: untagged images cannot reliably be attributed to this project. This includes ALL dangling images in the active Docker context.'
+ fi
+ echo 'Container writable-layer data will be lost. Bind-mounted artifacts, named volumes and build cache are preserved.'
+ read -r -p 'Type DELETE LAB to confirm: ' answer
+ [[ "$answer" == 'DELETE LAB' ]] || { echo 'Cancelled.'; exit 1; }
+ if ((nc)); then docker rm -f "${containers[@]}"; fi
+ # Do not force removal of images still referenced by other containers.
+ if ((ni)); then docker image rm "${images[@]}"; fi
+ echo 'Cleanup completed.'
+)
+menu() {
+ local choice value
+ while true; do
+  printf '\nInstallation: 1 List stages  2 Status  3 Build stage  4 Build ALL missing\n              5 Build X missing  6 Start services  7 Clean lab\n              8 Clean lab + dangling images  0 Exit\n'
+  read -r -p '> ' choice || return 0
+  case "$choice" in
+   1) list;;
+   2) "$SELF" status || true;;
+   3) list; read -r -p 'Stage number: ' value; "$SELF" run "$value" || true;;
+   4) "$SELF" run ALL || true;;
+   5) read -r -p 'Count: ' value; "$SELF" run --count "$value" || true;;
+   6) "$REPO/bin/containers/mt-containers" list; read -r -p 'Target: ' value; "$REPO/bin/containers/mt-containers" up "$value" || true;;
+   7) "$SELF" clean || true;;
+   8) "$SELF" clean --dangling || true;;
+   0) return 0;;
+  esac
+ done
+}
+case "${1:-menu}" in
+ menu) menu;; list) list;; show) show_stage "${2:?Stage required}";;
+ run)
+  if [[ "$#" == 3 && "$2" == --count ]]; then install_stages --count "$3";
+  elif [[ "$#" == 2 ]]; then install_stages "$2";
+  else fail 'Usage: run N | run --count X | run ALL'; fi;;
+ status) mt_docker_ready || exit 1; list; docker image ls --filter 'reference=mt-tls-*'; docker image ls --filter dangling=true;;
+ clean) [[ "$#" -le 2 ]] || fail 'Usage: clean [--dangling]'; cleanup "${2:-}";;
+ help|--help|-h) echo 'Usage: mt-install [menu|list|status|show N|run N|run --count X|run ALL|clean [--dangling]]';;
+ *) fail 'Unknown command; use help.';;
+esac

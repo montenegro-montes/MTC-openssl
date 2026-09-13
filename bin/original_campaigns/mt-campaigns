@@ -75,6 +75,7 @@ Commands:
   status                       show progress and current result paths
   show STEP                    print a step's command without running it
   run STEP                     execute one step and record its result
+                               STEP accepts a number (10) or full name (10.n16-init)
   run --count X                execute up to X pending/failed stages in order
   run ALL                      execute every remaining stage; stop on first failure
   next                         execute the first pending/failed step
@@ -124,10 +125,21 @@ require_state() {
   fi
 }
 load_roots() { require_state; set -a; . "$ROOTS_FILE"; set +a; }
-has_step() { printf '%s\n' "$STEPS" | grep -Fx "$1" >/dev/null; }
+resolve_step() {
+  local requested=$1 entry prefix
+  while IFS= read -r entry; do
+    prefix=${entry%%.*}
+    if [[ "$requested" == "$entry" || "$requested" == "$prefix" || "$requested" == "${prefix#0}" ]]; then
+      printf '%s\n' "$entry"; return 0
+    fi
+  done <<< "$STEPS"
+  echo "Unknown step: $requested" >&2; return 2
+}
+has_step() { resolve_step "$1" >/dev/null; }
 get_status() { awk -F '\t' -v id="$1" '$1==id {print $2}' "$STATE_FILE"; }
 set_status() {
-  local id=$1 value=$2 now tmp
+  local id value=$2 now tmp
+  id=$(resolve_step "$1") || return 2
   case "$value" in pending|running|completed|failed|skipped) :;; *) echo "Invalid status: $value" >&2; return 2;; esac
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ); tmp="$STATE_FILE.tmp"
   awk -F '\t' -v OFS='\t' -v id="$id" -v value="$value" -v now="$now" '{if($1==id){$2=value;$3=now} print}' "$STATE_FILE" > "$tmp"
@@ -160,13 +172,15 @@ EOF
 }
 
 command_for() {
-  case "$1" in
-    00.doctor) echo "bin/original_campaigns/mt-containers doctor && git status --short && git rev-parse HEAD";;
-    01.base-build) echo "bin/original_campaigns/mt-containers build base";;
+  local step
+  step=$(resolve_step "$1") || return 2
+  case "$step" in
+    00.doctor) echo "bin/containers/mt-containers doctor && git status --short && git rev-parse HEAD";;
+    01.base-build) echo "bin/containers/mt-containers build base";;
     02.base-fixtures) echo "docker compose -f docker/original_campaigns/compose.yaml run --rm setup";;
-    03.compact-build) echo "bin/original_campaigns/mt-containers build compact";;
+    03.compact-build) echo "bin/containers/mt-containers build compact";;
     04.compact-fixtures) echo "docker compose -f docker/original_campaigns/compose.compact.yaml run --rm setup";;
-    05.mtc-build) echo "bin/original_campaigns/mt-containers build profile && bin/original_campaigns/mt-containers build mtc";;
+    05.mtc-build) echo "bin/containers/mt-containers build profile && bin/containers/mt-containers build mtc";;
     06.mtc-fixtures) echo "docker compose -f docker/original_campaigns/compose.mtc.yaml run --rm setup";;
     07.measurement-image) echo "docker build -f docker/original_campaigns/Dockerfile.measurement --build-arg BASE_IMAGE=mt-tls-mtc:local -t mt-tls-measurement:local . && docker run --rm --network none -v \"$REPO/artifacts:/work:ro\" mt-tls-measurement:local sh /opt/measurement/tests.sh";;
     08.network-image) echo "python3 -m campaigns.common.image_chain network";;
@@ -198,7 +212,7 @@ command_for() {
     92.pcma-b-audit) echo "campaigns/original_campaigns/pcma_stage_b/run_pcma_stage_b.sh --audit --results \"$B_RESULTS\" && campaigns/original_campaigns/pcma_stage_b/run_pcma_stage_b.sh --check-model --results \"$B_RESULTS\"";;
     93.pcma-b-publication) echo "campaigns/original_campaigns/pcma_stage_b/run_pcma_stage_b.sh --analyze --results \"$B_RESULTS\" --output \"$B_RESULTS/analysis\" && campaigns/original_campaigns/pcma_stage_b/run_pcma_stage_b.sh --tables --results \"$B_RESULTS\" --output \"$B_RESULTS/tables\"";;
     100.capture-optional) echo "python3 campaigns/original_campaigns/handshake_capture/run.py --root \"$CAPTURE_ROOT\" && python3 campaigns/original_campaigns/handshake_capture/validate.py \"$CAPTURE_ROOT\"";;
-    110.archive-results) echo "python3 bin/original_campaigns/mt-archive --campaign controlled-n16=\"$N16_ROOT\" --campaign scaling=\"$SCALING_ROOT\" --campaign network-latency=\"$LATENCY_ROOT\" --campaign network-bandwidth=\"$BANDWIDTH_ROOT\" --campaign packet-loss=\"$LOSS_ROOT\" --campaign combined-network=\"$COMBINED_ROOT\" --campaign pcma-stage-a=\"$PCMA_ROOT\" --campaign pcma-stage-a2=\"$A2_RESULTS\" --campaign pcma-stage-b1=\"$B_RESULTS\"";;
+    110.archive-results) echo "python3 bin/artifacts/mt-archive --campaign controlled-n16=\"$N16_ROOT\" --campaign scaling=\"$SCALING_ROOT\" --campaign network-latency=\"$LATENCY_ROOT\" --campaign network-bandwidth=\"$BANDWIDTH_ROOT\" --campaign packet-loss=\"$LOSS_ROOT\" --campaign combined-network=\"$COMBINED_ROOT\" --campaign pcma-stage-a=\"$PCMA_ROOT\" --campaign pcma-stage-a2=\"$A2_RESULTS\" --campaign pcma-stage-b1=\"$B_RESULTS\"";;
     *) return 1;;
   esac
 }
@@ -235,10 +249,7 @@ stage_docker_preflight() {
 run_step() {
   local id=$1 command rc
   load_roots
-  if [[ "$id" =~ ^[0-9]+$ ]]; then
-    id=$(awk -F '\t' -v number="$id" '{split($1,parts,"."); if (parts[1]+0==number+0) {print $1; exit}}' "$STATE_FILE")
-  fi
-  has_step "$id" || { echo "Unknown step: $id" >&2; exit 2; }
+  id=$(resolve_step "$id") || return 2
   stage_docker_preflight "$id" || return 1
   command=$(command_for "$id")
   echo "==> $id — $(description "$id")"; echo "+ $command"

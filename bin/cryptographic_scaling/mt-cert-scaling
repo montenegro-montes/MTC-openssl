@@ -8,42 +8,47 @@ STATE="$REPO/.mt-state/cert-scaling"
 CONFIG="$STATE/paths.env"
 CHAIN=campaigns/cryptographic_scaling/cert_chain_scaling
 MTC=campaigns/cryptographic_scaling/mtc_profile_scaling/workflow.py
-STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 70.mtc-all 80.crossover 90.audit)
+STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 70.mtc-all 80.crossover 90.audit 100.cross-advanced)
+DEFAULT_STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 80.crossover 90.audit)
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 usage() {
  cat <<'HELP'
-Uso: bin/cryptographic_scaling/mt-cert-scaling [COMANDO]
-  menu                      menú interactivo (opción predeterminada)
-  protocol                  abrir el menú separado de validación de protocolo
-  init [FECHA]              guardar rutas; no ejecutar ni generar fixtures
-  status                    rutas, etapas y progreso de certificados
-  list                      etapas disponibles
-  show ETAPA                mostrar comando sin ejecutarlo
-  run ETAPA                 ejecutar una única etapa y guardar su log
-  run --count X             ejecutar hasta X etapas pendientes, en orden
-  run ALL                   ejecutar las etapas restantes; parar ante fallo
-  set VARIABLE RUTA         seleccionar una ruta existente o una salida nueva
+Usage: bin/cryptographic_scaling/mt-cert-scaling [COMMAND]
+  menu                      interactive menu (default)
+  prepare                   open the independent prerequisites menu
+  protocol                  open the separate protocol-validation menu
+  init [NAME]              save paths without running or generating fixtures
+  status                    paths, stages and certificate progress
+  list                      available stages (70 and 100 are optional)
+  show STAGE                print a command without executing it
+  run STAGE                 execute one stage and save its log
+  run --count X             execute up to X pending default stages in order
+  run ALL                   execute remaining default stages; stop on failure
+  set VARIABLE PATH         select an input path or a fresh output path
 
 Variables: CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID
-           MTC_ALL STATIC_ROOT AUDIT
-Las etapas aceptan número (70) o nombre completo (70.mtc-all).
-No hay ejecución automática de la matriz TLS, borrado ni reinicio destructivo.
-Para continuar una campaña manual usa init con su fecha y set para sus rutas.
+           MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT
+Stages accept a number (80) or full name (80.crossover).
+  cross                     N=16 crossover + plots (stage 80)
+  cross-advanced            generate missing full fixtures, then crossover + plots
+Default batches skip optional stages 70 and 100.
+No TLS performance matrix, deletion or destructive reset is launched.
+For a previous manual campaign, use init with its name and set its paths.
 HELP
 }
-load() { [[ -f "$CONFIG" ]] || fail 'Primero ejecuta init [FECHA].'; source "$CONFIG"; }
+load() { [[ -f "$CONFIG" ]] || fail 'Run init [NAME] first.'; source "$CONFIG"; ADVANCED_ROOT=${ADVANCED_ROOT:-${STATIC_ROOT}-advanced}; }
 save() {
  local key
  (umask 077; : > "$CONFIG.tmp"
- for key in STAMP CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT; do
+ for key in STAMP CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT; do
   printf '%s=%q\n' "$key" "${!key}" >> "$CONFIG.tmp"
  done
  mv "$CONFIG.tmp" "$CONFIG")
 }
 init() {
- [[ ! -e "$CONFIG" ]] || fail 'Ya hay configuración. Usa status y set; no se sobrescribe.'
+ [[ ! -e "$CONFIG" ]] || fail 'Configuration already exists. Use status and set; it will not be overwritten.'
  STAMP=${1:-$(date -u +%Y%m%dT%H%M%SZ)}
- [[ "$STAMP" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Fecha/nombre no válido.'
+ [[ "$STAMP" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid date/name.'
  CHAIN_FIXTURES="artifacts/cert-chain-scaling/fixtures-$STAMP"
  CHAIN_VALID="artifacts/results/cert-chain-validation-$STAMP.json"
  ENVIRONMENT="artifacts/cert-chain-scaling/environment-$STAMP.json"
@@ -51,17 +56,18 @@ init() {
  MTC16="artifacts/paper1-mtc/n16-$STAMP"
  MTC_VALID="artifacts/results/paper1-mtc-n16-$STAMP"
  MTC_ALL="artifacts/paper1-mtc/all-$STAMP"
- STATIC_ROOT="artifacts/results/paper1-crossover-$STAMP"
+ STATIC_ROOT="artifacts/results/paper1-crossover-n16-$STAMP"
+ ADVANCED_ROOT="artifacts/results/paper1-crossover-advanced-$STAMP"
  AUDIT="artifacts/results/paper1-crossover-audit-$STAMP.json"
  mkdir -p "$STATE"; save
- printf 'Rutas guardadas. No se ha ejecutado ninguna campaña.\n'
+ printf 'Paths saved. No campaign has been executed.\n'
 }
 select_step() {
  local entry
  for entry in "${STEPS[@]}"; do
   if [[ "$1" == "$entry" || "$1" == "${entry%%.*}" ]]; then STEP=$entry; return; fi
  done
- fail "Etapa desconocida: $1"
+ fail "Unknown stage: $1"
 }
 plan() {
  select_step "$1"
@@ -69,11 +75,14 @@ plan() {
   10.*) OUT=$ENVIRONMENT; CMD=(python3 "$CHAIN/inspect_environment.py" --output "$ENVIRONMENT" --support-output "$SUPPORT");;
   20.*) OUT=$CHAIN_FIXTURES; CMD=(python3 "$CHAIN/generate_fixtures.py" --output "$CHAIN_FIXTURES");;
   30.*) OUT=$CHAIN_VALID; CMD=(python3 "$CHAIN/validate.py" "$CHAIN_FIXTURES" --output "$CHAIN_VALID");;
-  40.*) OUT=''; CMD=(bin/original_campaigns/mt-containers build mtc);;
+  40.*) OUT=''; CMD=(bin/cryptographic_scaling/mt-prepare run 4);;
   50.*) OUT=$MTC16; CMD=(python3 "$MTC" generate --output "$MTC16" --execute);;
   60.*) OUT=$MTC_VALID; CMD=(python3 "$MTC" validate --fixtures "$MTC16" --output "$MTC_VALID" --execute);;
   70.*) OUT=$MTC_ALL; CMD=(python3 "$MTC" generate --sizes 1 4 16 64 256 1024 --seed-fixtures "$MTC16" --validated-n16 "$MTC_VALID/validation.json" --output "$MTC_ALL" --execute);;
-  80.*) OUT=$STATIC_ROOT; CMD=(python3 "$CHAIN/size_analysis.py" "$CHAIN_FIXTURES" --mtc-fixtures "$MTC_ALL" --output "$STATIC_ROOT");;
+  80.*) OUT=$STATIC_ROOT
+   CMD=(bash -c 'python3 "$1/size_analysis.py" "$2" --mtc-fixtures "$3" --output "$4" && python3 "$1/plots.py" "$4" --output "$4/plots"' _ "$CHAIN" "$CHAIN_FIXTURES" "$MTC16" "$STATIC_ROOT");;
+  100.*) OUT=$ADVANCED_ROOT
+   CMD=(bash -c 'python3 "$1/size_analysis.py" "$2" --mtc-fixtures "$3" --output "$4" && python3 "$1/plots.py" "$4" --output "$4/plots"' _ "$CHAIN" "$CHAIN_FIXTURES" "$MTC_ALL" "$ADVANCED_ROOT");;
   90.*) OUT=$AUDIT; CMD=(python3 "$CHAIN/validate.py" "$CHAIN_FIXTURES" --analysis "$STATIC_ROOT" --output "$AUDIT");;
  esac
 }
@@ -81,51 +90,72 @@ show_command() { printf '%q ' "${CMD[@]}"; printf '\n'; }
 progress() {
  local root=$1 dir count
  [[ -d "$root/population" ]] || return 0
- printf '\nPoblación %s (objetivo por perfil: %s):\n' "$root" "$2"
+ printf '\nPopulation %s (target per profile: %s):\n' "$root" "$2"
  for dir in "$root"/population/*; do
   [[ -d "$dir" ]] || continue
   count=$(find "$dir" -maxdepth 1 -type f -name '*.pem' ! -name ca.pem | wc -l | tr -d ' ')
-  printf '  %-16s %s certificados\n' "${dir##*/}" "$count"
+  printf '  %-16s %s certificates\n' "${dir##*/}" "$count"
  done
- printf 'Llegar al objetivo no significa que los objetos MTC estén terminados.\n'
+ printf 'Reaching the target does not mean the MTC objects are complete.\n'
 }
 status() {
  load
  local key step state
- for key in CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT; do
+ for key in CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT; do
   printf '%-16s %s\n' "$key" "${!key}"
  done
- printf '\nEtapas (salida existente no implica validación):\n'
+ printf '\nStages (existing output does not imply validation):\n'
  for step in "${STEPS[@]}"; do
-  plan "$step"; state='pendiente/no ejecutada por este lanzador'
+  plan "$step"; state='pending/not executed by this launcher'
   [[ ! -f "$STATE/$STEP.status" ]] || state=$(cat "$STATE/$STEP.status")
-  [[ -z "$OUT" || ! -e "$OUT" ]] || state="$state; salida existente"
+  [[ -z "$OUT" || ! -e "$OUT" ]] || state="$state; output exists"
   printf '  %-20s %s\n' "$STEP" "$state"
  done
  progress "$MTC16" 16
  progress "$MTC_ALL" 1024
- [[ ! -d "$STATE/lock" ]] || printf '\nHay un bloqueo de ejecución. Revisa el proceso y su log antes de intervenir.\n'
+ [[ ! -d "$STATE/lock" ]] || printf '\nAn execution lock exists. Inspect the process and its log before intervening.\n'
 }
-require_path() { [[ -e "$1" ]] || fail "Falta entrada: $1"; }
+require_path() { [[ -e "$1" ]] || fail "Missing input: $1"; }
 preflight() {
  case "$STEP" in
   10.*|20.*|30.*|90.*) mt_images_required mt-tls-measurement:local || return 1;;
-  40.*) mt_compose_ready && mt_image_required mt-tls-profile:local || return 1;;
+  40.*) mt_compose_ready || return 1;;
   50.*|60.*|70.*) mt_images_required mt-tls-mtc:local || return 1;;
  esac
- [[ -z "$OUT" || ! -e "$OUT" ]] || fail "La salida ya existe: $OUT. No se sobrescribe ni se reanuda. Consulta status o usa set con otra ruta."
+ [[ -z "$OUT" || ! -e "$OUT" ]] || fail "Output already exists: $OUT. It will not be overwritten or resumed. Check status or use set with a fresh path."
  case "$STEP" in
-  10.*) [[ ! -e "$SUPPORT" ]] || fail "Ya existe $SUPPORT";;
+  10.*) [[ ! -e "$SUPPORT" ]] || fail "Output already exists: $SUPPORT";;
   30.*) require_path "$CHAIN_FIXTURES";;
   60.*) require_path "$MTC16/manifest.json";;
   70.*) require_path "$MTC_VALID/validation.json"; require_path "$MTC16/manifest.json";;
-  80.*) require_path "$CHAIN_VALID"; require_path "$MTC_ALL/manifest.json"; require_path "$MTC_VALID/validation.json"
-    python3 - "$CHAIN_VALID" "$MTC_VALID/validation.json" <<'PY'
+  80.*|100.*)
+    python3 -c 'import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("matplotlib") else "ERROR: matplotlib is required to generate crossover plots. Install it in the Python environment used by this launcher.")' || return 1
+    require_path "$CHAIN_VALID"; require_path "$MTC16/manifest.json"; require_path "$MTC_VALID/validation.json"
+    if [[ "$STEP" == 100.* ]]; then require_path "$MTC_ALL/manifest.json"; fi
+    python3 - "$CHAIN_VALID" "$MTC_VALID/validation.json" "$MTC16" "$STEP" "$MTC_ALL" <<'PY'
 import json,sys
-for path in sys.argv[1:]:
+for path in sys.argv[1:3]:
     data=json.load(open(path))
     if data.get('passed') is not True:
-        raise SystemExit('La validación no indica passed=true: '+path)
+        raise SystemExit('Validation does not report passed=true: '+path)
+from pathlib import Path
+import hashlib
+root=Path(sys.argv[3]);gate=json.loads(Path(sys.argv[2]).read_text())
+profiles={'ecdsa-p256','ecdsa-p384','ecdsa-p521','mldsa44','mldsa65','mldsa87','slhdsa128s','slhdsa192s','slhdsa256s'}
+expected={(name,mode) for name in profiles for mode in ('landmark','standalone')}
+cells=gate.get('cells',[])
+if len(cells)!=18 or {(r.get('profile'),r.get('mtc_mode')) for r in cells}!=expected or any(r.get('tree_size')!=16 or r.get('success') is not True for r in cells):
+    raise SystemExit('The N=16 gate must pass all nine profiles and both modes.')
+actual={str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.rglob('*')) if p.is_file()}
+if actual!=gate.get('fixture_hashes'):raise SystemExit('N=16 fixtures differ from the validation gate.')
+if sys.argv[4].startswith('100.'):
+    m=json.loads((Path(sys.argv[5])/'manifest.json').read_text())
+    if set(m.get('sizes',[]))!={1,4,16,64,256,1024} or set(m.get('profiles',[]))!=profiles:
+        raise SystemExit('Advanced analysis requires all six populations and all nine profiles.')
+    for n in m['sizes']:
+        for profile in profiles:
+            if not (Path(sys.argv[5])/f'batch{n}'/'mtc'/profile/'manifest.json').is_file():
+                raise SystemExit(f'Missing advanced fixture: {profile}, N={n}')
 PY
     ;;
   90.*) require_path "$STATIC_ROOT/analysis.json"; require_path "$CHAIN_FIXTURES";;
@@ -133,16 +163,16 @@ PY
 }
 run() (
  load; plan "$1"; preflight
- mkdir "$STATE/lock" 2>/dev/null || fail 'Otra etapa está en marcha (o quedó un bloqueo tras una interrupción).'
+ mkdir "$STATE/lock" 2>/dev/null || fail 'Another stage is running, or a lock remains after interruption.'
  trap 'rmdir "$STATE/lock" 2>/dev/null || true' EXIT
  local log rc monitor
  log="$STATE/$STEP-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
  printf 'running; log=%s\n' "$log" > "$STATE/$STEP.status"
- printf 'Etapa: %s\nLog: %s\n' "$STEP" "$log"; show_command
+ printf 'Stage: %s\nLog: %s\n' "$STEP" "$log"; show_command
  # Monitor only new output: no edits to the running scientific implementation.
  (
   while sleep 30; do
-   printf '[%s] Sigue en ejecución: %s\n' "$(date +%H:%M:%S)" "$STEP"
+   printf '[%s] Still running: %s\n' "$(date +%H:%M:%S)" "$STEP"
    case "$STEP" in 50.*) progress "$MTC16" 16;; 70.*) progress "$MTC_ALL" 1024;; esac
   done
  ) & monitor=$!
@@ -158,63 +188,84 @@ run() (
   printf 'COMPLETED %s\n' "$STEP"
  else
   printf 'failed (exit %s); log=%s\n' "$rc" "$log" > "$STATE/$STEP.status"
-  printf 'FAILED %s (exit %s). Se conserva toda la salida.\n' "$STEP" "$rc"
+  printf 'FAILED %s (exit %s). All output is preserved.\n' "$STEP" "$rc"
  fi
  exit "$rc"
 )
 run_batch() (
  load
  local limit=$1 step state count=0
- if [[ "$limit" != ALL ]]; then [[ "$limit" =~ ^[1-9][0-9]{0,5}$ ]] || fail 'Cantidad válida: 1..999999.'; fi
- mkdir "$STATE/batch.lock" 2>/dev/null || fail 'Hay un lote activo o un bloqueo pendiente.'
+ if [[ "$limit" != ALL ]]; then [[ "$limit" =~ ^[1-9][0-9]{0,5}$ ]] || fail 'Valid count: 1..999999.'; fi
+ mkdir "$STATE/batch.lock" 2>/dev/null || fail 'A batch is active or a lock needs inspection.'
  trap 'rmdir "$STATE/batch.lock" 2>/dev/null || true' EXIT
- [[ ! -d "$STATE/lock" ]] || fail 'Hay una etapa activa o un bloqueo pendiente.'
- for step in "${STEPS[@]}"; do
+ [[ ! -d "$STATE/lock" ]] || fail 'A stage is active or a lock needs inspection.'
+ for step in "${DEFAULT_STEPS[@]}"; do
   state=''
   [[ ! -f "$STATE/$step.status" ]] || state=$(cat "$STATE/$step.status")
-  case "$state" in running*) fail "Etapa marcada running: $step. Revisa su estado antes de continuar.";; esac
+  case "$state" in running*) fail "Stage marked running: $step. Inspect its state before continuing.";; esac
  done
- for step in "${STEPS[@]}"; do
+ for step in "${DEFAULT_STEPS[@]}"; do
   state=''
   [[ ! -f "$STATE/$step.status" ]] || state=$(cat "$STATE/$step.status")
   case "$state" in completed*) continue;; esac
-  printf 'Lote: %s (%s de %s)\n' "$step" "$((count+1))" "$limit"
+  printf 'Batch: %s (%s of %s)\n' "$step" "$((count+1))" "$limit"
   "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run "$step" || exit "$?"
   count=$((count+1))
   if [[ "$limit" != ALL && "$count" -ge "$limit" ]]; then break; fi
  done
- printf 'Lote terminado: %s etapas.\n' "$count"
+ printf 'Batch completed: %s stages.\n' "$count"
+)
+
+cross_advanced() (
+ load
+ [[ ! -d "$STATE/lock" && ! -d "$STATE/batch.lock" ]] || fail 'Another stage or batch is active.'
+ mkdir "$STATE/batch.lock" || exit 1
+ trap 'rmdir "$STATE/batch.lock" 2>/dev/null || true' EXIT
+ [[ ! -e "$ADVANCED_ROOT" ]] || fail "Advanced output already exists: $ADVANCED_ROOT. Select a new ADVANCED_ROOT."
+ # Check the cheap dependencies before starting potentially expensive generation.
+ require_path "$CHAIN_VALID"; require_path "$MTC_VALID/validation.json"
+ python3 -c 'import json,sys; sys.exit(0 if all(json.load(open(p)).get("passed") is True for p in sys.argv[1:]) else "ERROR: prerequisite validation failed.")' "$CHAIN_VALID" "$MTC_VALID/validation.json"
+ python3 -c 'import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("matplotlib") else "ERROR: matplotlib is required.")'
+ if [[ -e "$MTC_ALL" ]]; then
+  require_path "$MTC_ALL/manifest.json"
+  echo "Reusing existing complete fixture root: $MTC_ALL (validated before analysis)."
+ else
+  "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 70 || exit "$?"
+ fi
+ "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 100
 )
 
 set_path() {
  load
- [[ ! -d "$STATE/lock" && ! -d "$STATE/batch.lock" ]] || fail 'No cambies rutas durante una etapa o lote.'
- case "$1" in CHAIN_FIXTURES|CHAIN_VALID|ENVIRONMENT|SUPPORT|MTC16|MTC_VALID|MTC_ALL|STATIC_ROOT|AUDIT) ;;
-  *) fail 'Variable de ruta desconocida.';;
+ [[ ! -d "$STATE/lock" && ! -d "$STATE/batch.lock" ]] || fail 'Do not change paths while a stage or batch is running.'
+ case "$1" in CHAIN_FIXTURES|CHAIN_VALID|ENVIRONMENT|SUPPORT|MTC16|MTC_VALID|MTC_ALL|STATIC_ROOT|AUDIT|ADVANCED_ROOT) ;;
+  *) fail 'Unknown path variable.';;
  esac
- [[ -n "$2" ]] || fail 'Ruta vacía.'
+ [[ -n "$2" ]] || fail 'Empty path.'
  printf -v "$1" '%s' "$2"; save
  # Recorded exits belong to the previous path configuration, not the new one.
  local file
  for file in "$STATE"/*.status; do
   [[ ! -f "$file" ]] || mv "$file" "$file.previous-$(date -u +%Y%m%dT%H%M%SZ)-$$"
  done
- printf 'Ruta guardada. Logs anteriores conservados.\n'
+ printf 'Path saved. Previous logs preserved.\n'
 }
 menu() {
  local choice value key
  while true; do
-  printf '\nCert scaling: 1 Inicializar  2 Estado/progreso  3 Ver comando\n              4 Ejecutar etapa  5 Cambiar ruta  6 Protocolo MTC\n              7 Ejecutar X etapas  8 Ejecutar ALL  0 Salir\n'
+  printf '\nCert scaling: 1 Initialize  2 Status/progress  3 Show command\n              4 Run stage  5 Change path  6 MTC protocol\n              7 Run X default stages  8 Run ALL default stages\n              9 Advanced crossover (all sizes)  10 Prepare prerequisites  0 Exit\n'
   read -r -p '> ' choice || return 0
   case "$choice" in
-   1) read -r -p 'Fecha/nombre (vacío = nuevo): ' value; "$0" init "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
+   1) read -r -p 'Date/name (empty = new): ' value; "$0" init "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
    2) "$0" status || true;;
-   3|4) printf '%s\n' "${STEPS[@]}"; read -r -p 'Número de etapa: ' value
+   3|4) printf '%s\n' "${STEPS[@]}"; read -r -p 'Stage number: ' value
     if [[ "$choice" == 3 ]]; then "$0" show "$value" || true; else "$0" run "$value" || true; fi;;
-   5) read -r -p 'Variable (ver status): ' key; read -r -p 'Ruta: ' value; "$0" set "$key" "$value" || true;;
+   5) read -r -p 'Variable (see status): ' key; read -r -p 'Path: ' value; "$0" set "$key" "$value" || true;;
    6) "$REPO/bin/cryptographic_scaling/mt-protocol-validation" menu || true;;
-   7) read -r -p 'Cantidad de etapas pendientes: ' value; "$0" run --count "$value" || true;;
+   7) read -r -p 'Number of pending stages: ' value; "$0" run --count "$value" || true;;
    8) "$0" run ALL || true;;
+   9) "$0" cross-advanced || true;;
+   10) "$REPO/bin/cryptographic_scaling/mt-prepare" menu || true;;
    0) return 0;;
   esac
  done
@@ -223,13 +274,16 @@ case "${1:-menu}" in
  init) init "${2:-$(date -u +%Y%m%dT%H%M%SZ)}";;
  status) status;;
  list) printf '%s\n' "${STEPS[@]}";;
- show) load; plan "${2:?Indica etapa}"; show_command;;
+ show) load; plan "${2:?Stage required}"; show_command;;
  run)
   if [[ "$#" == 3 && "$2" == --count ]]; then run_batch "$3"
   elif [[ "$#" == 2 && "$2" == ALL ]]; then run_batch ALL
   elif [[ "$#" == 2 ]]; then run "$2"
   else usage; exit 2; fi;;
- set) set_path "${2:?Indica variable}" "${3:?Indica ruta}";;
+ set) set_path "${2:?Variable required}" "${3:?Path required}";;
+ cross) run 80;;
+ cross-advanced) cross_advanced;;
+ prepare) exec "$REPO/bin/cryptographic_scaling/mt-prepare" menu;;
  protocol) exec "$REPO/bin/cryptographic_scaling/mt-protocol-validation" menu;;
  menu) menu;;
  help|--help|-h) usage;;
