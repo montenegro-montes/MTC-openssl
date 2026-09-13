@@ -6,13 +6,13 @@ cd "$REPO"
 source "$REPO/bin/lib/docker-preflight.sh"
 STATE="$REPO/.mt-state/protocol-validation"
 CONFIG="$STATE/paths.env"
-STEPS=(10.offline-existing 20.offline-landmark 30.offline-standalone 40.capture-landmark 50.extract-landmark 60.validate-wire-landmark 70.report-landmark 80.capture-standalone 90.extract-standalone 100.validate-wire-standalone 110.report-standalone 120.invalid-input-stress)
+STEPS=(10.offline-existing 20.offline-landmark 30.offline-standalone 40.capture-landmark 50.extract-landmark 55.verify-transcript-landmark 60.validate-wire-landmark 70.report-landmark 80.capture-standalone 90.extract-standalone 95.verify-transcript-standalone 100.validate-wire-standalone 110.report-standalone 120.invalid-input-stress)
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-load() { [[ -f "$CONFIG" ]] || fail 'Run init first.'; unset PROFILE; source "$CONFIG"; PROFILE=${PROFILE:-pq}; }
+load() { [[ -f "$CONFIG" ]] || fail 'Run init first.'; unset PROFILE REVIEW; source "$CONFIG"; PROFILE=${PROFILE:-pq}; REVIEW=${REVIEW:-artifacts/protocol-review/$STAMP}; }
 save() {
  local key
  (umask 077
- for key in STAMP FIX KEY CAP PROFILE; do printf '%s=%q\n' "$key" "${!key}"; done > "$CONFIG.tmp"
+ for key in STAMP FIX KEY CAP PROFILE REVIEW; do printf '%s=%q\n' "$key" "${!key}"; done > "$CONFIG.tmp"
  mv "$CONFIG.tmp" "$CONFIG")
 }
 init() {
@@ -29,6 +29,7 @@ init() {
   PROFILE=mldsa65; FIX="$root/batch16/mtc/$PROFILE"; KEY="$root/population/$PROFILE/0.key"
  fi
  CAP="artifacts/protocol-validation/$STAMP"
+ REVIEW="artifacts/protocol-review/$STAMP"
  mkdir -p "$STATE"; save
  printf 'Configuration saved. Profile: %s, N=16. Check FIX and KEY with status.\n' "$PROFILE"
 }
@@ -56,6 +57,18 @@ plan() {
    mode=landmark; [[ "$STEP" != 90.* ]] || mode=standalone
    OUT="$CAP/$mode/extracted"; script=extract_pcap.py; image=mt-tls-capture:local
    args=("$CAP/$mode" --sender "$FIX/$mode-0000.der" --output "$OUT");;
+  55.*|95.*)
+   mode=landmark; [[ "$STEP" != 95.* ]] || mode=standalone
+   OUT="$REVIEW/$mode/independent.json"; image=mt-tls-capture:local
+   if [[ -f "$CAP/$mode/metadata.json" ]]; then
+    image=$(python3 - "$CAP/$mode/metadata.json" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1]))['capture_image_id'])
+PY
+)
+   fi
+   CMD=(docker run --rm --network none -e PYTHONDONTWRITEBYTECODE=1 -v "$REPO:/repo:ro" -v "$REPO/$REVIEW:/repo/$REVIEW" -w /repo --entrypoint python3 "$image" campaigns/protocol_validation/verify_tls_transcript.py "$CAP/$mode" --output "$OUT" --openssl /opt/mtc/openssl.sh)
+   return;;
   60.*|100.*)
    mode=landmark; [[ "$STEP" != 100.* ]] || mode=standalone
    OUT="$CAP/$mode/object-validation.json"; script=validate_mtc.py
@@ -63,7 +76,7 @@ plan() {
   70.*|110.*)
    mode=landmark; [[ "$STEP" != 110.* ]] || mode=standalone
    OUT="$CAP/$mode/protocol-report.json"; script=report.py
-   args=(--capture "$CAP/$mode" --extraction "$CAP/$mode/extracted" --object-report "$CAP/$mode/object-validation.json" --output "$OUT");;
+   args=(--capture "$CAP/$mode" --extraction "$CAP/$mode/extracted" --object-report "$CAP/$mode/object-validation.json" --independent-report "$REVIEW/$mode/independent.json" --output "$OUT");;
   120.*) OUT="$CAP/invalid-input-stress"; script=negative_cases.py; args=(--fixtures "$FIX" --profile "$PROFILE" --output "$OUT");;
  esac
  CMD=(docker run --rm --network none -v "$REPO:/repo:ro" -v "$REPO/$CAP:/repo/$CAP" -w /repo --entrypoint python3 "$image" "campaigns/protocol_validation/$script" "${args[@]}")
@@ -71,10 +84,10 @@ plan() {
 show() { printf '%q ' "${CMD[@]}"; printf '\n'; }
 status() {
  load
- printf 'FIX=%s\nKEY=%s\nCAP=%s\nProfile: %s, N=16. Images: mt-tls-measurement:local and mt-tls-capture:local.\n' "$FIX" "$KEY" "$CAP" "$PROFILE"
+ printf 'FIX=%s\nKEY=%s\nCAP=%s\nREVIEW=%s\nProfile: %s, N=16. Images: mt-tls-measurement:local and mt-tls-capture:local.\n' "$FIX" "$KEY" "$CAP" "$REVIEW" "$PROFILE"
  local step
  for step in "${STEPS[@]}"; do
-  plan "$step"; printf '%-29s ' "$STEP"
+  plan "$step"; printf '%-36s ' "$STEP"
   if [[ -f "$STATE/$STEP.status" ]]; then cat "$STATE/$STEP.status"; else printf 'pending/not executed by this launcher\n'; fi
   [[ ! -e "$OUT" ]] || printf '  Existing output: %s (not proof of successful validation).\n' "$OUT"
  done
@@ -90,10 +103,37 @@ d=json.loads(p.read_text())
 if d.get('overall')!='PASS':raise SystemExit('Prerequisite validation did not pass: '+str(p))
 PY
 }
+not_failed() {
+ python3 - "$1" <<'PY'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1])
+if not p.is_file():raise SystemExit('Missing prerequisite evidence: '+str(p))
+d=json.loads(p.read_text())
+if d.get('overall')=='FAIL':raise SystemExit('Prerequisite evidence failed: '+str(p))
+PY
+}
 preflight() {
+ local captured_image
  case "$STEP" in
   40.*|80.*) mt_compose_ready && mt_image_required mt-tls-measurement:local && mt_image_required mt-tls-capture:local || return 1;;
   50.*|90.*) mt_images_required mt-tls-capture:local || return 1;;
+  55.*)
+   [[ -f "$CAP/landmark/metadata.json" ]] || fail 'Landmark capture metadata is missing.'
+   captured_image=$(python3 - "$CAP/landmark/metadata.json" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1]))['capture_image_id'])
+PY
+)
+   mt_images_required "$captured_image" || return 1;;
+  95.*)
+   [[ -f "$CAP/standalone/metadata.json" ]] || fail 'Standalone capture metadata is missing.'
+   captured_image=$(python3 - "$CAP/standalone/metadata.json" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1]))['capture_image_id'])
+PY
+)
+   mt_images_required "$captured_image" || return 1;;
   *) mt_images_required mt-tls-measurement:local || return 1;;
  esac
  [[ ! -e "$OUT" ]] || fail "Output exists: $OUT. It is preserved; use a new CAP for another attempt."
@@ -111,12 +151,14 @@ PY
   30.*) passed "$CAP/20.offline-landmark.json";;
   40.*) passed "$CAP/20.offline-landmark.json"; passed "$CAP/30.offline-standalone.json";;
   50.*) [[ -f "$CAP/landmark/metadata.json" ]] || fail 'Landmark capture is missing.';;
+  55.*) passed "$CAP/landmark/extracted/extraction.json";;
   60.*) passed "$CAP/landmark/extracted/extraction.json";;
-  70.*) passed "$CAP/landmark/object-validation.json";;
+  70.*) passed "$CAP/landmark/object-validation.json"; not_failed "$REVIEW/landmark/independent.json";;
   80.*) passed "$CAP/landmark/protocol-report.json";;
   90.*) [[ -f "$CAP/standalone/metadata.json" ]] || fail 'Standalone capture is missing.';;
+  95.*) passed "$CAP/standalone/extracted/extraction.json";;
   100.*) passed "$CAP/standalone/extracted/extraction.json";;
-  110.*) passed "$CAP/standalone/object-validation.json";;
+  110.*) passed "$CAP/standalone/object-validation.json"; not_failed "$REVIEW/standalone/independent.json";;
   120.*) passed "$CAP/30.offline-standalone.json";;
  esac
 }
@@ -149,6 +191,7 @@ run_step() (
  trap 'rmdir "$STATE/lock" 2>/dev/null || true' EXIT
  preflight || exit "$?"
  mkdir -p "$CAP" || exit "$?"
+ case "$STEP" in 55.*|95.*) mkdir -p "$(dirname "$OUT")" || exit "$?";; esac
  local log rc
  log="$STATE/$STEP-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
  printf 'running; log=%s\n' "$log" > "$STATE/$STEP.status"
@@ -175,6 +218,7 @@ set_path() {
  case "/$2/" in */../*|*/./*|*//*|*$'\n'*) fail 'Path is not normalized.';; esac
  if [[ "$1" == CAP ]]; then
   case "$2" in artifacts/protocol-validation/*) ;; *) fail 'CAP must be under artifacts/protocol-validation/.';; esac
+  REVIEW="artifacts/protocol-review/${2##*/}"
  fi
  [[ ! -d "$CAP" ]] || fail 'Evidence already exists: use new for another campaign; previous state is preserved.'
  printf -v "$1" '%s' "$2"; save
@@ -184,6 +228,7 @@ new_campaign() {
  [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid name.'
  [[ ! -d "$STATE/lock" && ! -d "$STATE/batch.lock" ]] || fail 'A stage or batch is active or a lock needs inspection.'
  [[ ! -e "artifacts/protocol-validation/$name" ]] || fail 'That campaign output already exists.'
+ [[ ! -e "artifacts/protocol-review/$name" ]] || fail 'That protocol-review output already exists.'
  [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] || fail 'Initialize mt-cert-scaling before starting a new Paper-1 protocol campaign.'
  if [[ -d "$STATE" ]]; then mv "$STATE" "$STATE.saved-$(date -u +%Y%m%dT%H%M%SZ)-$$"; fi
  init "$name"
@@ -215,6 +260,6 @@ case "${1:-menu}" in
  run) [[ "$#" == 2 ]] || fail 'Usage: run STAGE|ALL'; if [[ "$2" == ALL ]]; then run_all; else run_step "$2"; fi;;
  set) set_path "${2:?Variable required}" "${3:?Path required}";;
  menu) menu;;
- help|--help|-h) printf 'Usage: %s [menu|init [NAME]|init-legacy [NAME]|new [NAME]|status|list|show STAGE|run STAGE|run ALL|set FIX/KEY/CAP/PROFILE VALUE]\nSTAGE accepts a number (10) or full name (10.offline-existing).\nrun ALL executes pending stages in order, including captures and invalid-input stress checks; stops on failure.\nManual workflow: init/status/show do not invoke Docker. No builds, deletion or matrices.\n' "$SELF";;
+ help|--help|-h) printf 'Usage: %s [menu|init [NAME]|init-legacy [NAME]|new [NAME]|status|list|show STAGE|run STAGE|run ALL|set FIX/KEY/CAP/PROFILE VALUE]\nSTAGE accepts a number (10) or full name (10.offline-existing).\nrun ALL executes pending stages in order, including captures, independent transcript verification and invalid-input stress checks; stops on failure.\nManual workflow: init/status/show do not invoke Docker. No builds, deletion or matrices.\n' "$SELF";;
  *) fail 'Unknown command; use help.';;
 esac
