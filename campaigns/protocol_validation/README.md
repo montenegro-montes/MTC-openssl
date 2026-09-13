@@ -10,14 +10,14 @@ map and checklist. Its references were read from the local draft, in targeted
 sections only. Existing sources, fixtures, results and captures are not changed.
 
 Files: `validate_mtc.py` checks a DER object offline using existing core.py and
-OpenSSL; `negative_cases.py` prepares deterministic negative checks;
+OpenSSL; `negative_cases.py` prepares deterministic invalid-input stress checks;
 `capture_handshake.sh` / `capture.py` / `compose.yaml` capture one connection;
 `extract_pcap.py` obtains DER **only from decrypted PCAP data**;
 `report.py` joins the corresponding evidence into one JSON report.
 
 ## Bash menu
 
-Open from the certification menu with option **6 — Protocolo MTC**, or directly:
+Open from the certification menu with option **6 — MTC protocol**, or directly:
 
 ```sh
 bin/cryptographic_scaling/mt-cert-scaling protocol
@@ -25,11 +25,39 @@ bin/cryptographic_scaling/mt-cert-scaling protocol
 bin/cryptographic_scaling/mt-protocol-validation menu
 ```
 
-Initialize the separate configuration, then review **FIX**, **KEY** and **CAP**.
-Defaults select legacy pq N=16, not Paper-1 mldsa65. It does not import the
-certification campaign's paths because those fixtures use different CA IDs.
-Dependencies are existing MTC N=16 fixtures and measurement/capture images;
-X.509 chain scaling and crossover are not prerequisites.
+New configurations select **Paper-1 mldsa65 N=16** from the MTC16 path saved by
+`mt-cert-scaling`. Existing configurations without PROFILE preserve their legacy
+pq meaning. No historical campaign is required for the new path.
+
+### Before the first run
+
+```sh
+# Prepare image dependencies independently; no original campaign is invoked.
+bin/cryptographic_scaling/mt-prepare run ALL
+
+# First use only. Generate and validate N=16 if it does not already exist.
+bin/cryptographic_scaling/mt-cert-scaling init
+bin/cryptographic_scaling/mt-cert-scaling run 50
+bin/cryptographic_scaling/mt-cert-scaling run 60
+
+# First use only; imports the MTC16 path, not previous results.
+bin/cryptographic_scaling/mt-protocol-validation init
+bin/cryptographic_scaling/mt-protocol-validation status
+bin/cryptographic_scaling/mt-protocol-validation run 10
+```
+
+If state or fixtures already exist, inspect `status` and continue from the next
+required stage instead of repeating completed commands. Protocol initialization
+only records PROFILE/FIX/KEY/CAP; it does not generate certificates. With new
+Paper-1 configurations FIX is MTC16/batch16/mtc/mldsa65 and KEY is
+MTC16/population/mldsa65/0.key. Neither the crossover nor X.509 chain fixtures are
+required. Missing inputs produce an error; correct paths before retrying.
+
+For a fresh protocol run after historical evidence already exists, use `new` to
+archive the old launcher state and configure the Paper-1 defaults. To deliberately
+initialize the historical pq workflow instead, use `init-legacy` with existing
+historical fixtures. Do not relabel those fixtures as mldsa65: the CA IDs differ.
+PROFILE, FIX and KEY can be set explicitly before any evidence is written.
 
 The menu saves state in `.mt-state/protocol-validation/` and logs each selected
 stage. `init`, `status`, `list`, `show` and opening the menu do not invoke Docker.
@@ -41,20 +69,21 @@ The offline stages run OpenSSL inside the existing measurement image, without TL
 | 10, 20, 30 | Existing object, landmark and standalone offline checks |
 | 40, 50, 60, 70 | Landmark capture, extraction, wire-object validation, joined report |
 | 80, 90, 100, 110 | Standalone capture, extraction, wire-object validation, joined report |
-| 120 | Optional deterministic negatives with positive control |
+| 120 | Optional invalid-input stress checks with positive control |
 
 Prior PASS reports are required at the corresponding gates; the standalone
 capture requires a successful landmark protocol report. Underlying tools also
 verify capture/fixture hashes. Directory existence is never treated as PASS.
-Choose **Nueva campaña** (`new`) after a failure or for another attempt: previous
+Choose **New campaign** (`new`) after a failure or for another attempt: previous
 configuration/logs are archived, all scientific outputs remain intact, and routes
-reset to the documented legacy defaults. Change FIX/KEY before the first run.
+reset to the Paper-1 defaults from the saved MTC16 path. Change FIX/KEY before the first run.
 Once evidence exists, configuration is frozen; it cannot be silently redirected.
 The lock covers this launcher only, not externally started campaigns.
 
-## Inputs and prerequisites
+## Historical manual examples (optional)
 
-Use existing **legacy pq**, N=16 fixtures for the first two representative captures.
+The commands below preserve the original representative **legacy pq** cases.
+They are separate from the default Paper-1 Bash workflow above. Use existing **legacy pq**, N=16 fixtures for the first two representative captures.
 Their scenarios remain `pq-mtc-experimental-landmark` and
 `pq-mtc-experimental-standalone`. They are not the new Paper-1 `mldsa65` fixtures,
 whose issuer IDs differ. The server private key must match leaf0's SPKI.
@@ -195,17 +224,51 @@ the remaining Paper-1 profiles. The offline validator already recognizes all nin
 the initial capture selector intentionally exposes only the three representative
 Paper-1 algorithms plus legacy classic/pq. No full matrix is prepared or launched.
 
-Optional deterministic negative checks, **not executed during preparation**:
+Optional **invalid-input stress checks** (deterministic malformed objects, not load testing or randomized fuzzing), **not executed during preparation**:
 
 ```sh
 protocol_tool mt-tls-measurement:local negative_cases.py \
-  --fixtures "$FIX" --profile pq --output "$CAP/negative"
+  --fixtures "$FIX" --profile pq --output "$CAP/invalid-input-stress"
 ```
 
 A positive control must pass first. Mutations are written only into the fresh
-negative directory: truncation, trailing byte, bad length/index/issuer/proof hash,
+new stress-check directory: truncation, trailing byte, bad length/index/issuer/proof hash,
 signature, landmark number and checkpoint root. Failure to load a provider cannot
-make an all-negative suite appear successful.
+make an invalid-input suite appear successful.
+
+The launcher calls this stage `120.invalid-input-stress`; `run 120` works as
+before and the old full name `120.negative` remains an alias. Existing directories
+and reports are preserved. New runs use `CAP/invalid-input-stress`.
+
+Each case writes the original object-validator `report.json` and a separate
+`test-result.json`, for example:
+
+```json
+{
+  "case": "signature",
+  "expected": "REJECT",
+  "observed": "REJECT",
+  "test_result": "PASS",
+  "validator_result": "FAIL",
+  "reason": "OpenSSL signature verification failed"
+}
+```
+
+This is the expected schema, not an executed result. `validator_result=FAIL`
+means the object is invalid; `test_result=PASS` means its rejection was expected.
+The console prints `PASS signature - invalid object correctly rejected`. Unexpected
+acceptance or a validator operational error produces a failed test. Operational
+errors use `observed=ERROR`, never `REJECT`. A valid positive control must pass
+before mutations are tested. Raw validator stdout/stderr remain in per-case logs,
+without confusing expected validator failures with top-level test failures.
+The combined report is `stress-checks-summary.json`, with separate positive-control
+and per-case results.
+
+Future capture metadata reads `OQS_VERSION_TEXT` from the image's
+`/opt/oqs/include/oqs/oqsconfig.h` and records `liboqs_version_source`. A missing or
+unreadable version aborts metadata collection instead of silently recording null.
+Historical metadata containing null is not overwritten or guessed from another
+image or the host environment.
 
 ## Evidence boundaries and unresolved questions
 

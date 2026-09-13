@@ -164,8 +164,8 @@ Two shell entry points centralize routine operation from the repository root:
 
 ```sh
 # Docker images, Compose projects, services, logs and cleanup
-bin/original_campaigns/mt-containers doctor
-bin/original_campaigns/mt-containers menu
+bin/containers/mt-containers doctor
+bin/containers/mt-containers menu
 
 # Persistent, step-by-step experiment battery
 bin/original_campaigns/mt-campaigns init

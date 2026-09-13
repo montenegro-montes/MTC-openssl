@@ -30,7 +30,7 @@ To reproduce the completed check from the repository root, rebuild MTC and retry
 measurement-image step (which builds its child and runs the regression suite):
 
 ```sh
-bin/original_campaigns/mt-containers build mtc && bin/original_campaigns/mt-campaigns retry 07.measurement-image
+bin/containers/mt-containers build mtc && bin/original_campaigns/mt-campaigns retry 07.measurement-image
 ```
 
 This does not regenerate fixtures. The user-reported pass validates the

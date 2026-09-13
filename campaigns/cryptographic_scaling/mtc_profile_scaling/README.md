@@ -22,7 +22,7 @@ Use the current OpenSSL 3.4.7 / liboqs 0.16.0 / oqs-provider stack; the build be
 rebuilds only MTC on the existing profile image, without changing dependency pins.
 
 ```sh
-bin/original_campaigns/mt-containers build mtc
+bin/containers/mt-containers build mtc
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 MTC16="artifacts/paper1-mtc/n16-$STAMP"
 MTC_VALID="artifacts/results/paper1-mtc-n16-$STAMP"

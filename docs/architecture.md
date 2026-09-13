@@ -61,10 +61,10 @@ for the original four scenarios; use a campaign runner for controlled studies.
 | Previous repository path | Current path |
 |---|---|
 | `compact/`, `integration/`, `mtc/`, `profiling/` | Matching directories under `src/` |
-| `scripts/manage-containers.sh` | `bin/original_campaigns/mt-containers` |
+| `scripts/manage-containers.sh` | `bin/containers/mt-containers` |
 | `scripts/manage-campaigns.sh` | `bin/original_campaigns/mt-campaigns` |
-| `scripts/archive-results.py` | `bin/original_campaigns/mt-archive` |
-| `scripts/check-published-artifacts.py` | `bin/original_campaigns/mt-check-publication` |
+| `scripts/archive-results.py` | `bin/artifacts/mt-archive` |
+| `scripts/check-published-artifacts.py` | `bin/artifacts/mt-check-publication` |
 | `scripts/generate-*.sh` | `scripts/fixtures/` |
 | `scripts/client.sh`, `scripts/server.sh` | `scripts/runtime/` |
 | `scripts/benchmark.py` | `scripts/runtime/benchmark-initial.py` |

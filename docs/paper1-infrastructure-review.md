@@ -102,5 +102,5 @@ as the reproduction command for that gate; it is not a pending action.
 A valid old-run `--resume` command cannot be provided after the run was deleted.
 
 ```sh
-bin/original_campaigns/mt-containers build mtc && bin/original_campaigns/mt-campaigns retry 07.measurement-image
+bin/containers/mt-containers build mtc && bin/original_campaigns/mt-campaigns retry 07.measurement-image
 ```

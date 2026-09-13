@@ -14,5 +14,5 @@ docker compose -f docker/original_campaigns/compose.yaml config
 docker compose -f docker/original_campaigns/compose.scaling.yaml config
 ```
 
-Use `bin/original_campaigns/mt-containers` and `bin/original_campaigns/mt-campaigns` for normal
+Use `bin/containers/mt-containers` and `bin/original_campaigns/mt-campaigns` for normal
 operation because both managers now resolve these grouped paths.

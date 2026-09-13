@@ -8,15 +8,15 @@ The project-level helper wraps the explicit Compose files while preserving the
 same target separation:
 
 ```sh
-bin/original_campaigns/mt-containers list
-bin/original_campaigns/mt-containers doctor
-bin/original_campaigns/mt-containers ps all
-bin/original_campaigns/mt-containers menu
+bin/containers/mt-containers list
+bin/containers/mt-containers doctor
+bin/containers/mt-containers ps all
+bin/containers/mt-containers menu
 ```
 
 It can build, start, stop, inspect, enter and clean individual project targets.
 It never deletes campaign artifacts; result cleanup remains guarded by
-`bin/original_campaigns/mt-archive --clean-artifacts`.
+`bin/artifacts/mt-archive --clean-artifacts`.
 
 `down` and `clean` locate containers and networks through Docker Compose project
 labels. They therefore work after an interrupted campaign even when required
