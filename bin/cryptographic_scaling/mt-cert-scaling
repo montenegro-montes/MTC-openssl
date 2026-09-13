@@ -19,6 +19,8 @@ Uso: bin/cryptographic_scaling/mt-cert-scaling [COMANDO]
   list                      etapas disponibles
   show ETAPA                mostrar comando sin ejecutarlo
   run ETAPA                 ejecutar una única etapa y guardar su log
+  run --count X             ejecutar hasta X etapas pendientes, en orden
+  run ALL                   ejecutar las etapas restantes; parar ante fallo
   set VARIABLE RUTA         seleccionar una ruta existente o una salida nueva
 
 Variables: CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID
@@ -154,9 +156,33 @@ run() (
  fi
  exit "$rc"
 )
+run_batch() (
+ load
+ local limit=$1 step state count=0
+ if [[ "$limit" != ALL ]]; then [[ "$limit" =~ ^[1-9][0-9]{0,5}$ ]] || fail 'Cantidad válida: 1..999999.'; fi
+ mkdir "$STATE/batch.lock" 2>/dev/null || fail 'Hay un lote activo o un bloqueo pendiente.'
+ trap 'rmdir "$STATE/batch.lock" 2>/dev/null || true' EXIT
+ [[ ! -d "$STATE/lock" ]] || fail 'Hay una etapa activa o un bloqueo pendiente.'
+ for step in "${STEPS[@]}"; do
+  state=''
+  [[ ! -f "$STATE/$step.status" ]] || state=$(cat "$STATE/$step.status")
+  case "$state" in running*) fail "Etapa marcada running: $step. Revisa su estado antes de continuar.";; esac
+ done
+ for step in "${STEPS[@]}"; do
+  state=''
+  [[ ! -f "$STATE/$step.status" ]] || state=$(cat "$STATE/$step.status")
+  case "$state" in completed*) continue;; esac
+  printf 'Lote: %s (%s de %s)\n' "$step" "$((count+1))" "$limit"
+  "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run "$step" || exit "$?"
+  count=$((count+1))
+  if [[ "$limit" != ALL && "$count" -ge "$limit" ]]; then break; fi
+ done
+ printf 'Lote terminado: %s etapas.\n' "$count"
+)
+
 set_path() {
  load
- [[ ! -d "$STATE/lock" ]] || fail 'No cambies rutas durante una etapa.'
+ [[ ! -d "$STATE/lock" && ! -d "$STATE/batch.lock" ]] || fail 'No cambies rutas durante una etapa o lote.'
  case "$1" in CHAIN_FIXTURES|CHAIN_VALID|ENVIRONMENT|SUPPORT|MTC16|MTC_VALID|MTC_ALL|STATIC_ROOT|AUDIT) ;;
   *) fail 'Variable de ruta desconocida.';;
  esac
@@ -172,7 +198,7 @@ set_path() {
 menu() {
  local choice value key
  while true; do
-  printf '\nCert scaling: 1 Inicializar  2 Estado/progreso  3 Ver comando\n              4 Ejecutar etapa  5 Cambiar ruta  6 Protocolo MTC  0 Salir\n'
+  printf '\nCert scaling: 1 Inicializar  2 Estado/progreso  3 Ver comando\n              4 Ejecutar etapa  5 Cambiar ruta  6 Protocolo MTC\n              7 Ejecutar X etapas  8 Ejecutar ALL  0 Salir\n'
   read -r -p '> ' choice || return 0
   case "$choice" in
    1) read -r -p 'Fecha/nombre (vacío = nuevo): ' value; "$0" init "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
@@ -181,6 +207,8 @@ menu() {
     if [[ "$choice" == 3 ]]; then "$0" show "$value" || true; else "$0" run "$value" || true; fi;;
    5) read -r -p 'Variable (ver status): ' key; read -r -p 'Ruta: ' value; "$0" set "$key" "$value" || true;;
    6) "$REPO/bin/cryptographic_scaling/mt-protocol-validation" menu || true;;
+   7) read -r -p 'Cantidad de etapas pendientes: ' value; "$0" run --count "$value" || true;;
+   8) "$0" run ALL || true;;
    0) return 0;;
   esac
  done
@@ -190,7 +218,11 @@ case "${1:-menu}" in
  status) status;;
  list) printf '%s\n' "${STEPS[@]}";;
  show) load; plan "${2:?Indica etapa}"; show_command;;
- run) run "${2:?Indica etapa}";;
+ run)
+  if [[ "$#" == 3 && "$2" == --count ]]; then run_batch "$3"
+  elif [[ "$#" == 2 && "$2" == ALL ]]; then run_batch ALL
+  elif [[ "$#" == 2 ]]; then run "$2"
+  else usage; exit 2; fi;;
  set) set_path "${2:?Indica variable}" "${3:?Indica ruta}";;
  protocol) exec "$REPO/bin/cryptographic_scaling/mt-protocol-validation" menu;;
  menu) menu;;

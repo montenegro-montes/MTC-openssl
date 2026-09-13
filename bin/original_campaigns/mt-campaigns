@@ -74,6 +74,8 @@ Commands:
   status                       show progress and current result paths
   show STEP                    print a step's command without running it
   run STEP                     execute one step and record its result
+  run --count X                execute up to X pending/failed stages in order
+  run ALL                      execute every remaining stage; stop on first failure
   next                         execute the first pending/failed step
   mark STEP STATUS             set pending/completed/failed/skipped manually
   retry STEP                   mark pending and execute again
@@ -211,7 +213,11 @@ show_status() {
 
 run_step() {
   local id=$1 command rc
-  load_roots; has_step "$id" || { echo "Unknown step: $id" >&2; exit 2; }
+  load_roots
+  if [[ "$id" =~ ^[0-9]+$ ]]; then
+    id=$(awk -F '\t' -v number="$id" '{split($1,parts,"."); if (parts[1]+0==number+0) {print $1; exit}}' "$STATE_FILE")
+  fi
+  has_step "$id" || { echo "Unknown step: $id" >&2; exit 2; }
   command=$(command_for "$id")
   echo "==> $id — $(description "$id")"; echo "+ $command"
   set_status "$id" running
@@ -219,6 +225,28 @@ run_step() {
   if [ "$rc" -eq 0 ]; then set_status "$id" completed; echo "COMPLETED $id"
   else set_status "$id" failed; echo "FAILED $id (exit $rc)" >&2; return "$rc"; fi
 }
+
+run_batch() (
+  local limit=$1 id status updated count=0
+  require_state
+  if [ "$limit" != ALL ]; then
+    [[ "$limit" =~ ^[1-9][0-9]{0,5}$ ]] || { echo "Count must be 1..999999" >&2; exit 2; }
+  fi
+  mkdir "$STATE_DIR/campaign-batch.lock" 2>/dev/null || { echo "A batch is active or its lock needs inspection" >&2; exit 1; }
+  trap 'rmdir "$STATE_DIR/campaign-batch.lock" 2>/dev/null || true' EXIT
+  if awk -F '\t' '$2=="running" {found=1} END {exit !found}' "$STATE_FILE"; then
+    echo "A step is marked running; inspect it before continuing" >&2; exit 1
+  fi
+  while IFS=$'\t' read -r id status updated; do
+    case "$status" in completed|skipped) continue;; pending|failed) ;; *) echo "Unexpected status: $id $status" >&2; exit 1;; esac
+    echo "Batch: starting $id ($((count+1)) of $limit)"
+    # Separate process preserves fail-fast semantics even when invoked from a menu.
+    "$REPO/bin/original_campaigns/mt-campaigns" run "$id" || exit "$?"
+    count=$((count+1))
+    if [ "$limit" != ALL ] && [ "$count" -ge "$limit" ]; then break; fi
+  done < "$STATE_FILE"
+  echo "Batch completed: $count stages"
+)
 
 next_step() {
   require_state
@@ -229,7 +257,7 @@ next_step() {
 
 menu() {
   while :; do
-    echo; echo "Campaign manager: 1 status | 2 run next | 3 run step | 4 show step | 5 mark step | 6 reset all | 7 initialize | 0 exit"
+    echo; echo "Campaign manager: 1 status | 2 run next | 3 run step | 4 show step | 5 mark step | 6 reset all | 7 initialize | 8 run count | 9 run ALL | 0 exit"
     printf 'Selection: '; read -r choice
     case "$choice" in
       1) show_status;; 2) next_step || true;;
@@ -238,6 +266,8 @@ menu() {
       5) printf 'Step: '; read -r id; printf 'Status: '; read -r value; has_step "$id" && set_status "$id" "$value";;
       6) python3 "$REPO/scripts/maintenance/reset_lab.py" || true;;
       7) init_state;;
+      8) printf 'Number of pending stages: '; read -r value; (run_batch "$value") || true;;
+      9) (run_batch ALL) || true;;
       0) return;; *) echo "Invalid selection";;
     esac
   done
@@ -247,7 +277,11 @@ cmd=${1:-help}; shift || true
 case "$cmd" in
   help|-h|--help) usage;; init) init_state "${1:-}";; list) printf '%s\n' "$STEPS" | while read -r id; do printf '%-28s %s\n' "$id" "$(description "$id")"; done;;
   status) show_status;; show) [ "$#" -eq 1 ] || { usage; exit 2; }; load_roots; command_for "$1";;
-  run) [ "$#" -eq 1 ] || { usage; exit 2; }; run_step "$1";; next) next_step;;
+  run)
+    if [ "$#" -eq 2 ] && [ "$1" = --count ]; then run_batch "$2"
+    elif [ "$#" -eq 1 ] && [ "$1" = ALL ]; then run_batch ALL
+    elif [ "$#" -eq 1 ]; then run_step "$1"
+    else usage; exit 2; fi;; next) next_step;;
   mark) [ "$#" -eq 2 ] || { usage; exit 2; }; require_state; has_step "$1" || exit 2; set_status "$1" "$2";;
   retry) [ "$#" -eq 1 ] || { usage; exit 2; }; require_state; set_status "$1" pending; run_step "$1";;
   reset-all) [ "$#" -eq 0 ] || { echo "reset-all requires interactive confirmation; no options accepted" >&2; exit 2; }; python3 "$REPO/scripts/maintenance/reset_lab.py";;

@@ -68,6 +68,27 @@ Stages:
 | 80 | Static sizes and crossover using successful validations |
 | 90 | Audit X.509 fixtures and analysis output presence |
 
+Batch execution preserves numeric stage selection (`run 20`). Use:
+
+```sh
+bin/cryptographic_scaling/mt-cert-scaling run --count 3
+bin/cryptographic_scaling/mt-cert-scaling run ALL
+# Same interface for the original campaign manager:
+bin/original_campaigns/mt-campaigns run --count 3
+bin/original_campaigns/mt-campaigns run ALL
+```
+
+`--count X` executes up to X remaining stages in order. `ALL` executes every
+remaining stage in that launcher's list. Completed stages are skipped (also
+`skipped` stages in the original manager); the first failure stops the batch.
+Existing outputs are not automatically imported or overwritten. A running status
+or execution lock blocks batch startup until inspected. Failed immutable outputs
+still need a fresh path before retrying; a batch does not make them resumable.
+Cert-scaling ALL covers stages10–90 only, not the separate protocol menu or TLS
+performance matrix. Original ALL includes its optional capture and archive stages,
+without invoking reset-all or archive-clean. Menus expose count and ALL options.
+Only the operator launches these commands; none were executed during preparation.
+
 `show 70` prints the exact command; `run 70` executes it. While generation runs,
 the coordinator prints a heartbeat and certificate counters every 30 seconds.
 These counters are not a completion percentage: MTC objects are generated after
