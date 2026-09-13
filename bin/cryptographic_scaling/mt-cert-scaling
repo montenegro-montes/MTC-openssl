@@ -8,7 +8,7 @@ STATE="$REPO/.mt-state/cert-scaling"
 CONFIG="$STATE/paths.env"
 CHAIN=campaigns/cryptographic_scaling/cert_chain_scaling
 MTC=campaigns/cryptographic_scaling/mtc_profile_scaling/workflow.py
-STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 70.mtc-all 80.crossover 90.audit 100.cross-advanced)
+STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 70.mtc-all 80.crossover 90.audit 100.cross-advanced 110.tls-preview 120.tls-full 130.tls-analysis 140.tls-plots)
 DEFAULT_STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 80.crossover 90.audit)
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 usage() {
@@ -19,7 +19,7 @@ Usage: bin/cryptographic_scaling/mt-cert-scaling [COMMAND]
   protocol                  open the separate protocol-validation menu
   init [NAME]              save paths without running or generating fixtures
   status                    paths, stages and certificate progress
-  list                      available stages (70 and 100 are optional)
+  list                      available stages (70, 100 and 110–140 are optional)
   show STAGE                print a command without executing it
   run STAGE                 execute one stage and save its log
   run --count X             execute up to X pending default stages in order
@@ -27,20 +27,23 @@ Usage: bin/cryptographic_scaling/mt-cert-scaling [COMMAND]
   set VARIABLE PATH         select an input path or a fresh output path
 
 Variables: CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID
-           MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT
+           MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT TLS_ROOT
 Stages accept a number (80) or full name (80.crossover).
   cross                     N=16 crossover + plots (stage 80)
   cross-advanced            generate missing full fixtures, then crossover + plots
-Default batches skip optional stages 70 and 100.
-No TLS performance matrix, deletion or destructive reset is launched.
+  tls-full                  preview the full TLS matrix without executing it
+  tls-full --execute        preview, execute, analyze and plot the full TLS matrix
+Default batches skip optional stages 70, 100 and 110–140.
+run ALL does not execute the TLS performance matrix.
+Full TLS execution is manual: run 120 or tls-full --execute.
 For a previous manual campaign, use init with its name and set its paths.
 HELP
 }
-load() { [[ -f "$CONFIG" ]] || fail 'Run init [NAME] first.'; source "$CONFIG"; ADVANCED_ROOT=${ADVANCED_ROOT:-${STATIC_ROOT}-advanced}; }
+load() { [[ -f "$CONFIG" ]] || fail 'Run init [NAME] first.'; source "$CONFIG"; ADVANCED_ROOT=${ADVANCED_ROOT:-${STATIC_ROOT}-advanced}; TLS_ROOT=${TLS_ROOT:-artifacts/results/cert-chain-tls-$STAMP}; }
 save() {
  local key
  (umask 077; : > "$CONFIG.tmp"
- for key in STAMP CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT; do
+ for key in STAMP CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT TLS_ROOT; do
   printf '%s=%q\n' "$key" "${!key}" >> "$CONFIG.tmp"
  done
  mv "$CONFIG.tmp" "$CONFIG")
@@ -58,6 +61,7 @@ init() {
  MTC_ALL="artifacts/paper1-mtc/all-$STAMP"
  STATIC_ROOT="artifacts/results/paper1-crossover-n16-$STAMP"
  ADVANCED_ROOT="artifacts/results/paper1-crossover-advanced-$STAMP"
+ TLS_ROOT="artifacts/results/cert-chain-tls-$STAMP"
  AUDIT="artifacts/results/paper1-crossover-audit-$STAMP.json"
  mkdir -p "$STATE"; save
  printf 'Paths saved. No campaign has been executed.\n'
@@ -83,6 +87,12 @@ plan() {
    CMD=(bash -c 'python3 "$1/size_analysis.py" "$2" --mtc-fixtures "$3" --output "$4" && python3 "$1/plots.py" "$4" --output "$4/plots"' _ "$CHAIN" "$CHAIN_FIXTURES" "$MTC16" "$STATIC_ROOT");;
   100.*) OUT=$ADVANCED_ROOT
    CMD=(bash -c 'python3 "$1/size_analysis.py" "$2" --mtc-fixtures "$3" --output "$4" && python3 "$1/plots.py" "$4" --output "$4/plots"' _ "$CHAIN" "$CHAIN_FIXTURES" "$MTC_ALL" "$ADVANCED_ROOT");;
+  110.*|120.*)
+   OUT=''; [[ "$STEP" != 120.* ]] || OUT=$TLS_ROOT
+   CMD=(python3 "$CHAIN/run.py" --fixtures "$CHAIN_FIXTURES" --output "$TLS_ROOT" --campaigns 5 --repetitions 30 --warmups 5 --full-matrix --environment "$ENVIRONMENT")
+   if [[ "$STEP" == 110.* ]]; then CMD+=(--dry-run); else CMD+=(--execute); fi;;
+  130.*) OUT="$TLS_ROOT/summary.csv"; CMD=(python3 "$CHAIN/analyze.py" "$TLS_ROOT");;
+  140.*) OUT="$TLS_ROOT/plots"; CMD=(python3 "$CHAIN/plots.py" "$STATIC_ROOT" --measurements "$TLS_ROOT" --output "$OUT");;
   90.*) OUT=$AUDIT; CMD=(python3 "$CHAIN/validate.py" "$CHAIN_FIXTURES" --analysis "$STATIC_ROOT" --output "$AUDIT");;
  esac
 }
@@ -101,7 +111,7 @@ progress() {
 status() {
  load
  local key step state
- for key in CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT; do
+ for key in CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT TLS_ROOT; do
   printf '%-16s %s\n' "$key" "${!key}"
  done
  printf '\nStages (existing output does not imply validation):\n'
@@ -120,10 +130,17 @@ preflight() {
  case "$STEP" in
   10.*|20.*|30.*|90.*) mt_images_required mt-tls-measurement:local || return 1;;
   40.*) mt_compose_ready || return 1;;
+  120.*) mt_images_required mt-tls-measurement:local || return 1;;
   50.*|60.*|70.*) mt_images_required mt-tls-mtc:local || return 1;;
  esac
  [[ -z "$OUT" || ! -e "$OUT" ]] || fail "Output already exists: $OUT. It will not be overwritten or resumed. Check status or use set with a fresh path."
  case "$STEP" in
+  110.*|120.*)
+    require_path "$ENVIRONMENT"; require_path "$CHAIN_FIXTURES"; require_path "$CHAIN_VALID"
+    python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("passed") is True else "ERROR: X.509 fixture validation did not pass.")' "$CHAIN_VALID" || return 1
+    ;;
+  130.*) require_path "$TLS_ROOT/manifest.json";;
+  140.*) require_path "$TLS_ROOT/summary.csv"; require_path "$STATIC_ROOT/analysis.json";;
   10.*) [[ ! -e "$SUPPORT" ]] || fail "Output already exists: $SUPPORT";;
   30.*) require_path "$CHAIN_FIXTURES";;
   60.*) require_path "$MTC16/manifest.json";;
@@ -235,10 +252,27 @@ cross_advanced() (
  "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 100
 )
 
+tls_full() (
+ load
+ if [[ "${1:-}" == '' ]]; then run 110; exit; fi
+ [[ "$1" == --execute ]] || fail 'Usage: tls-full [--execute]'
+ [[ ! -d "$STATE/lock" ]] || fail 'A stage is active.'
+ mkdir "$STATE/batch.lock" 2>/dev/null || fail 'A batch is active or a lock needs inspection.'
+ trap 'rmdir "$STATE/batch.lock" 2>/dev/null || true' EXIT
+ [[ ! -e "$TLS_ROOT" ]] || fail "Output exists: $TLS_ROOT. Select a fresh TLS_ROOT."
+ require_path "$STATIC_ROOT/analysis.json"
+ python3 -c 'import matplotlib' || fail 'matplotlib is required for TLS plots.'
+ echo 'WARNING: FULL TLS EXPERIMENT — manual execution requested. 5 campaigns, 30 repetitions, 5 warmups.'
+ local step
+ for step in 110 120 130 140; do
+  "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run "$step" || exit "$?"
+ done
+)
+
 set_path() {
  load
  [[ ! -d "$STATE/lock" && ! -d "$STATE/batch.lock" ]] || fail 'Do not change paths while a stage or batch is running.'
- case "$1" in CHAIN_FIXTURES|CHAIN_VALID|ENVIRONMENT|SUPPORT|MTC16|MTC_VALID|MTC_ALL|STATIC_ROOT|AUDIT|ADVANCED_ROOT) ;;
+ case "$1" in CHAIN_FIXTURES|CHAIN_VALID|ENVIRONMENT|SUPPORT|MTC16|MTC_VALID|MTC_ALL|STATIC_ROOT|AUDIT|ADVANCED_ROOT|TLS_ROOT) ;;
   *) fail 'Unknown path variable.';;
  esac
  [[ -n "$2" ]] || fail 'Empty path.'
@@ -253,7 +287,7 @@ set_path() {
 menu() {
  local choice value key
  while true; do
-  printf '\nCert scaling: 1 Initialize  2 Status/progress  3 Show command\n              4 Run stage  5 Change path  6 MTC protocol\n              7 Run X default stages  8 Run ALL default stages\n              9 Advanced crossover (all sizes)  10 Prepare prerequisites  0 Exit\n'
+  printf '\nCert scaling: 1 Initialize  2 Status/progress  3 Show command\n              4 Run stage  5 Change path  6 MTC protocol\n              7 Run X default stages  8 Run ALL default stages\n              9 Advanced crossover (all sizes)  10 Prepare prerequisites\n              11 Preview full TLS matrix  12 Execute full TLS workflow  0 Exit\n'
   read -r -p '> ' choice || return 0
   case "$choice" in
    1) read -r -p 'Date/name (empty = new): ' value; "$0" init "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
@@ -266,6 +300,8 @@ menu() {
    8) "$0" run ALL || true;;
    9) "$0" cross-advanced || true;;
    10) "$REPO/bin/cryptographic_scaling/mt-prepare" menu || true;;
+   11) "$0" tls-full || true;;
+   12) "$0" tls-full --execute || true;;
    0) return 0;;
   esac
  done
@@ -281,6 +317,7 @@ case "${1:-menu}" in
   elif [[ "$#" == 2 ]]; then run "$2"
   else usage; exit 2; fi;;
  set) set_path "${2:?Variable required}" "${3:?Path required}";;
+ tls-full) [[ "$#" -le 2 ]] || fail "Usage: tls-full [--execute]"; tls_full "${2:-}";;
  cross) run 80;;
  cross-advanced) cross_advanced;;
  prepare) exec "$REPO/bin/cryptographic_scaling/mt-prepare" menu;;

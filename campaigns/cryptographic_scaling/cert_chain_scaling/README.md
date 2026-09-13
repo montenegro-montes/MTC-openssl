@@ -24,90 +24,108 @@ P-256/ML-DSA-65 meaning. See the [N=16 functional gate](../mtc_profile_scaling/R
 before generating MTC fixtures or executing comparisons. Provider/TLS support still
 requires manual validation; the mapping alone is not evidence of success.
 
-## Bash coordinator (recommended)
+## Independent prerequisites
 
-Use `bin/cryptographic_scaling/mt-cert-scaling` for an interactive menu, persistent
-paths, per-stage logs and progress counters. It only runs the stage you select.
-It does not launch a performance matrix. Initialization and status never invoke
-Docker or generate fixtures. Source files used by the N=16 hash gate are untouched
-by this coordinator.
-
-For the existing manual campaign:
+First prepare the shared images without invoking an original campaign:
 
 ```sh
-bin/cryptographic_scaling/mt-cert-scaling init 20260912T203417Z
-bin/cryptographic_scaling/mt-cert-scaling status
+bin/cryptographic_scaling/mt-prepare run ALL
+```
+
+The [setup guide](../../../bin/cryptographic_scaling/README.md) describes each
+image stage, Python dependencies and the independent N=16/protocol paths. The
+certification menu opens setup with option10 or `mt-cert-scaling prepare`.
+Stage40 uses this same setup launcher through image stage4. Existing images are
+reused; rebuilding is explicit. No historical fixture directory is needed.
+
+## Bash coordinator: quick and advanced crossover
+
+```sh
 bin/cryptographic_scaling/mt-cert-scaling menu
 ```
 
-The date selects `artifacts/paper1-mtc/n16-DATE`, `all-DATE` and
-`artifacts/results/paper1-mtc-n16-DATE`. It does not infer completion from directory
-existence. For the separately generated X.509 fixtures, set the actual paths via
-the menu's **Cambiar ruta** option (`CHAIN_FIXTURES` and `CHAIN_VALID`). The latter
-must refer to their successful validation JSON, often inside the fixture root.
-Other paths can be changed with `set VARIABLE PATH`; previous execution logs are
-preserved. Initialization refuses to replace existing coordinator state.
-
-Option **6 — Protocolo MTC** opens the separate protocol-validation menu;
-`bin/cryptographic_scaling/mt-cert-scaling protocol` opens it directly. It has its
-own state and initially uses legacy pq N=16 fixtures. It does not require this
-campaign's X.509 chain generation or crossover. See the
-[protocol workflow](../../protocol_validation/README.md) for dependencies and gates.
-
-Stages:
-
-| Number | Action |
-|---|---|
-| 10 | Inspect measurement image and algorithms |
-| 20 | Generate X.509 fixtures |
-| 30 | Validate X.509 fixtures |
-| 40 | Build MTC image using current dependencies |
-| 50 | Generate nine-profile N=16 fixtures |
-| 60 | Validate N=16, 18 TLS handshakes |
-| 70 | Generate all sizes after the N=16 gate |
-| 80 | Static sizes and crossover using successful validations |
-| 90 | Audit X.509 fixtures and analysis output presence |
-
-Batch execution preserves numeric stage selection (`run 20`). Use:
+The default workflow generates and validates **N=16 for all nine profiles**,
+then produces crossover CSVs and PDF plots. It does not generate the larger MTC
+populations. Existing paths are stored in `.mt-state/cert-scaling/paths.env`;
+`status` displays them. Menus, prompts, status messages and errors are in English.
 
 ```sh
-bin/cryptographic_scaling/mt-cert-scaling run --count 3
-bin/cryptographic_scaling/mt-cert-scaling run ALL
-# Same interface for the original campaign manager:
-bin/original_campaigns/mt-campaigns run --count 3
-bin/original_campaigns/mt-campaigns run ALL
+# First use only; init/status/show do not execute Docker or generate fixtures.
+bin/cryptographic_scaling/mt-cert-scaling init
+bin/cryptographic_scaling/mt-cert-scaling status
+
+# After the X.509 and nine-profile N=16 validations pass:
+bin/cryptographic_scaling/mt-cert-scaling cross
+# Equivalent: run 80
+
+# Optional slower workflow, in a separate output directory:
+bin/cryptographic_scaling/mt-cert-scaling cross-advanced
 ```
 
-`--count X` executes up to X remaining stages in order. `ALL` executes every
-remaining stage in that launcher's list. Completed stages are skipped (also
-`skipped` stages in the original manager); the first failure stops the batch.
-Existing outputs are not automatically imported or overwritten. A running status
-or execution lock blocks batch startup until inspected. Failed immutable outputs
-still need a fresh path before retrying; a batch does not make them resumable.
-Cert-scaling ALL covers stages10–90 only, not the separate protocol menu or TLS
-performance matrix. Original ALL includes its optional capture and archive stages,
-without invoking reset-all or archive-clean. Menus expose count and ALL options.
-Only the operator launches these commands; none were executed during preparation.
+| Workflow | Real MTC fixtures | Analysis output | Plots |
+|---|---|---|---|
+| `cross` / `run 80` | N=16, nine profiles | STATIC_ROOT | STATIC_ROOT/plots |
+| `cross-advanced` | N=1,4,16,64,256,1024, nine profiles | ADVANCED_ROOT | ADVANCED_ROOT/plots |
 
-`show 70` prints the exact command; `run 70` executes it. While generation runs,
-the coordinator prints a heartbeat and certificate counters every 30 seconds.
-These counters are not a completion percentage: MTC objects are generated after
-the population. Run `status` from another terminal to inspect a process started
-manually too; heartbeat monitoring only applies to newly launched steps.
+Both workflows search the same analytical powers of two (default through 2^20).
+The advanced workflow adds **real serialization checks at more populations**;
+it does not automatically expand the analytical search or guarantee a crossover.
+It is not a timing experiment. N=16-only evidence verifies model agreement at
+N=16, not at all other sizes. Larger modeled rows remain explicitly labeled.
 
-Do not rerun stages already completed manually or currently running. For the
-existing all-size generation, wait for successful completion, configure the X.509
-paths, then select stage **80**. Outputs are immutable: failures preserve partial
-outputs; select a fresh path before a new attempt. A process lock serializes runs
-started by this coordinator, but cannot detect independently launched campaigns.
-A hard interruption may leave `.mt-state/cert-scaling/lock`; inspect the process
-and log before manually removing that empty lock directory.
+`cross-advanced` generates the complete fixture set only if MTC_ALL is absent,
+using the N=16 gate. If it already exists, its completion manifest and full profile/
+size coverage are required before analysis; partial output is not resumed or
+replaced. Existing N=16 and advanced results remain separate and immutable.
+A plot failure preserves CSVs; choose a new output path for another attempt.
+Matplotlib must be available in the Python environment used by the launcher.
 
-For a fresh campaign, run `init` without a date and review the saved paths.
-The required measurement/profile base images must already exist. Stage 40 rebuilds
-MTC only; do not select it during an active campaign. Stage 90 invokes Docker for
-X.509 verification; it does not validate performance results or prove draft
-compliance. TLS performance commands below remain separate manual operations.
+New configurations use `artifacts/results/paper1-crossover-n16-DATE` and
+`artifacts/results/paper1-crossover-advanced-DATE`. Existing configurations retain
+STATIC_ROOT; ADVANCED_ROOT defaults to STATIC_ROOT plus `-advanced` without
+rewriting the state file. If STATIC_ROOT already contains previous analysis,
+select a fresh path with `set STATIC_ROOT PATH` before requesting another quick
+crossover. Existing results are not reclassified as N=16-only evidence.
+
+| Stage | Action | Default batch |
+|---|---|---|
+| 10 | Inspect measurement image and algorithms | yes |
+| 20 | Generate X.509 fixtures | yes |
+| 30 | Validate X.509 fixtures | yes |
+| 40 | Ensure MTC image and missing parents via mt-prepare | yes |
+| 50 | Generate nine-profile N=16 fixtures | yes |
+| 60 | Validate N=16 with 18 TLS handshakes | yes |
+| 70 | Generate all six MTC populations | **optional** |
+| 80 | N=16 crossover CSVs and PDF plots | yes |
+| 90 | Audit the quick analysis | yes |
+| 100 | Advanced CSVs and plots from existing complete MTC_ALL | **optional** |
+
+`run ALL` and `run --count X` use only the default stages: **70 and 100 are
+excluded**. Completed stages are skipped and the first failure stops the batch.
+Use `run 70` for generation only or `run 100` for advanced analysis only;
+`cross-advanced` coordinates both. Stage numbers and full names remain valid.
+The menu exposes advanced crossover as option9. No performance matrix is launched.
+The original `mt-campaigns run ALL` retains its own stage list and behavior.
+
+```sh
+bin/cryptographic_scaling/mt-cert-scaling show 80
+bin/cryptographic_scaling/mt-cert-scaling show 100
+bin/cryptographic_scaling/mt-cert-scaling run --count 3
+bin/cryptographic_scaling/mt-cert-scaling run ALL
+```
+
+Set CHAIN_FIXTURES and CHAIN_VALID to the actual X.509 fixture directory and its
+successful validation JSON if they were generated separately. Change paths using
+**Change path** or `set VARIABLE PATH` before execution. A directory alone is not
+completion. All reports must use fresh output names. Locks cover this launcher,
+not independently started campaigns. Generation prints a heartbeat and population
+counters every30 seconds; reaching the certificate count does not mean MTC objects
+are complete. No builds or changes should overlap a frozen scientific run.
+
+Option6 (**MTC protocol**) opens the separate
+[protocol workflow](../../protocol_validation/README.md), also accessible through
+`bin/cryptographic_scaling/mt-cert-scaling protocol`. New configurations select Paper-1 mldsa65 from the saved N=16 fixture root.
+Historical configurations retain legacy pq; crossover results are not required.
 
 Define fresh immutable locations:
 
@@ -149,9 +167,9 @@ python3 campaigns/cryptographic_scaling/cert_chain_scaling/size_analysis.py "$CH
 To include MTC sizes and X.509–MTC crossover, first run the separate
 [Paper-1 MTC profile preparation and N=16 gate](../mtc_profile_scaling/README.md).
 It generates N=16 for nine algorithms and requires 18 successful handshakes
-(one per mode/profile) before the remaining sizes. It does not require the
-original scaling campaign. Set `MTC_SCALING_ROOT` to the new complete fixture
-root produced after that gate. Choose a new analysis output directory:
+(one per mode/profile). It does not require the original scaling campaign.
+Set `MTC_SCALING_ROOT` to the validated N=16 fixture root for the quick analysis,
+or to the complete six-size root for the optional advanced analysis. Choose a new analysis output directory:
 
 ```sh
 STATIC_ROOT="artifacts/results/cert-chain-with-mtc-$STAMP"
@@ -247,7 +265,7 @@ medians. Handshakes are not treated as independent campaigns.
 14. Generate plots:
 
 ```sh
-python3 -m pip install -r campaigns/original_campaigns/scaling_campaign/requirements-plots.txt
+python3 -m pip install matplotlib
 python3 campaigns/cryptographic_scaling/cert_chain_scaling/plots.py "$STATIC_ROOT" --measurements "$TLS_ROOT" --output "$STATIC_ROOT/plots"
 ```
 
@@ -315,3 +333,44 @@ TLS summaries only include complete eligible cells. The summary sidecar lists
 unsupported, missing and incomplete cells; none are imputed as zero or included
 in performance denominators. Static plots remain independent. Re-analysis is
 immutable: choose another `--output path/to/summary.csv` when a summary exists.
+
+## Full TLS performance workflow
+
+`run ALL` runs the default fixture validation and N=16 size-crossover stages;
+it does not run the full TLS performance matrix. The optional TLS stages are:
+
+| Stage | Action |
+| --- | --- |
+| 110 | Offline matrix preview using the recorded environment |
+| 120 | Full TLS execution: 5 campaigns, 30 repetitions, 5 warmups |
+| 130 | Aggregate completed eligible TLS observations |
+| 140 | Generate size and TLS performance plots in `TLS_ROOT/plots` |
+
+After the default workflow has completed, inspect paths and preview:
+
+```sh
+bin/cryptographic_scaling/mt-cert-scaling status
+bin/cryptographic_scaling/mt-cert-scaling tls-full
+```
+
+**WARNING: FULL EXPERIMENT — MANUAL EXECUTION ONLY.** To explicitly run the
+preview, matrix, analysis and plots in order, stopping at the first failure:
+
+```sh
+bin/cryptographic_scaling/mt-cert-scaling tls-full --execute
+```
+
+The menu exposes preview and execution separately. Individual stages accept
+`show 120` or `run 120` (and likewise 110, 130, 140). The execution command uses
+both `--full-matrix` and `--execute`, with the same recorded `ENVIRONMENT` as
+the preview. Unsupported TLS algorithms remain explicitly excluded by the runner.
+
+`TLS_ROOT` defaults to `artifacts/results/cert-chain-tls-$STAMP`, including for
+older launcher configurations. Select another fresh location with
+`mt-cert-scaling set TLS_ROOT artifacts/results/cert-chain-tls-NEW`.
+The analysis writes `summary.csv`, `summary.json` and
+`summary-algorithm_support.csv` under that root. Plots require the existing
+N=16 crossover tables in `STATIC_ROOT` and Matplotlib. Existing output is
+preserved; after a failure, inspect the log and use the individual remaining
+stages or the documented runner resume procedure. The combined command does
+not automatically resume or overwrite a previous TLS run.

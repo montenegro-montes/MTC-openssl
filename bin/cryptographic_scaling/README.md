@@ -54,3 +54,44 @@ Use `new` for a fresh Paper-1 protocol campaign while preserving old state/resul
 `init-legacy` is available explicitly for historical pq fixtures, with no automatic
 reinterpretation or regeneration. PROFILE/FIX/KEY may be changed before evidence
 exists. The profile is checked against the canonical issuer/cosigner registry.
+
+## Full TLS performance workflow
+
+`run ALL` runs the default fixture validation and N=16 size-crossover stages;
+it does not run the full TLS performance matrix. The optional TLS stages are:
+
+| Stage | Action |
+| --- | --- |
+| 110 | Offline matrix preview using the recorded environment |
+| 120 | Full TLS execution: 5 campaigns, 30 repetitions, 5 warmups |
+| 130 | Aggregate completed eligible TLS observations |
+| 140 | Generate size and TLS performance plots in `TLS_ROOT/plots` |
+
+After the default workflow has completed, inspect paths and preview:
+
+```sh
+bin/cryptographic_scaling/mt-cert-scaling status
+bin/cryptographic_scaling/mt-cert-scaling tls-full
+```
+
+**WARNING: FULL EXPERIMENT — MANUAL EXECUTION ONLY.** To explicitly run the
+preview, matrix, analysis and plots in order, stopping at the first failure:
+
+```sh
+bin/cryptographic_scaling/mt-cert-scaling tls-full --execute
+```
+
+The menu exposes preview and execution separately. Individual stages accept
+`show 120` or `run 120` (and likewise 110, 130, 140). The execution command uses
+both `--full-matrix` and `--execute`, with the same recorded `ENVIRONMENT` as
+the preview. Unsupported TLS algorithms remain explicitly excluded by the runner.
+
+`TLS_ROOT` defaults to `artifacts/results/cert-chain-tls-$STAMP`, including for
+older launcher configurations. Select another fresh location with
+`mt-cert-scaling set TLS_ROOT artifacts/results/cert-chain-tls-NEW`.
+The analysis writes `summary.csv`, `summary.json` and
+`summary-algorithm_support.csv` under that root. Plots require the existing
+N=16 crossover tables in `STATIC_ROOT` and Matplotlib. Existing output is
+preserved; after a failure, inspect the log and use the individual remaining
+stages or the documented runner resume procedure. The combined command does
+not automatically resume or overwrite a previous TLS run.
