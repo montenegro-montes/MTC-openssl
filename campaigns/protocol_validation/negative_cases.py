@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Manual deterministic negative checks; use existing fixtures, never regenerate them."""
+"""Invalid-input stress checks: deterministic cases, not a load test or fuzzing campaign."""
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -39,13 +40,33 @@ def main():
     # Positive control prevents a missing provider/OpenSSL executable from making every mutation look successful.
     command=[sys.executable,str(Path(__file__).with_name('validate_mtc.py'))]
     baseline=a.output/'positive.json'
-    subprocess.run(command+[str(base),'--trust',str(a.fixtures/'trust.bin'),'--mode','standalone','--profile',a.profile,'--openssl',a.openssl,'--output',str(baseline)],check=True)
+    def invoke(arguments,report_path,log_dir):
+        result=subprocess.run(command+arguments,capture_output=True,text=True)
+        (log_dir/'validator.stdout.log').write_text(result.stdout)
+        (log_dir/'validator.stderr.log').write_text(result.stderr)
+        try:report=json.loads(report_path.read_text())
+        except (OSError,ValueError):return 'ERROR',None,'Validator did not produce a readable JSON report'
+        if result.returncode==0 and report.get('overall')=='PASS':return 'ACCEPT','PASS',None
+        if result.returncode==1 and report.get('overall')=='FAIL' and report.get('failure_kind')=='INVALID_OBJECT':
+            return 'REJECT','FAIL',report.get('error')
+        return 'ERROR',report.get('overall'),report.get('error','Validator process/report inconsistency')
+    observed,validator_result,reason=invoke([str(base),'--trust',str(a.fixtures/'trust.bin'),'--mode','standalone','--profile',a.profile,'--openssl',a.openssl,'--output',str(baseline)],baseline,a.output)
+    control=dict(case='positive-control',expected='ACCEPT',observed=observed,test_result='PASS' if observed=='ACCEPT' else 'FAIL',validator_result=validator_result,reason=reason)
+    if observed!='ACCEPT':
+        save(a.output/'stress-checks-summary.json',dict(passed=False,test_result='FAIL',positive_control=control,cases=[]))
+        print('FAIL positive-control - valid object was not accepted; invalid-input checks were not run',flush=True)
+        raise SystemExit(1)
+    print('PASS positive-control - valid object correctly accepted',flush=True)
     for name,(cert,config) in cases.items():
         directory=a.output/name;directory.mkdir();(directory/'object.der').write_bytes(cert);(directory/'trust.bin').write_bytes(config)
-        result=subprocess.run(command+[str(directory/'object.der'),'--trust',str(directory/'trust.bin'),'--mode','standalone','--profile',a.profile,'--openssl',a.openssl,'--output',str(directory/'report.json')])
-        import json
-        report=json.loads((directory/'report.json').read_text())
-        rows.append(dict(case=name,rejected=result.returncode==1 and report['overall']=='FAIL',error=report.get('error')))
-    save(a.output/'negative-summary.json',dict(passed=all(r['rejected'] for r in rows),source_sha256=sha(raw),cases=rows))
-    raise SystemExit(0 if all(r['rejected'] for r in rows) else 1)
+        observed,validator_result,reason=invoke([str(directory/'object.der'),'--trust',str(directory/'trust.bin'),'--mode','standalone','--profile',a.profile,'--openssl',a.openssl,'--output',str(directory/'report.json')],directory/'report.json',directory)
+        passed=observed=='REJECT'
+        row=dict(case=name,expected='REJECT',observed=observed,test_result='PASS' if passed else 'FAIL',validator_result=validator_result,reason=reason if reason else ('Invalid object was unexpectedly accepted' if observed=='ACCEPT' else None))
+        rows.append(row);save(directory/'test-result.json',row)
+        message='invalid object correctly rejected' if passed else ('invalid object was unexpectedly accepted' if observed=='ACCEPT' else 'validator could not complete the check')
+        print(f"{row['test_result']} {name} - {message}",flush=True)
+    passed=all(r['test_result']=='PASS' for r in rows)
+    save(a.output/'stress-checks-summary.json',dict(passed=passed,test_result='PASS' if passed else 'FAIL',source_sha256=sha(raw),positive_control=control,cases=rows))
+    print(('PASS' if passed else 'FAIL')+' invalid-input stress checks',flush=True)
+    raise SystemExit(0 if passed else 1)
 if __name__=='__main__':main()

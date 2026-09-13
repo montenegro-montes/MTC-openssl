@@ -68,7 +68,11 @@ def trust(data,p):
 
 def openssl(executable,*args,data=None):
     r=subprocess.run([executable,*map(str,args)],input=data,capture_output=True)
-    require(r.returncode==0,'OpenSSL rejected operation: '+str(args[0])+': '+r.stderr.decode(errors='replace'))
+    if r.returncode:
+        diagnostic=(r.stdout+r.stderr).decode(errors='replace')
+        if args[0]=='pkeyutl' and '-verify' in args and 'signature verification failure' in diagnostic.lower():
+            raise ValueError('OpenSSL signature verification failed')
+        raise RuntimeError('OpenSSL operation failed: '+str(args[0])+': '+diagnostic.strip())
     return r.stdout
 
 def key_check(executable,der,p,tmp,label):
@@ -175,7 +179,7 @@ def main():
     p.add_argument('--output',type=Path,required=True);a=p.parse_args()
     if a.output.exists():p.error('Output exists; choose a new report')
     try:report=validate(a)
-    except Exception as error:report=dict(draft=core.DRAFT,claim='implemented-subset conformance',overall='FAIL',mode=a.mode,profile=a.profile,error=str(error),parse_complete=None)
+    except Exception as error:report=dict(draft=core.DRAFT,claim='implemented-subset conformance',overall='FAIL',mode=a.mode,profile=a.profile,error=str(error),failure_kind='INVALID_OBJECT' if isinstance(error,ValueError) else 'VALIDATOR_ERROR',parse_complete=None)
     save(a.output,report);print(report['overall'],a.output)
     return 0 if report['overall']=='PASS' else 1
 if __name__=='__main__':sys.exit(main())

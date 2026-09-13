@@ -20,7 +20,7 @@ services:
     volumes:
       - ${PROTOCOL_OUTPUT:?}:/capture
     entrypoint: [tcpdump]
-    command: [-i, eth0, -s, "0", -U, -w, /capture/handshake.pcap, "tcp port 4433"]
+    command: [-i, eth0, -s, "0", -U, --immediate-mode, -w, /capture/handshake.pcap, "tcp port 4433"]
   client:
     image: ${PROTOCOL_IMAGE:?}
     volumes:
