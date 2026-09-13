@@ -374,3 +374,71 @@ N=16 crossover tables in `STATIC_ROOT` and Matplotlib. Existing output is
 preserved; after a failure, inspect the log and use the individual remaining
 stages or the documented runner resume procedure. The combined command does
 not automatically resume or overwrite a previous TLS run.
+
+## Primary static result: exact landmark crossover
+
+Use `crossover_extended.py` for the extended Certificate-size analysis. It reads
+existing fixtures, baseline size tables, the N16 validation gate and optional
+completed TLS observations; it never starts Docker, OpenSSL, captures or campaigns.
+Do not rerun a TLS matrix for this analysis. The previous tables remain historical.
+
+The original MTC TLS size calculation omitted the four bytes of the empty 0xffa7
+CertificateEntry confirmation. Future `size_analysis.py` output includes them.
+The new model validates all nine N16 fixtures byte-for-byte before extending the
+search. The main comparison is full Certificate-message bytes on both sides;
+CertificateVerify, CPU and latency are excluded.
+
+```sh
+# Use an existing Python environment with matplotlib; do not install packages
+# or regenerate fixtures as part of this analysis. Select a fresh output path.
+PYTHONDONTWRITEBYTECODE=1 python3 campaigns/cryptographic_scaling/cert_chain_scaling/crossover_extended.py \
+  --fixtures "$CHAIN_FIXTURES" \
+  --mtc-fixtures "$MTC16" \
+  --mtc-validation "$MTC_VALID/validation.json" \
+  --baseline "$STATIC_ROOT" \
+  --measurements "$TLS_ROOT" \
+  --output artifacts/results/crossover-extended-NEW
+```
+
+This checkout also has an existing matplotlib environment at
+`/Users/joseantoniomontenegromontes/anaconda3/bin/python`; the default Homebrew
+Python did not have matplotlib during review. No packages were installed.
+Omit `--measurements` when no compatible existing TLS results are available;
+the report explicitly retains static references instead of inventing measurements.
+The MTC anchor and X509 certificates are separate same-profile issuance fixtures,
+not the same key/subject transformed into another format. That comparison scope
+is reported explicitly.
+
+New outputs: `serialization_breakdown.csv`, `mtc_size_model.csv`,
+`x509_reference_validation.csv`, `crossover_extended.csv`,
+`crossover-by-depth.pdf`, `crossover-curves.pdf`, `analysis_extended.json` and
+`README.md`. PNG companions allow inexpensive visual inspection. D=3 is emphasized;
+D=2 is retained and D=4/5 are sensitivity cases. No-crossing points are marked
+above the maximum, never at zero.
+
+For leaf zero/log one and the initial cover(0,N), the first proof with k hashes
+starts at N=2^k+1 (k>=1). An exact crossover can therefore occur between old
+power-of-two samples. The model covers every integer through 2^48-1 in only
+48 size intervals. It reuses the real DER encoder, including length transitions.
+The draft index capacity is 2^48, but a complete landmark's exclusive uint48 end
+cannot represent 2^48; the model limit records that edge. Native MTC loading is
+separately capped at N=1024, and the current generation workflow exposes only
+1,4,16,64,256,1024. Analytical large-N results are not implementation/TLS support.
+
+The reviewed `20260913T142141Z` input set reproduced all 36 X509 references exactly,
+including completed SLH-DSA TLS observations. The extended crossover remains a size
+study. At N16, corrected landmark Certificate bytes are P256=460, ML-DSA65=2343,
+SLH-DSA256s=451. SLH-DSA landmark omits out-of-band cosignatures; it does not compress
+those signatures into hundreds of bytes. Its SPKI is 82 bytes versus P256's 91.
+
+Pinned source sections: MTC-05 §4.5.1 (initial cover), §5.2 (48-bit log indices),
+§6.2 (DER envelope/proof, fixed uint48 endpoints and vectors), §6.4.4 (landmark
+construction), and TA-04 §4.1/4.2 (empty CertificateEntry confirmation).
+
+Cheap tests:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s campaigns/cryptographic_scaling/cert_chain_scaling \
+  -p test_landmark_size_model.py
+```

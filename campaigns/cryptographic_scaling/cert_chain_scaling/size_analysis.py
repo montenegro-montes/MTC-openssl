@@ -13,10 +13,11 @@ def cert_metrics(path):
  data=path.read_bytes();outer,_=certificate_parts(data);bit=outer[2][1]
  if not bit or bit[0]:raise ValueError(f"invalid certificate signature BIT STRING: {path}")
  return len(data),len(bit)-1
-def tls_certificate_message_size(certs):
+def tls_certificate_message_size(certs, *, mtc_confirmation=False):
  # Handshake(4), certificate_request_context vector(1), certificate_list vector(3),
  # and, per CertificateEntry, cert_data vector(3) plus extensions vector(2).
- return 8+sum(len(x)+5 for x in certs)
+ # MTC additionally confirms negotiation with empty 0xffa7 on entry zero (4 bytes).
+ return 8+sum(len(x)+5 for x in certs)+(4 if mtc_confirmation else 0)
 def crossover_status(profile, fixtures_supplied, series, crossed, mapping=None):
  if profile not in (MTC_PROFILE_MAP if mapping is None else mapping):return "UNSUPPORTED_MTC_PROFILE"
  if not fixtures_supplied:return "MTC_FIXTURES_NOT_PROVIDED"
@@ -58,11 +59,11 @@ def main():
     mtc_provenance.append({"profile":profile,"standard_name":PROFILES[profile]["standard_name"],"implementation_algorithm":PROFILES[profile]["algorithm"],"security_level":PROFILES[profile]["level"],"tree_size":n,"mtc_modes":["landmark","standalone"],"draft":meta.get("draft"),"fixture_hash":hashlib.sha256((directory/"manifest.json").read_bytes()).hexdigest(),"provenance":meta.get("provenance"),"legacy":a.legacy_mtc_fixtures})
     for mode in ["landmark","standalone"]:
      actual=(directory/f"{mode}-0000.der").read_bytes();actual_outer,_=certificate_parts(actual);actual_proof=actual_outer[2][1][1:];proof_hashes=int(meta["sizes"][mode]["mtc_inclusion_proof_bytes"])//32
-     mtc.append({"security_level":PROFILES[profile]["level"],"family":PROFILES[profile]["family"],"algorithm":profile,"mtc_profile":mode,"tree_size":n,"proof_hashes":proof_hashes,"inclusion_hash_bytes":32*proof_hashes,"encoded_proof_bytes":len(actual_proof),"certificate_der_bytes":len(actual),"tls_certificate_message_bytes":tls_certificate_message_size([actual]),"evidence":"measured fixture","seed_fixture":str(directory/f'{mode}-0000.der')})
+     mtc.append({"security_level":PROFILES[profile]["level"],"family":PROFILES[profile]["family"],"algorithm":profile,"mtc_profile":mode,"tree_size":n,"proof_hashes":proof_hashes,"inclusion_hash_bytes":32*proof_hashes,"encoded_proof_bytes":len(actual_proof),"certificate_der_bytes":len(actual),"tls_certificate_message_bytes":tls_certificate_message_size([actual],mtc_confirmation=True),"evidence":"measured fixture","seed_fixture":str(directory/f'{mode}-0000.der')})
    seed=candidates[-1].read_bytes();outer,_=certificate_parts(seed);tbs=outer[0][2]
    for power in range(a.max_tree_power+1):
     n=1<<power;start,end=cover(0,n)[0];proof_hashes=(end-start-1).bit_length();pbytes=proof(start,end,[bytes(32)]*proof_hashes);der=certificate(tbs,pbytes)
-    mtc.append({"security_level":PROFILES[profile]["level"],"family":PROFILES[profile]["family"],"algorithm":profile,"mtc_profile":"landmark","tree_size":n,"proof_hashes":proof_hashes,"inclusion_hash_bytes":32*proof_hashes,"encoded_proof_bytes":len(pbytes),"certificate_der_bytes":len(der),"tls_certificate_message_bytes":tls_certificate_message_size([der]),"evidence":"exact serialization model","seed_fixture":str(candidates[-1])})
+    mtc.append({"security_level":PROFILES[profile]["level"],"family":PROFILES[profile]["family"],"algorithm":profile,"mtc_profile":"landmark","tree_size":n,"proof_hashes":proof_hashes,"inclusion_hash_bytes":32*proof_hashes,"encoded_proof_bytes":len(pbytes),"certificate_der_bytes":len(der),"tls_certificate_message_bytes":tls_certificate_message_size([der],mtc_confirmation=True),"evidence":"exact serialization model","seed_fixture":str(candidates[-1])})
  write(a.output/"mtc_sizes.csv",mtc,["security_level","family","algorithm","mtc_profile","tree_size","proof_hashes","inclusion_hash_bytes","encoded_proof_bytes","certificate_der_bytes","tls_certificate_message_bytes","evidence","seed_fixture"])
  model_validation=[]
  for actual in [r for r in mtc if r["mtc_profile"]=="landmark" and r["evidence"]=="measured fixture"]:
