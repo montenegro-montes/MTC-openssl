@@ -287,7 +287,7 @@ set_path() {
 menu() {
  local choice value key
  while true; do
-  printf '\nCert scaling: 1 Initialize  2 Status/progress  3 Show command\n              4 Run stage  5 Change path  6 MTC protocol\n              7 Run X default stages  8 Run ALL default stages\n              9 Advanced crossover (all sizes)  10 Prepare prerequisites\n              11 Preview full TLS matrix  12 Execute full TLS workflow  0 Exit\n'
+  printf '\nCert scaling: 1 Initialize  2 Status/progress  3 Show command\n              4 Run stage  5 Change path  6 MTC protocol\n              7 Run X default stages  8 Run ALL default stages\n              9 Advanced crossover (all sizes)\n              10 Preview full TLS matrix  11 Execute full TLS workflow  0 Exit\n'
   read -r -p '> ' choice || return 0
   case "$choice" in
    1) read -r -p 'Date/name (empty = new): ' value; "$0" init "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
@@ -299,9 +299,8 @@ menu() {
    7) read -r -p 'Number of pending stages: ' value; "$0" run --count "$value" || true;;
    8) "$0" run ALL || true;;
    9) "$0" cross-advanced || true;;
-   10) "$REPO/bin/cryptographic_scaling/mt-prepare" menu || true;;
-   11) "$0" tls-full || true;;
-   12) "$0" tls-full --execute || true;;
+   10) "$0" tls-full || true;;
+   11) "$0" tls-full --execute || true;;
    0) return 0;;
   esac
  done
