@@ -23,7 +23,7 @@ init() {
   PROFILE=pq; FIX=artifacts/mtc/batch16-v2/pq; KEY=artifacts/certs/pq/server.key
  else
   local cert_config="$REPO/.mt-state/cert-scaling/paths.env" root
-  [[ -f "$cert_config" ]] || fail 'Initialize mt-cert-scaling first; its N=16 fixture path is required. Use init-legacy only for historical pq fixtures.'
+  [[ -f "$cert_config" ]] || fail 'Run bin/cryptographic_scaling/mt-prepare init to initialize missing launcher paths, or mt-prepare run ALL to also prepare images. Use init-legacy only for historical pq fixtures.'
   root=$( (source "$cert_config"; printf '%s' "$MTC16") )
   case "$root" in artifacts/*) ;; *) fail 'Paper-1 MTC16 must be a relative path under artifacts/.';; esac
   PROFILE=mldsa65; FIX="$root/batch16/mtc/$PROFILE"; KEY="$root/population/$PROFILE/0.key"
@@ -120,12 +120,35 @@ PY
   120.*) passed "$CAP/30.offline-standalone.json";;
  esac
 }
+run_all() (
+ load
+ mkdir "$STATE/batch.lock" 2>/dev/null || fail 'A batch is active or a lock needs inspection.'
+ trap 'rmdir "$STATE/batch.lock" 2>/dev/null || true' EXIT
+ [[ ! -d "$STATE/lock" ]] || fail 'A stage is active or a lock needs inspection.'
+ local step state count=0
+ for step in "${STEPS[@]}"; do
+  state=''
+  [[ ! -f "$STATE/$step.status" ]] || state=$(cat "$STATE/$step.status")
+  case "$state" in running*) fail "Stage marked running: $step. Inspect its process and log before continuing.";; esac
+ done
+ for step in "${STEPS[@]}"; do
+  state=''
+  [[ ! -f "$STATE/$step.status" ]] || state=$(cat "$STATE/$step.status")
+  case "$state" in completed*) printf 'SKIP completed: %s\n' "$step"; continue;; esac
+  printf 'Batch stage: %s\n' "$step"
+  run_step "$step" batch || exit "$?"
+  count=$((count+1))
+ done
+ printf 'Batch completed: %s stages.\n' "$count"
+)
 run_step() (
- load; plan "$1"
+ [[ "${2:-}" == batch || ! -d "$STATE/batch.lock" ]] || fail 'A batch is active or a lock needs inspection.'
+ load || exit "$?"
+ plan "$1" || exit "$?"
  mkdir "$STATE/lock" 2>/dev/null || fail 'Another stage is active or a lock remains after interruption.'
  trap 'rmdir "$STATE/lock" 2>/dev/null || true' EXIT
- preflight
- mkdir -p "$CAP"
+ preflight || exit "$?"
+ mkdir -p "$CAP" || exit "$?"
  local log rc
  log="$STATE/$STEP-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
  printf 'running; log=%s\n' "$log" > "$STATE/$STEP.status"
@@ -141,7 +164,7 @@ run_step() (
 )
 set_path() {
  load
- [[ ! -d "$STATE/lock" ]] || fail 'Do not change paths while a stage is running.'
+ [[ ! -d "$STATE/lock" && ! -d "$STATE/batch.lock" ]] || fail 'Do not change paths while a stage or batch is running.'
  case "$1" in FIX|KEY|CAP|PROFILE) ;; *) fail 'Variables: FIX KEY CAP PROFILE';; esac
  [[ ! -d "$CAP" ]] || fail 'Evidence already exists: use new for another campaign; previous state is preserved.'
  if [[ "$1" == PROFILE ]]; then
@@ -159,7 +182,7 @@ set_path() {
 new_campaign() {
  local name=${1:-$(date -u +%Y%m%dT%H%M%SZ)}
  [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid name.'
- [[ ! -d "$STATE/lock" ]] || fail 'A stage is active or a lock needs inspection.'
+ [[ ! -d "$STATE/lock" && ! -d "$STATE/batch.lock" ]] || fail 'A stage or batch is active or a lock needs inspection.'
  [[ ! -e "artifacts/protocol-validation/$name" ]] || fail 'That campaign output already exists.'
  [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] || fail 'Initialize mt-cert-scaling before starting a new Paper-1 protocol campaign.'
  if [[ -d "$STATE" ]]; then mv "$STATE" "$STATE.saved-$(date -u +%Y%m%dT%H%M%SZ)-$$"; fi
@@ -168,7 +191,7 @@ new_campaign() {
 menu() {
  local choice value key
  while true; do
-  printf '\nProtocol validation: 1 Initialize  2 Status  3 Show command\n                     4 Run stage  5 Change path  6 New campaign  0 Back\n'
+  printf '\nProtocol validation: 1 Initialize  2 Status  3 Show command\n                     4 Run stage  5 Change path  6 New campaign\n                     7 Run ALL pending stages (includes captures and stress checks)  0 Back\n'
   read -r -p '> ' choice || return 0
   case "$choice" in
    1) read -r -p 'Date/name (empty=new): ' value; "$SELF" init "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
@@ -177,6 +200,7 @@ menu() {
      if [[ "$choice" == 3 ]]; then "$SELF" show "$value" || true; else "$SELF" run "$value" || true; fi;;
    5) read -r -p 'Variable FIX, KEY, CAP or PROFILE: ' key; read -r -p 'Relative path: ' value; "$SELF" set "$key" "$value" || true;;
    6) read -r -p 'New date/name (empty=new): ' value; "$SELF" new "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
+   7) "$SELF" run ALL || true;;
    0) return 0;;
   esac
  done
@@ -188,9 +212,9 @@ case "${1:-menu}" in
  status) status;;
  list) printf '%s\n' "${STEPS[@]}";;
  show) load; plan "${2:?Stage required}"; show;;
- run) run_step "${2:?Stage required}";;
+ run) [[ "$#" == 2 ]] || fail 'Usage: run STAGE|ALL'; if [[ "$2" == ALL ]]; then run_all; else run_step "$2"; fi;;
  set) set_path "${2:?Variable required}" "${3:?Path required}";;
  menu) menu;;
- help|--help|-h) printf 'Usage: %s [menu|init [NAME]|init-legacy [NAME]|new [NAME]|status|list|show STAGE|run STAGE|set FIX/KEY/CAP/PROFILE VALUE]\nSTAGE accepts a number (10) or full name (10.offline-existing).\nManual workflow: init/status/show do not invoke Docker. No builds, deletion or matrices.\n' "$SELF";;
+ help|--help|-h) printf 'Usage: %s [menu|init [NAME]|init-legacy [NAME]|new [NAME]|status|list|show STAGE|run STAGE|run ALL|set FIX/KEY/CAP/PROFILE VALUE]\nSTAGE accepts a number (10) or full name (10.offline-existing).\nrun ALL executes pending stages in order, including captures and invalid-input stress checks; stops on failure.\nManual workflow: init/status/show do not invoke Docker. No builds, deletion or matrices.\n' "$SELF";;
  *) fail 'Unknown command; use help.';;
 esac

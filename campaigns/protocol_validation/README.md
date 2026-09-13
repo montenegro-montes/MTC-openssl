@@ -36,12 +36,8 @@ pq meaning. No historical campaign is required for the new path.
 bin/cryptographic_scaling/mt-prepare run ALL
 
 # First use only. Generate and validate N=16 if it does not already exist.
-bin/cryptographic_scaling/mt-cert-scaling init
-bin/cryptographic_scaling/mt-cert-scaling run 50
-bin/cryptographic_scaling/mt-cert-scaling run 60
 
 # First use only; imports the MTC16 path, not previous results.
-bin/cryptographic_scaling/mt-protocol-validation init
 bin/cryptographic_scaling/mt-protocol-validation status
 bin/cryptographic_scaling/mt-protocol-validation run 10
 ```
@@ -304,3 +300,49 @@ image or the host environment.
 - Keep `tls.keys`, logs, received certificate, PCAP and hash metadata private as
   scientific artifacts. Do not edit any captured artifact; derived extraction and
   reports use fresh paths. No measurements from this workflow are performance data.
+
+## Initialize shared launcher paths
+
+`mt-prepare run ALL` (or a successful `run N` / `rebuild`) initializes missing
+cert-scaling configuration first, then protocol-validation configuration using
+its N=16 path. Existing configurations, custom paths and results are preserved.
+Do not run a separate launcher `init` afterward; inspect `status` instead.
+
+If images were prepared before this change, configure the missing paths only:
+
+```sh
+bin/cryptographic_scaling/mt-prepare init
+```
+
+This command does not need Docker and does not generate fixtures. Run `mt-prepare run ALL` to also generate and validate N=16 fixtures automatically.
+Existing fixture outputs are preserved; inspect status before repeating stages.
+
+### Automatic N=16 prerequisites
+
+`mt-prepare run ALL` prepares images and missing launcher configuration, then
+runs certification stage 50 (N=16 generation) and stage 60 (functional TLS checks)
+automatically when their outputs do not exist. No separate manual invocation of
+those stages is needed. It checks the validation gate against fixture hashes,
+current source hashes and the current MTC image before reporting success.
+Existing incomplete, failed or stale evidence is preserved and reported as an
+error; it is never overwritten. Existing custom protocol paths are preserved
+and must match the prepared Paper-1 profile before setup reports readiness.
+
+`run N` and `rebuild N` remain image-only preparation plus configuration, so the
+certification image stage cannot recursively start fixture generation.
+`init` only saves missing configuration. `run ALL` and `rebuild ALL` include
+functional TLS validation, but no performance matrix or protocol capture.
+
+## Run all protocol stages
+
+```sh
+bin/cryptographic_scaling/mt-protocol-validation run ALL
+```
+
+Runs stages 10–120 in order, including both TLS captures, extraction, offline
+validation, joined reports and invalid-input stress checks. The menu offers the
+same action. Completed stages recorded by this launcher are skipped; the first
+error stops the batch. Existing outputs are never overwritten. A failed stage
+with existing evidence requires inspection and a fresh campaign where appropriate;
+`run ALL` does not automatically repair or resume partial captures. Batch locks
+prevent another stage, batch or configuration change during execution.

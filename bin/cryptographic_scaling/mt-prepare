@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared image recipes only; no original campaign state, fixtures or runners.
+# Shared images and launcher configuration; no original campaign execution.
 set -euo pipefail
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 SELF="$REPO/bin/cryptographic_scaling/mt-prepare"
@@ -9,10 +9,57 @@ STATE="$REPO/.mt-state/cryptographic-setup"
 IMAGES=(mt-tls-lab:local mt-tls-compact:local mt-tls-profile:local mt-tls-mtc:local mt-tls-measurement:local mt-tls-capture:local)
 FILES=(Dockerfile Dockerfile.compact Dockerfile.profile Dockerfile.mtc Dockerfile.measurement Dockerfile.capture)
 fail() { echo "ERROR: $*" >&2; exit 1; }
+configure_paths() {
+ local launcher config
+ for launcher in mt-cert-scaling mt-protocol-validation; do
+  case "$launcher" in mt-cert-scaling) config=cert-scaling;; *) config=protocol-validation;; esac
+  if [[ -f "$REPO/.mt-state/$config/paths.env" ]]; then
+   printf 'KEEP existing configuration: %s\n' "$launcher"
+  else
+   "$REPO/bin/cryptographic_scaling/$launcher" init || return "$?"
+  fi
+ done
+ echo 'Launcher paths are ready. N=16 fixtures still require mt-cert-scaling run 50 and run 60.'
+}
+prepare_fixtures() (
+ source "$REPO/.mt-state/cert-scaling/paths.env"
+ [[ ! -d "$REPO/.mt-state/cert-scaling/lock" && ! -d "$REPO/.mt-state/cert-scaling/batch.lock" ]] || fail 'A certification stage or batch is active.'
+ echo 'Preparing N=16 fixtures and functional TLS validation (nine profiles, both modes).'
+ if [[ ! -e "$MTC16" ]]; then
+  "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 50 || exit "$?"
+ else
+  [[ -f "$MTC16/manifest.json" ]] || fail "Incomplete fixtures preserved at $MTC16. Inspect them and select a fresh MTC16 path."
+  echo "REUSE fixture root: $MTC16 (validation required)"
+ fi
+ if [[ ! -e "$MTC_VALID" ]]; then
+  "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 60 || exit "$?"
+ fi
+ python3 - "$MTC_VALID/validation.json" "$MTC16" <<'PY'
+import json, subprocess, sys
+from pathlib import Path
+from campaigns.cryptographic_scaling.mtc_profile_scaling.workflow import gate
+try:
+    image = json.loads(subprocess.check_output(['docker','image','inspect','mt-tls-mtc:local'],text=True))[0]['Id']
+    gate(Path(sys.argv[1]), Path(sys.argv[2]), image)
+except Exception as error:
+    raise SystemExit('ERROR: Existing N=16 evidence cannot be reused: '+str(error)+'. Outputs are preserved; inspect them and select fresh MTC16/MTC_VALID paths as needed.')
+print('PASS N=16 fixtures, image, source hashes and functional validation')
+PY
+ local FIX KEY PROFILE
+ source "$REPO/.mt-state/protocol-validation/paths.env"
+ [[ "${PROFILE:-pq}" == mldsa65 && "$FIX" == "$MTC16/batch16/mtc/mldsa65" && "$KEY" == "$MTC16/population/mldsa65/0.key" ]] || fail 'Existing protocol paths/profile differ from the prepared Paper-1 fixtures. They were preserved; inspect mt-protocol-validation status before changing them.'
+ [[ -f "$FIX/manifest.json" && -f "$KEY" ]] || fail 'Prepared protocol fixtures or server key are missing.'
+)
+configure() (
+ mkdir -p "$STATE"
+ mkdir "$STATE/lock" 2>/dev/null || fail 'Setup is active or its lock needs inspection.'
+ trap 'rmdir "$STATE/lock" 2>/dev/null || true' EXIT
+ configure_paths
+)
 list() {
  local i
  for i in "${!IMAGES[@]}"; do printf '%s  %-30s %s\n' "$((i+1))" "${IMAGES[i]}" "${FILES[i]}"; done
- echo 'No fixture generation, regression suites, TLS handshakes or captures are run.'
+ echo 'ALL also generates N=16 fixtures and runs their functional TLS validation. Numbered stages prepare images only.'
 }
 python_ready() {
  command -v python3 >/dev/null || fail 'Python 3 is required.'
@@ -42,25 +89,31 @@ prepare() (
   rc=${codes[0]}; [[ "$rc" != 0 ]] || rc=${codes[1]}
   [[ "$rc" == 0 ]] || exit "$rc"
  done
- echo 'Prerequisites prepared. Continue with mt-cert-scaling; no campaign has been run.'
+ configure_paths || exit "$?"
+ if [[ "$selection" == ALL ]]; then
+  prepare_fixtures || exit "$?"
+  echo 'Prerequisites ready: images, configuration, N=16 fixtures and functional TLS validation. Continue with mt-protocol-validation.'
+ else
+  echo 'Selected images and configuration prepared. Use run ALL to prepare and validate N=16 fixtures automatically.'
+ fi
 )
 menu() {
  local choice value
  while true; do
-  printf '\nCryptographic scaling prerequisites\n1 List  2 Status  3 Prepare ALL missing  4 Prepare through stage\n5 Rebuild through ALL  0 Exit\n'
+  printf '\nCryptographic scaling prerequisites\n1 List  2 Status  3 Prepare ALL missing  4 Prepare through stage\n5 Rebuild through ALL  6 Initialize missing launcher paths  0 Exit\n'
   read -r -p '> ' choice || return 0
   case "$choice" in
    1) list;; 2) "$SELF" status || true;; 3) "$SELF" run ALL || true;;
    4) list; read -r -p 'Stage number: ' value; "$SELF" run "$value" || true;;
-   5) "$SELF" rebuild ALL || true;; 0) return 0;;
+   5) "$SELF" rebuild ALL || true;; 6) "$SELF" init || true;; 0) return 0;;
   esac
  done
 }
 case "${1:-menu}" in
- menu) menu;; list) list;;
+ menu) menu;; list) list;; init) configure;;
  run|rebuild) [[ "$#" == 2 ]] || fail 'Usage: run N|ALL or rebuild N|ALL'; flag=no; [[ "$1" != rebuild ]] || flag=yes; prepare "$2" "$flag";;
  show) [[ "${2:-}" =~ ^[1-6]$ ]] || fail 'Stage required: 1..6'; i=$(($2-1)); printf 'docker build -f %q -t %q .\n' "docker/original_campaigns/${FILES[i]}" "${IMAGES[i]}";;
  status) mt_compose_ready || exit 1; python_ready; for image in "${IMAGES[@]}"; do if docker image inspect "$image" >/dev/null 2>&1; then echo "AVAILABLE $image"; else echo "MISSING $image"; fi; done;;
- help|--help|-h) echo 'Usage: mt-prepare [menu|list|status|show N|run N|run ALL|rebuild N|rebuild ALL]'; echo 'Prepares cryptographic-scaling images without original campaigns. Existing images are reused; rebuild is explicit.';;
+ help|--help|-h) echo 'Usage: mt-prepare [menu|init|list|status|show N|run N|run ALL|rebuild N|rebuild ALL]'; echo 'Prepares cryptographic-scaling images without original campaigns. Existing images are reused; rebuild is explicit. run/rebuild initialize missing launcher paths after successful preparation; ALL also generates and validates N=16 fixtures using functional TLS; init configures paths without Docker.';;
  *) fail 'Unknown command; use help.';;
 esac
