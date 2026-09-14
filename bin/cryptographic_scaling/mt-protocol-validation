@@ -286,76 +286,465 @@ set_path() {
 }
 write_matrix_summary() {
  local name=$1
- mkdir -p "artifacts/protocol-review/$name"
- python3 - "$name" "${PROFILE_MATRIX[@]}" <<'PYSUM'
-import json,sys
+ local launcher_rc=${2:-0}
+ mkdir -p "artifacts/protocol-validation/$name" "artifacts/protocol-review/$name"
+ python3 - "$name" "$launcher_rc" "${PROFILE_MATRIX[@]}" <<'PYSUM'
+import hashlib
+import json
+import subprocess
+import sys
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
-name=sys.argv[1]
-profiles=sys.argv[2:]
-cap_root=Path('artifacts/protocol-validation')/name
-review_root=Path('artifacts/protocol-review')/name
-leaf_count=16
+name = sys.argv[1]
+launcher_rc = int(sys.argv[2])
+profiles = sys.argv[3:]
+leaf_count = 16
+modes = ('landmark', 'standalone')
+stages = (
+    '10.offline-existing',
+    '20.offline-landmark',
+    '30.offline-standalone',
+    '40.capture-landmark',
+    '50.extract-landmark',
+    '55.verify-transcript-landmark',
+    '60.validate-wire-landmark',
+    '70.report-landmark',
+    '80.capture-standalone',
+    '90.extract-standalone',
+    '95.verify-transcript-standalone',
+    '100.validate-wire-standalone',
+    '110.report-standalone',
+    '120.invalid-input-stress',
+)
+
+cap_root = Path('artifacts/protocol-validation') / name
+review_root = Path('artifacts/protocol-review') / name
+state_root = Path('.mt-state/protocol-validation-matrix') / name
+expected_identities = len(profiles) * leaf_count
+expected_handshakes = expected_identities * len(modes)
+
 
 def load_json(path):
+    path = Path(path)
     if not path.is_file():
         return None
     try:
         return json.loads(path.read_text())
     except Exception as exc:
-        return {'overall':'ERROR','error':str(exc)}
+        return {'overall': 'ERROR', 'error': str(exc)}
+
 
 def overall(path):
-    data=load_json(path)
+    data = load_json(path)
     if data is None:
         return 'MISSING'
-    return data.get('overall','UNKNOWN')
+    return data.get('overall', 'UNKNOWN')
 
-summary={
-    'campaign': name,
-    'tree_size': 16,
-    'profiles': profiles,
-    'leaf_indices': list(range(leaf_count)),
-    'expected_identities': len(profiles)*leaf_count,
-    'expected_tls_transcript_verifications': len(profiles)*leaf_count*2,
-    'results': {},
+
+def status_bucket():
+    return {
+        'PASS': 0,
+        'FAIL': 0,
+        'PARTIAL': 0,
+        'NOT_EXECUTED': 0,
+        'MISSING': 0,
+        'OTHER': 0,
+    }
+
+
+def add_status(bucket, value):
+    if value in bucket:
+        bucket[value] += 1
+    else:
+        bucket['OTHER'] += 1
+
+
+def stage_status(path):
+    path = Path(path)
+    if not path.is_file():
+        return 'MISSING', None
+    text = path.read_text().strip()
+    if text.startswith('completed'):
+        state = 'COMPLETED'
+    elif text.startswith('failed'):
+        state = 'FAILED'
+    elif text.startswith('running'):
+        state = 'RUNNING'
+    elif text.startswith('interrupted'):
+        state = 'INTERRUPTED'
+    else:
+        state = 'OTHER'
+    log = None
+    if 'log=' in text:
+        log = text.split('log=', 1)[1].strip()
+    return state, log
+
+
+def command_output(args):
+    try:
+        return subprocess.check_output(
+            args,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return None
+
+
+def file_sha256(path):
+    path = Path(path)
+    if not path.is_file():
+        return None
+    h = hashlib.sha256()
+    with path.open('rb') as f:
+        for block in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(block)
+    return h.hexdigest()
+
+
+stage_summary = {}
+stage_failures = []
+for stage in stages:
+    if stage == '120.invalid-input-stress':
+        executions = [(profile, 0) for profile in profiles]
+    else:
+        executions = [
+            (profile, leaf)
+            for profile in profiles
+            for leaf in range(leaf_count)
+        ]
+    counts = Counter()
+    for profile, leaf in executions:
+        leaf_name = f'leaf-{leaf:04d}'
+        status_path = state_root / profile / leaf_name / f'{stage}.status'
+        state, log = stage_status(status_path)
+        counts[state] += 1
+        if state in ('FAILED', 'INTERRUPTED', 'RUNNING', 'OTHER'):
+            stage_failures.append({
+                'profile': profile,
+                'leaf': leaf,
+                'stage': stage,
+                'status': state,
+                'status_file': str(status_path),
+                'log': log,
+            })
+    stage_summary[stage] = {
+        'expected': len(executions),
+        'completed': counts['COMPLETED'],
+        'failed': counts['FAILED'],
+        'interrupted': counts['INTERRUPTED'],
+        'running': counts['RUNNING'],
+        'missing': counts['MISSING'],
+        'other': counts['OTHER'],
+    }
+
+captures_present = 0
+captures_nonempty = 0
+keylogs_present = 0
+metadata_present = 0
+object_counts = status_bucket()
+independent_counts = status_bucket()
+protocol_counts = status_bucket()
+certificate_verify_counts = status_bucket()
+server_finished_counts = status_bucket()
+client_finished_counts = status_bucket()
+capture_integrity = {
+    'metadata_missing': 0,
+    'captured_packets_zero': 0,
+    'kernel_drops_nonzero': 0,
+    'inputs_not_preserved': 0,
+    'sources_not_preserved': 0,
 }
-counts={'PASS':0,'FAIL':0,'MISSING':0,'OTHER':0}
+verifier_hashes = Counter()
+capture_image_ids = Counter()
+profile_summary = {}
+identity_pass_count = 0
+
 for profile in profiles:
-    pdata={}
+    profile_identity_pass = 0
+    profile_protocol_pass = 0
+    profile_independent_pass = 0
     for leaf in range(leaf_count):
-        leaf_name=f'leaf-{leaf:04d}'
-        cap=cap_root/profile/leaf_name
-        review=review_root/profile/leaf_name
-        item={
-            'leaf': leaf,
-            'landmark': {
-                'protocol_report': overall(cap/'landmark'/'protocol-report.json'),
-                'independent_transcript': overall(review/'landmark'/'independent.json'),
-            },
-            'standalone': {
-                'protocol_report': overall(cap/'standalone'/'protocol-report.json'),
-                'independent_transcript': overall(review/'standalone'/'independent.json'),
-            },
-        }
-        statuses=[item['landmark']['protocol_report'],item['landmark']['independent_transcript'],
-                  item['standalone']['protocol_report'],item['standalone']['independent_transcript']]
-        item['overall']='PASS' if all(x=='PASS' for x in statuses) else ('FAIL' if 'FAIL' in statuses else 'INCOMPLETE')
-        counts['PASS' if item['overall']=='PASS' else ('FAIL' if item['overall']=='FAIL' else 'MISSING')]+=1
-        pdata[str(leaf)]=item
-    summary['results'][profile]=pdata
-summary['identity_counts']=counts
-out=review_root/'summary.json'
-out.write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n')
+        leaf_name = f'leaf-{leaf:04d}'
+        identity_ok = True
+        for mode in modes:
+            base = cap_root / profile / leaf_name / mode
+            independent_path = review_root / profile / leaf_name / mode / 'independent.json'
+
+            pcap = base / 'handshake.pcap'
+            keylog = base / 'tls.keys'
+            metadata_path = base / 'metadata.json'
+
+            if pcap.is_file():
+                captures_present += 1
+                if pcap.stat().st_size > 0:
+                    captures_nonempty += 1
+                else:
+                    identity_ok = False
+            else:
+                identity_ok = False
+
+            if keylog.is_file():
+                keylogs_present += 1
+            else:
+                identity_ok = False
+
+            metadata = load_json(metadata_path)
+            if metadata is None:
+                capture_integrity['metadata_missing'] += 1
+                identity_ok = False
+            else:
+                metadata_present += 1
+                if not metadata.get('captured_packets'):
+                    capture_integrity['captured_packets_zero'] += 1
+                    identity_ok = False
+                if metadata.get('kernel_drops') != 0:
+                    capture_integrity['kernel_drops_nonzero'] += 1
+                    identity_ok = False
+                if metadata.get('inputs_preserved') is not True:
+                    capture_integrity['inputs_not_preserved'] += 1
+                    identity_ok = False
+                if metadata.get('sources_preserved') is not True:
+                    capture_integrity['sources_not_preserved'] += 1
+                    identity_ok = False
+                capture_image_id = metadata.get('capture_image_id')
+                if capture_image_id:
+                    capture_image_ids[capture_image_id] += 1
+
+            obj_status = overall(base / 'object-validation.json')
+            add_status(object_counts, obj_status)
+            if obj_status != 'PASS':
+                identity_ok = False
+
+            independent = load_json(independent_path)
+            if independent is None:
+                independent_status = 'MISSING'
+                cv_status = 'MISSING'
+                server_finished_status = 'MISSING'
+                client_finished_status = 'MISSING'
+            else:
+                independent_status = independent.get('overall', 'UNKNOWN')
+                cv_status = independent.get(
+                    'certificate_verify_independent_verification', {}
+                ).get('status', 'UNKNOWN')
+                server_finished_status = independent.get(
+                    'server_finished_independent_verification', {}
+                ).get('status', 'UNKNOWN')
+                client_finished_status = independent.get(
+                    'client_finished_independent_verification', {}
+                ).get('status', 'UNKNOWN')
+                verifier_sha = independent.get(
+                    'verifier_source_sha256', {}
+                ).get('verify_tls_transcript.py')
+                if verifier_sha:
+                    verifier_hashes[verifier_sha] += 1
+
+            add_status(independent_counts, independent_status)
+            add_status(certificate_verify_counts, cv_status)
+            add_status(server_finished_counts, server_finished_status)
+            add_status(client_finished_counts, client_finished_status)
+            if independent_status == 'PASS':
+                profile_independent_pass += 1
+            else:
+                identity_ok = False
+
+            protocol_status = overall(base / 'protocol-report.json')
+            add_status(protocol_counts, protocol_status)
+            if protocol_status == 'PASS':
+                profile_protocol_pass += 1
+            else:
+                identity_ok = False
+
+        if identity_ok:
+            identity_pass_count += 1
+            profile_identity_pass += 1
+
+    profile_summary[profile] = {
+        'identities_expected': leaf_count,
+        'identities_pass': profile_identity_pass,
+        'protocol_reports_expected': leaf_count * 2,
+        'protocol_reports_pass': profile_protocol_pass,
+        'independent_reports_expected': leaf_count * 2,
+        'independent_reports_pass': profile_independent_pass,
+    }
+
+git_commit = command_output(['git', 'rev-parse', 'HEAD'])
+git_status = command_output(['git', 'status', '--porcelain'])
+verifier_path = Path('campaigns/protocol_validation/verify_tls_transcript.py')
+provenance = {
+    'git_commit': git_commit,
+    'git_dirty': bool(git_status),
+    'verify_tls_transcript_sha256_current': file_sha256(verifier_path),
+    'capture_image_ids': dict(sorted(capture_image_ids.items())),
+}
+
+stage_expected_total = sum(item['expected'] for item in stage_summary.values())
+stage_completed_total = sum(item['completed'] for item in stage_summary.values())
+capture_integrity_failures = sum(capture_integrity.values())
+
+all_ok = (
+    launcher_rc == 0
+    and stage_completed_total == stage_expected_total
+    and identity_pass_count == expected_identities
+    and captures_present == expected_handshakes
+    and captures_nonempty == expected_handshakes
+    and keylogs_present == expected_handshakes
+    and metadata_present == expected_handshakes
+    and object_counts['PASS'] == expected_handshakes
+    and independent_counts['PASS'] == expected_handshakes
+    and protocol_counts['PASS'] == expected_handshakes
+    and certificate_verify_counts['PASS'] == expected_handshakes
+    and server_finished_counts['PASS'] == expected_handshakes
+    and client_finished_counts['PASS'] == expected_handshakes
+    and capture_integrity_failures == 0
+    and len(verifier_hashes) == 1
+)
+
+summary = {
+    'schema_version': 1,
+    'campaign': name,
+    'generated_at': datetime.now(timezone.utc).isoformat(),
+    'status': 'PASS' if all_ok else 'FAIL',
+    'launcher_exit_code': launcher_rc,
+    'configuration': {
+        'tree_size': 16,
+        'profiles': profiles,
+        'profile_count': len(profiles),
+        'leaf_count': leaf_count,
+        'modes': list(modes),
+        'expected_identities': expected_identities,
+        'expected_handshakes': expected_handshakes,
+    },
+    'stages': stage_summary,
+    'stage_totals': {
+        'expected': stage_expected_total,
+        'completed': stage_completed_total,
+        'incomplete': stage_expected_total - stage_completed_total,
+    },
+    'results': {
+        'identities': {
+            'expected': expected_identities,
+            'pass': identity_pass_count,
+            'incomplete_or_failed': expected_identities - identity_pass_count,
+        },
+        'captures': {
+            'expected': expected_handshakes,
+            'present': captures_present,
+            'nonempty': captures_nonempty,
+            'missing': expected_handshakes - captures_present,
+            'zero_length': captures_present - captures_nonempty,
+        },
+        'keylogs': {
+            'expected': expected_handshakes,
+            'present': keylogs_present,
+            'missing': expected_handshakes - keylogs_present,
+        },
+        'metadata': {
+            'expected': expected_handshakes,
+            'present': metadata_present,
+            'missing': expected_handshakes - metadata_present,
+        },
+        'object_validation': object_counts,
+        'independent_validation': independent_counts,
+        'protocol_reports': protocol_counts,
+        'capture_integrity': capture_integrity,
+    },
+    'validation_layers': {
+        'certificate_verify': certificate_verify_counts,
+        'server_finished': server_finished_counts,
+        'client_finished': client_finished_counts,
+    },
+    'profiles_summary': profile_summary,
+    'verifier': {
+        'unique_versions': len(verifier_hashes),
+        'versions': dict(sorted(verifier_hashes.items())),
+    },
+    'provenance': provenance,
+    'failures': stage_failures,
+    'first_failure': stage_failures[0] if stage_failures else None,
+}
+
+out = cap_root / 'matrix-summary.json'
+out.write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+review_out = review_root / 'summary.json'
+review_out.write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
 print(out)
-for profile in profiles:
-    vals=list(summary['results'][profile].values())
-    passed=sum(v['overall']=='PASS' for v in vals)
-    failed=sum(v['overall']=='FAIL' for v in vals)
-    incomplete=len(vals)-passed-failed
-    print(f'{profile:14s} identities PASS={passed:2d} FAIL={failed:2d} INCOMPLETE={incomplete:2d}')
-print(f"TOTAL identities PASS={counts['PASS']} FAIL={counts['FAIL']} INCOMPLETE={counts['MISSING']}")
 PYSUM
+}
+print_matrix_summary() {
+ local name=$1
+ local summary="artifacts/protocol-validation/$name/matrix-summary.json"
+ python3 - "$summary" <<'PYPRINT'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.is_file():
+    raise SystemExit(f'Matrix summary was not created: {path}')
+
+s = json.loads(path.read_text())
+cfg = s['configuration']
+res = s['results']
+layers = s['validation_layers']
+stages = s['stage_totals']
+verifier = s['verifier']
+
+print()
+print('=' * 60)
+print('MTC PROTOCOL VALIDATION MATRIX — FINAL SUMMARY')
+print('=' * 60)
+print()
+print(f"Campaign: {s['campaign']}")
+print()
+print(f"Profiles:                  {cfg['profile_count']} / {cfg['profile_count']}")
+print(f"Leaves per profile:        {cfg['leaf_count']} / {cfg['leaf_count']}")
+print(f"Identities:                {res['identities']['pass']} / {res['identities']['expected']}")
+print(f"TLS handshakes:            {res['captures']['nonempty']} / {res['captures']['expected']}")
+print()
+print('Stages:')
+print(f"  Completed:               {stages['completed']} / {stages['expected']}")
+print()
+print('Capture integrity:')
+print(f"  PCAP present:            {res['captures']['present']} / {res['captures']['expected']}")
+print(f"  PCAP non-empty:          {res['captures']['nonempty']} / {res['captures']['expected']}")
+print(f"  Keylogs present:         {res['keylogs']['present']} / {res['keylogs']['expected']}")
+print(f"  Kernel drops failures:   {res['capture_integrity']['kernel_drops_nonzero']}")
+print(f"  Capture packet failures: {res['capture_integrity']['captured_packets_zero']}")
+print(
+    '  Preservation failures:  '
+    f"{res['capture_integrity']['inputs_not_preserved'] + res['capture_integrity']['sources_not_preserved']}"
+)
+print()
+print('Protocol validation:')
+print(f"  Object validation:       {res['object_validation']['PASS']} PASS")
+print(f"  Independent transcript:  {res['independent_validation']['PASS']} PASS")
+print(f"  CertificateVerify:       {layers['certificate_verify']['PASS']} PASS")
+print(f"  Server Finished:         {layers['server_finished']['PASS']} PASS")
+print(f"  Client Finished:         {layers['client_finished']['PASS']} PASS")
+print(f"  Final protocol report:   {res['protocol_reports']['PASS']} PASS")
+print()
+print(f"Verifier versions:         {verifier['unique_versions']}")
+print()
+print(f"OVERALL: {s['status']}")
+
+if s.get('first_failure'):
+    f = s['first_failure']
+    print()
+    print('First recorded stage failure:')
+    print(f"  profile: {f['profile']}")
+    print(f"  leaf:    {f['leaf']:04d}")
+    print(f"  stage:   {f['stage']}")
+    print(f"  status:  {f['status']}")
+    if f.get('log'):
+        print(f"  log:     {f['log']}")
+
+print()
+print(f'Summary: {path}')
+print('=' * 60)
+PYPRINT
 }
 run_leaf_pipeline() (
  load
@@ -380,15 +769,44 @@ run_leaf_pipeline() (
  done
  printf 'Leaf pipeline completed: %s stages.\n' "$count"
 )
-run_all_profiles() {
- local name=${1:-$(date -u +%Y%m%dT%H%M%SZ)} profile leaf leaf4 leaf_state stress_state
+run_all_profiles() (
+ local name=${1:-$(date -u +%Y%m%dT%H%M%SZ)}
+ local profile leaf leaf4 leaf_state stress_state
  [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid matrix campaign name.'
  [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] || fail 'Initialize mt-cert-scaling before starting the profile/leaf matrix.'
  mkdir -p "$MATRIX_STATE_ROOT/$name"
+
+ finalize_matrix() {
+  local rc=$?
+  local summary_rc=0 overall
+  trap - EXIT INT TERM
+  set +e
+  write_matrix_summary "$name" "$rc"
+  summary_rc=$?
+  if [[ "$summary_rc" == 0 ]]; then
+   print_matrix_summary "$name"
+   overall=$(python3 - "artifacts/protocol-validation/$name/matrix-summary.json" <<'PYOVERALL'
+import json,sys
+print(json.load(open(sys.argv[1]))['status'])
+PYOVERALL
+)
+   if [[ "$rc" == 0 && "$overall" != PASS ]]; then rc=1; fi
+  else
+   printf 'ERROR: matrix summary generation failed for campaign %s.\n' "$name" >&2
+   if [[ "$rc" == 0 ]]; then rc=1; fi
+  fi
+  set -e
+  exit "$rc"
+ }
+
+ trap finalize_matrix EXIT
+ trap 'exit 130' INT TERM
+
  printf 'Protocol-validation matrix: %s\n' "$name"
  printf 'Profiles: %s\n' "${PROFILE_MATRIX[*]}"
  printf 'Leaves per profile: 0..%s (N=16).\n' "$((LEAF_COUNT-1))"
  printf 'TLS identities to validate: %s.\n' "$(( ${#PROFILE_MATRIX[@]} * LEAF_COUNT ))"
+
  for profile in "${PROFILE_MATRIX[@]}"; do
   printf '\n############################################################\n'
   printf 'Profile: %s\n' "$profile"
@@ -409,9 +827,9 @@ run_all_profiles() {
   printf '\nProfile-wide invalid-input stress: %s (executed once, using leaf 0 state)\n' "$profile"
   MT_PROTOCOL_STATE="$stress_state" "$SELF" run ALL
  done
- write_matrix_summary "$name"
- printf '\nAll profile/leaf validations completed. Summary: artifacts/protocol-review/%s/summary.json\n' "$name"
-}
+
+ printf '\nAll profile/leaf validation executions completed.\n'
+)
 
 new_campaign() {
  local name=${1:-$(date -u +%Y%m%dT%H%M%SZ)}
@@ -460,6 +878,6 @@ case "${1:-menu}" in
   esac;;
  set) set_path "${2:?Variable required}" "${3:?Path required}";;
  menu) menu;;
- help|--help|-h) printf 'Usage: %s [menu|init [NAME]|init-profile NAME PROFILE [LEAF]|init-legacy [NAME]|new [NAME]|status|list|profiles|show STAGE|run STAGE|run ALL|run ALL-PROFILES [NAME]|set FIX/KEY/CAP/PROFILE/LEAF VALUE]\nSTAGE accepts a number (10) or full name (10.offline-existing).\nrun ALL executes all pending stages for the configured profile/leaf.\nrun ALL-PROFILES [NAME] validates all nine Paper-1 profiles across all 16 N=16 leaves (144 identities, landmark + standalone), with independent TLS transcript verification for every capture; invalid-input stress runs once per profile. It writes artifacts/protocol-review/NAME/summary.json.\nManual workflow: init/status/show do not invoke Docker. No builds or deletion.\n' "$SELF";;
+ help|--help|-h) printf 'Usage: %s [menu|init [NAME]|init-profile NAME PROFILE [LEAF]|init-legacy [NAME]|new [NAME]|status|list|profiles|show STAGE|run STAGE|run ALL|run ALL-PROFILES [NAME]|set FIX/KEY/CAP/PROFILE/LEAF VALUE]\nSTAGE accepts a number (10) or full name (10.offline-existing).\nrun ALL executes all pending stages for the configured profile/leaf.\nrun ALL-PROFILES [NAME] validates all nine Paper-1 profiles across all 16 N=16 leaves (144 identities, landmark + standalone), with independent TLS transcript verification for every capture; invalid-input stress runs once per profile. A final matrix summary is attempted on success, failure or interruption and written to artifacts/protocol-validation/NAME/matrix-summary.json; a compatibility copy is written to artifacts/protocol-review/NAME/summary.json.\nManual workflow: init/status/show do not invoke Docker. No builds or deletion.\n' "$SELF";;
  *) fail 'Unknown command; use help.';;
 esac
