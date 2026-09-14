@@ -85,8 +85,16 @@ plan() {
   70.*) OUT=$MTC_ALL; CMD=(python3 "$MTC" generate --sizes 1 4 16 64 256 1024 --seed-fixtures "$MTC16" --validated-n16 "$MTC_VALID/validation.json" --output "$MTC_ALL" --execute);;
   80.*) OUT=$STATIC_ROOT
    CMD=(bash -c 'python3 "$1/size_analysis.py" "$2" --mtc-fixtures "$3" --output "$4" && python3 "$1/plots.py" "$4" --output "$4/plots"' _ "$CHAIN" "$CHAIN_FIXTURES" "$MTC16" "$STATIC_ROOT");;
+  #100.*) OUT=$ADVANCED_ROOT
+  # CMD=(bash -c 'python3 "$1/size_analysis.py" "$2" --mtc-fixtures "$3" --output "$4" && python3 "$1/plots.py" "$4" --output "$4/plots"' _ "$CHAIN" "$CHAIN_FIXTURES" "$MTC_ALL" "$ADVANCED_ROOT");;
   100.*) OUT=$ADVANCED_ROOT
-   CMD=(bash -c 'python3 "$1/size_analysis.py" "$2" --mtc-fixtures "$3" --output "$4" && python3 "$1/plots.py" "$4" --output "$4/plots"' _ "$CHAIN" "$CHAIN_FIXTURES" "$MTC_ALL" "$ADVANCED_ROOT");;
+   CMD=(python3 "$CHAIN/crossover_extended.py"
+     --fixtures "$CHAIN_FIXTURES"
+     --mtc-fixtures "$MTC16"
+     --mtc-validation "$MTC_VALID/validation.json"
+     --baseline "$STATIC_ROOT"
+     --measurements "$TLS_ROOT"
+     --output "$ADVANCED_ROOT");;
   110.*|120.*)
    OUT=''; [[ "$STEP" != 120.* ]] || OUT=$TLS_ROOT
    CMD=(python3 "$CHAIN/run.py" --fixtures "$CHAIN_FIXTURES" --output "$TLS_ROOT" --campaigns 5 --repetitions 30 --warmups 5 --full-matrix --environment "$ENVIRONMENT")

@@ -147,11 +147,39 @@ def run(a):
                                    static_x509_bytes=static,**reference))
             target=reference['selected_reference_bytes'];cross=crossover(tbs,target)
             operational=crossover(tbs,target,IMPLEMENTATION_LIMIT)
-            crossings.append(dict(algorithm=profile,security_level=PROFILES[profile]['level'],x509_depth=depth,x509_bytes=target,
-                                  **cross,maximum_supported_N=MAXIMUM_SUPPORTED_N,
-                                  implementation_limit=IMPLEMENTATION_LIMIT,implementation_crossover_N=operational['crossover_N'],
-                                  first_configured_workflow_N=next((n for n in TREE_SIZES if cross['crossover_N'] and n>=cross['crossover_N']),''),
-                                  reference_source=reference['selected_reference_source'],evidence='analytically derived crossover'))
+            if cross['status'] == 'CROSSED':
+                cross['crossover_relation'] = '='
+                cross['crossover_bound_N'] = cross['crossover_N']
+                cross['crossover_display'] = str(cross['crossover_N'])
+            else:
+                cross['crossover_relation'] = '>'
+                cross['crossover_bound_N'] = MAXIMUM_SUPPORTED_N
+                cross['crossover_display'] = '> 2^48 - 1'
+            #crossings.append(dict(algorithm=profile,security_level=PROFILES[profile]['level'],x509_depth=depth,x509_bytes=target,
+            #                      **cross,maximum_supported_N=MAXIMUM_SUPPORTED_N,
+            #                      implementation_limit=IMPLEMENTATION_LIMIT,implementation_crossover_N=operational['crossover_N'],
+            #                      first_configured_workflow_N=next((n for n in TREE_SIZES if cross['crossover_N'] and n>=cross['crossover_N']),''),
+            #                      reference_source=reference['selected_reference_source'],evidence='analytically derived crossover'))
+            crossings.append(dict(
+                algorithm=profile,
+                security_level=PROFILES[profile]['level'],
+                x509_depth=depth,
+                x509_bytes=target,
+                **cross,
+                maximum_supported_N=MAXIMUM_SUPPORTED_N,
+                implementation_limit=IMPLEMENTATION_LIMIT,
+                implementation_crossover_N=operational['crossover_N'],
+                first_configured_workflow_N=next(
+                    (
+                        n for n in TREE_SIZES
+                        if cross['crossover_N'] and n >= cross['crossover_N']
+                    ),
+                    ''
+                ),
+                reference_source=reference['selected_reference_source'],
+                evidence='analytically derived crossover'
+            ))
+
     input_drafts={}
     for name in ('draft-ietf-plants-merkle-tree-certs-05.txt','draft-ietf-tls-trust-anchor-ids-04.txt'):
         file=REPO/'src/mtc/reference'/name;input_drafts[name]=hashlib.sha256(inputs.read(file)).hexdigest()
