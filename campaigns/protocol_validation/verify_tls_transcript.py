@@ -39,29 +39,78 @@ def raw_field(packet, name):
 
 def exact_messages(raw_json):
     packets = json.loads(raw_json, object_pairs_hook=Pairs)
-    require(isinstance(packets, list) and not isinstance(packets, Pairs), 'expected jsonraw packet array')
+    require(
+        isinstance(packets, list) and not isinstance(packets, Pairs),
+        'expected jsonraw packet array'
+    )
+
     messages = []
+
     for number, packet in enumerate(packets, 1):
         values = list(fields(packet, 'tls.handshake_raw'))
         if not values:
             continue
+
         src = raw_field(packet, 'ip.src_raw')
         dst = raw_field(packet, 'ip.dst_raw')
         sport = raw_field(packet, 'tcp.srcport_raw')
         dport = raw_field(packet, 'tcp.dstport_raw')
+
         for value in values:
-            require(isinstance(value, list) and len(value) >= 3 and isinstance(value[0], str), 'unavailable raw handshake bytes')
+            require(
+                isinstance(value, list)
+                and len(value) >= 3
+                and isinstance(value[0], str),
+                'unavailable raw handshake bytes'
+            )
+
             raw = bytes.fromhex(value[0])
-            require(len(raw) >= 4 and len(raw) == int.from_bytes(raw[1:4], 'big')+4,
-                    'NOT_READY_EXACT_TRANSCRIPT_BYTES_UNAVAILABLE: truncated or empty raw handshake')
-            require(value[2] == len(raw), 'jsonraw byte length mismatch')
-            messages.append(dict(raw=raw, direction=(src, sport, dst, dport), packet=number))
-    require([m['raw'][0] for m in messages] == [1, 2, 8, 11, 15, 20, 20],
-            'NOT_READY_EXACT_TRANSCRIPT_BYTES_UNAVAILABLE: expected exactly CH SH EE Certificate CV server-Finished client-Finished; unsupported or incomplete capture')
+
+            # TShark jsonraw can expose both fragmentary and fully
+            # reassembled representations of the same TLS Handshake
+            # message. Only complete messages belong in the transcript.
+            if len(raw) < 4:
+                continue
+
+            declared_length = int.from_bytes(raw[1:4], 'big')
+
+            if len(raw) != declared_length + 4:
+                continue
+
+            require(
+                value[2] == len(raw),
+                'jsonraw byte length mismatch'
+            )
+
+            messages.append(
+                dict(
+                    raw=raw,
+                    direction=(src, sport, dst, dport),
+                    packet=number
+                )
+            )
+
+    require(
+        [m['raw'][0] for m in messages] == [1, 2, 8, 11, 15, 20, 20],
+        'NOT_READY_EXACT_TRANSCRIPT_BYTES_UNAVAILABLE: expected exactly '
+        'CH SH EE Certificate CV server-Finished client-Finished; '
+        'unsupported or incomplete capture'
+    )
+
     forward = messages[0]['direction']
     reverse = (forward[2], forward[3], forward[0], forward[1])
-    require(forward != reverse, 'ambiguous endpoints')
-    require([m['direction'] for m in messages] == [forward]+[reverse]*5+[forward], 'multiple streams or incorrect handshake directions')
+
+    require(
+        forward != reverse,
+        'ambiguous endpoints'
+    )
+
+    require(
+        [m['direction'] for m in messages]
+        == [forward] + [reverse] * 5 + [forward],
+        'multiple streams or incorrect handshake directions'
+    )
+
     return messages
 
 
@@ -156,7 +205,14 @@ def certificate_verify(openssl, scheme, spki, message, signature):
     if not openssl:
         return dict(status='NOT_EXECUTED', verified=None, reason='Supply --openssl with the existing provider-enabled executable to verify the signature independently.')
     # Narrow explicit mapping; never infer a digest from a profile label.
-    pq = {0x0904: '2.16.840.1.101.3.4.3.17', 0x0905: '2.16.840.1.101.3.4.3.18', 0x0906: '2.16.840.1.101.3.4.3.19'}
+    pq = {
+        0x0904: '2.16.840.1.101.3.4.3.17',  # ML-DSA-44
+        0x0905: '2.16.840.1.101.3.4.3.18',  # ML-DSA-65
+        0x0906: '2.16.840.1.101.3.4.3.19',  # ML-DSA-87
+        0x0911: '2.16.840.1.101.3.4.3.20',  # SLH-DSA-SHA2-128s
+        0x0913: '2.16.840.1.101.3.4.3.22',  # SLH-DSA-SHA2-192s
+        0x0915: '2.16.840.1.101.3.4.3.24',  # SLH-DSA-SHA2-256s
+    }
     ec = {0x0403: ('1.2.840.10045.3.1.7', 'sha256'), 0x0503: ('1.3.132.0.34', 'sha384'), 0x0603: ('1.3.132.0.35', 'sha512')}
     alg = core.items(core.content(spki, 48))[0][2]
     digest = None
