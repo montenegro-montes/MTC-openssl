@@ -4,15 +4,47 @@ REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 SELF="$REPO/bin/cryptographic_scaling/mt-protocol-validation"
 cd "$REPO"
 source "$REPO/bin/lib/docker-preflight.sh"
-STATE="$REPO/.mt-state/protocol-validation"
+STATE_ROOT="$REPO/.mt-state/protocol-validation"
+STATE="${MT_PROTOCOL_STATE:-$STATE_ROOT}"
 CONFIG="$STATE/paths.env"
+MATRIX_STATE_ROOT="$REPO/.mt-state/protocol-validation-matrix"
 STEPS=(10.offline-existing 20.offline-landmark 30.offline-standalone 40.capture-landmark 50.extract-landmark 55.verify-transcript-landmark 60.validate-wire-landmark 70.report-landmark 80.capture-standalone 90.extract-standalone 95.verify-transcript-standalone 100.validate-wire-standalone 110.report-standalone 120.invalid-input-stress)
+PROFILE_MATRIX=(ecdsa-p256 ecdsa-p384 ecdsa-p521 mldsa44 mldsa65 mldsa87 slhdsa128s slhdsa192s slhdsa256s)
+LEAF_COUNT=16
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-load() { [[ -f "$CONFIG" ]] || fail 'Run init first.'; unset PROFILE REVIEW; source "$CONFIG"; PROFILE=${PROFILE:-pq}; REVIEW=${REVIEW:-artifacts/protocol-review/$STAMP}; }
+validate_profile() {
+ case "$1" in
+  ecdsa-p256|ecdsa-p384|ecdsa-p521|mldsa44|mldsa65|mldsa87|slhdsa128s|slhdsa192s|slhdsa256s) return 0;;
+  *) fail "Unsupported Paper-1 profile: $1";;
+ esac
+}
+paper1_root() {
+ local cert_config="$REPO/.mt-state/cert-scaling/paths.env" root
+ [[ -f "$cert_config" ]] || fail 'Run bin/cryptographic_scaling/mt-prepare init to initialize missing launcher paths, or mt-prepare run ALL to also prepare images. Use init-legacy only for historical pq fixtures.'
+ root=$( (source "$cert_config"; printf '%s' "$MTC16") )
+ case "$root" in artifacts/*) ;; *) fail 'Paper-1 MTC16 must be a relative path under artifacts/.';; esac
+ printf '%s\n' "$root"
+}
+validate_leaf() {
+ local leaf=$1
+ [[ "$leaf" =~ ^[0-9]+$ ]] || fail "Leaf must be an integer in 0..$((LEAF_COUNT-1))."
+ (( leaf >= 0 && leaf < LEAF_COUNT )) || fail "Leaf must be in 0..$((LEAF_COUNT-1))."
+}
+configure_paper1_profile() {
+ local profile=$1 leaf=${2:-${LEAF:-0}} root
+ validate_profile "$profile"
+ validate_leaf "$leaf"
+ root=$(paper1_root)
+ PROFILE=$profile
+ LEAF=$leaf
+ FIX="$root/batch16/mtc/$PROFILE"
+ KEY="$root/population/$PROFILE/$LEAF.key"
+}
+load() { [[ -f "$CONFIG" ]] || fail 'Run init first.'; unset PROFILE REVIEW LEAF; source "$CONFIG"; PROFILE=${PROFILE:-pq}; LEAF=${LEAF:-0}; REVIEW=${REVIEW:-artifacts/protocol-review/$STAMP}; }
 save() {
  local key
  (umask 077
- for key in STAMP FIX KEY CAP PROFILE REVIEW; do printf '%s=%q\n' "$key" "${!key}"; done > "$CONFIG.tmp"
+ for key in STAMP FIX KEY CAP PROFILE REVIEW LEAF; do printf '%s=%q\n' "$key" "${!key}"; done > "$CONFIG.tmp"
  mv "$CONFIG.tmp" "$CONFIG")
 }
 init() {
@@ -20,19 +52,31 @@ init() {
  STAMP=${1:-$(date -u +%Y%m%dT%H%M%SZ)}
  [[ "$STAMP" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid name.'
  if [[ "${2:-paper1}" == legacy ]]; then
-  PROFILE=pq; FIX=artifacts/mtc/batch16-v2/pq; KEY=artifacts/certs/pq/server.key
+  PROFILE=pq; LEAF=0; FIX=artifacts/mtc/batch16-v2/pq; KEY=artifacts/certs/pq/server.key
  else
-  local cert_config="$REPO/.mt-state/cert-scaling/paths.env" root
-  [[ -f "$cert_config" ]] || fail 'Run bin/cryptographic_scaling/mt-prepare init to initialize missing launcher paths, or mt-prepare run ALL to also prepare images. Use init-legacy only for historical pq fixtures.'
-  root=$( (source "$cert_config"; printf '%s' "$MTC16") )
-  case "$root" in artifacts/*) ;; *) fail 'Paper-1 MTC16 must be a relative path under artifacts/.';; esac
-  PROFILE=mldsa65; FIX="$root/batch16/mtc/$PROFILE"; KEY="$root/population/$PROFILE/0.key"
+  configure_paper1_profile mldsa65 0
  fi
  CAP="artifacts/protocol-validation/$STAMP"
  REVIEW="artifacts/protocol-review/$STAMP"
  mkdir -p "$STATE"; save
- printf 'Configuration saved. Profile: %s, N=16. Check FIX and KEY with status.\n' "$PROFILE"
+ printf 'Configuration saved. Profile: %s, leaf: %s, N=16. Check FIX and KEY with status.\n' "$PROFILE" "$LEAF"
 }
+init_profile() {
+ [[ "$#" -ge 2 && "$#" -le 3 ]] || fail 'Usage: init-profile NAME PROFILE [LEAF]'
+ [[ ! -e "$CONFIG" ]] || fail 'State already exists for this profile/leaf.'
+ STAMP=$1
+ [[ "$STAMP" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid name.'
+ configure_paper1_profile "$2" "${3:-0}"
+ local leaf4
+ printf -v leaf4 '%04d' "$LEAF"
+ CAP="artifacts/protocol-validation/$STAMP/$PROFILE/leaf-$leaf4"
+ REVIEW="artifacts/protocol-review/$STAMP/$PROFILE/leaf-$leaf4"
+ [[ ! -e "$CAP" ]] || fail "Profile/leaf campaign output already exists: $CAP"
+ [[ ! -e "$REVIEW" ]] || fail "Profile/leaf review output already exists: $REVIEW"
+ mkdir -p "$STATE"; save
+ printf 'Profile configuration saved. Campaign: %s, profile: %s, leaf/key: %s, N=16.\n' "$STAMP" "$PROFILE" "$LEAF"
+}
+
 plan() {
  [[ "$1" != 120.negative ]] || set -- 120.invalid-input-stress
  local item found=0 mode script
@@ -40,23 +84,25 @@ plan() {
   if [[ "$1" == "$item" || "$1" == "${item%%.*}" ]]; then STEP=$item; found=1; break; fi
  done
  [[ "$found" == 1 ]] || fail 'Unknown stage.'
- local args=() image=mt-tls-measurement:local
+ local args=() image=mt-tls-measurement:local leaf4 leaf6
+ printf -v leaf4 '%04d' "$LEAF"
+ printf -v leaf6 '%06d' "$LEAF"
  case "$STEP" in
   10.*|20.*|30.*)
    mode=standalone; [[ "$STEP" != 20.* ]] || mode=landmark
    OUT="$CAP/$STEP.json"; script=validate_mtc.py
-   args=("$FIX/$mode-0000.der" --trust "$FIX/trust.bin" --profile "$PROFILE" --mode "$mode" --output "$OUT")
-   if [[ "$STEP" == 10.* ]]; then args=("$FIX/standalone-0000.der" --trust "$FIX/authority.bin" --profile "$PROFILE" --mode standalone --output "$OUT");
-   else args+=(--entry "$FIX/log/000000.entry"); fi;;
+   args=("$FIX/$mode-$leaf4.der" --trust "$FIX/trust.bin" --profile "$PROFILE" --mode "$mode" --output "$OUT")
+   if [[ "$STEP" == 10.* ]]; then args=("$FIX/standalone-$leaf4.der" --trust "$FIX/authority.bin" --profile "$PROFILE" --mode standalone --output "$OUT");
+   else args+=(--entry "$FIX/log/$leaf6.entry"); fi;;
   40.*|80.*)
    mode=landmark; [[ "$STEP" != 80.* ]] || mode=standalone
    OUT="$CAP/$mode"
-   CMD=(bash campaigns/protocol_validation/capture_handshake.sh --mode "$mode" --profile "$PROFILE" --fixture-dir "$FIX" --server-key "$KEY" --output "$OUT" --execute)
+   CMD=(bash campaigns/protocol_validation/capture_handshake.sh --mode "$mode" --profile "$PROFILE" --leaf "$LEAF" --fixture-dir "$FIX" --server-key "$KEY" --output "$OUT" --execute)
    return;;
   50.*|90.*)
    mode=landmark; [[ "$STEP" != 90.* ]] || mode=standalone
    OUT="$CAP/$mode/extracted"; script=extract_pcap.py; image=mt-tls-capture:local
-   args=("$CAP/$mode" --sender "$FIX/$mode-0000.der" --output "$OUT");;
+   args=("$CAP/$mode" --sender "$FIX/$mode-$leaf4.der" --output "$OUT");;
   55.*|95.*)
    mode=landmark; [[ "$STEP" != 95.* ]] || mode=standalone
    OUT="$REVIEW/$mode/independent.json"; image=mt-tls-capture:local
@@ -72,7 +118,7 @@ PY
   60.*|100.*)
    mode=landmark; [[ "$STEP" != 100.* ]] || mode=standalone
    OUT="$CAP/$mode/object-validation.json"; script=validate_mtc.py
-   args=("$CAP/$mode/extracted/mtc-wire.bin" --trust "$FIX/trust.bin" --entry "$FIX/log/000000.entry" --sender "$FIX/$mode-0000.der" --profile "$PROFILE" --mode "$mode" --output "$OUT");;
+   args=("$CAP/$mode/extracted/mtc-wire.bin" --trust "$FIX/trust.bin" --entry "$FIX/log/$leaf6.entry" --sender "$FIX/$mode-$leaf4.der" --profile "$PROFILE" --mode "$mode" --output "$OUT");;
   70.*|110.*)
    mode=landmark; [[ "$STEP" != 110.* ]] || mode=standalone
    OUT="$CAP/$mode/protocol-report.json"; script=report.py
@@ -84,7 +130,7 @@ PY
 show() { printf '%q ' "${CMD[@]}"; printf '\n'; }
 status() {
  load
- printf 'FIX=%s\nKEY=%s\nCAP=%s\nREVIEW=%s\nProfile: %s, N=16. Images: mt-tls-measurement:local and mt-tls-capture:local.\n' "$FIX" "$KEY" "$CAP" "$REVIEW" "$PROFILE"
+ printf 'FIX=%s\nKEY=%s\nCAP=%s\nREVIEW=%s\nProfile: %s, leaf: %s, N=16. Images: mt-tls-measurement:local and mt-tls-capture:local.\n' "$FIX" "$KEY" "$CAP" "$REVIEW" "$PROFILE" "$LEAF"
  local step
  for step in "${STEPS[@]}"; do
   plan "$step"; printf '%-36s ' "$STEP"
@@ -138,6 +184,10 @@ PY
  esac
  [[ ! -e "$OUT" ]] || fail "Output exists: $OUT. It is preserved; use a new CAP for another attempt."
  [[ -f "$FIX/manifest.json" && -f "$KEY" ]] || fail 'Fixtures or server key are missing. Run bin/cryptographic_scaling/mt-protocol-validation status and configure FIX and KEY using set or the menu. Initialization does not generate fixtures. See campaigns/protocol_validation/README.md (Before the first run).'
+ local leaf4 leaf6
+ printf -v leaf4 '%04d' "$LEAF"
+ printf -v leaf6 '%06d' "$LEAF"
+ [[ -f "$FIX/landmark-$leaf4.der" && -f "$FIX/landmark-$leaf4.pem" && -f "$FIX/standalone-$leaf4.der" && -f "$FIX/standalone-$leaf4.pem" && -f "$FIX/log/$leaf6.entry" ]] || fail "Missing selected leaf fixtures for profile=$PROFILE leaf=$LEAF."
  python3 - "$FIX/manifest.json" "$PROFILE" <<'PY'
 import json,sys
 sys.path.insert(0,'src/mtc')
@@ -208,21 +258,161 @@ run_step() (
 set_path() {
  load
  [[ ! -d "$STATE/lock" && ! -d "$STATE/batch.lock" ]] || fail 'Do not change paths while a stage or batch is running.'
- case "$1" in FIX|KEY|CAP|PROFILE) ;; *) fail 'Variables: FIX KEY CAP PROFILE';; esac
+ case "$1" in FIX|KEY|CAP|PROFILE|LEAF) ;; *) fail 'Variables: FIX KEY CAP PROFILE LEAF';; esac
  [[ ! -d "$CAP" ]] || fail 'Evidence already exists: use new for another campaign; previous state is preserved.'
  if [[ "$1" == PROFILE ]]; then
-  case "$2" in pq|classic|mldsa65|ecdsa-p256|slhdsa128s) PROFILE=$2; save; return;; *) fail 'Supported capture profiles: pq classic mldsa65 ecdsa-p256 slhdsa128s.';; esac
+  case "$2" in
+   pq|classic) PROFILE=$2; LEAF=0;;
+   *) configure_paper1_profile "$2" "${LEAF:-0}";;
+  esac
+  save; return
+ fi
+ if [[ "$1" == LEAF ]]; then
+  case "$PROFILE" in
+   pq|classic) fail 'LEAF selection is supported only for Paper-1 profiles.';;
+   *) configure_paper1_profile "$PROFILE" "$2";;
+  esac
+  save; return
  fi
  # Relative artifact paths keep container and host references identical.
  case "$2" in artifacts/*) ;; *) fail 'Use a relative path under artifacts/.';; esac
  case "/$2/" in */../*|*/./*|*//*|*$'\n'*) fail 'Path is not normalized.';; esac
  if [[ "$1" == CAP ]]; then
   case "$2" in artifacts/protocol-validation/*) ;; *) fail 'CAP must be under artifacts/protocol-validation/.';; esac
-  REVIEW="artifacts/protocol-review/${2##*/}"
+  REVIEW="${2/artifacts\/protocol-validation/artifacts\/protocol-review}"
  fi
  [[ ! -d "$CAP" ]] || fail 'Evidence already exists: use new for another campaign; previous state is preserved.'
  printf -v "$1" '%s' "$2"; save
 }
+write_matrix_summary() {
+ local name=$1
+ mkdir -p "artifacts/protocol-review/$name"
+ python3 - "$name" "${PROFILE_MATRIX[@]}" <<'PYSUM'
+import json,sys
+from pathlib import Path
+
+name=sys.argv[1]
+profiles=sys.argv[2:]
+cap_root=Path('artifacts/protocol-validation')/name
+review_root=Path('artifacts/protocol-review')/name
+leaf_count=16
+
+def load_json(path):
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception as exc:
+        return {'overall':'ERROR','error':str(exc)}
+
+def overall(path):
+    data=load_json(path)
+    if data is None:
+        return 'MISSING'
+    return data.get('overall','UNKNOWN')
+
+summary={
+    'campaign': name,
+    'tree_size': 16,
+    'profiles': profiles,
+    'leaf_indices': list(range(leaf_count)),
+    'expected_identities': len(profiles)*leaf_count,
+    'expected_tls_transcript_verifications': len(profiles)*leaf_count*2,
+    'results': {},
+}
+counts={'PASS':0,'FAIL':0,'MISSING':0,'OTHER':0}
+for profile in profiles:
+    pdata={}
+    for leaf in range(leaf_count):
+        leaf_name=f'leaf-{leaf:04d}'
+        cap=cap_root/profile/leaf_name
+        review=review_root/profile/leaf_name
+        item={
+            'leaf': leaf,
+            'landmark': {
+                'protocol_report': overall(cap/'landmark'/'protocol-report.json'),
+                'independent_transcript': overall(review/'landmark'/'independent.json'),
+            },
+            'standalone': {
+                'protocol_report': overall(cap/'standalone'/'protocol-report.json'),
+                'independent_transcript': overall(review/'standalone'/'independent.json'),
+            },
+        }
+        statuses=[item['landmark']['protocol_report'],item['landmark']['independent_transcript'],
+                  item['standalone']['protocol_report'],item['standalone']['independent_transcript']]
+        item['overall']='PASS' if all(x=='PASS' for x in statuses) else ('FAIL' if 'FAIL' in statuses else 'INCOMPLETE')
+        counts['PASS' if item['overall']=='PASS' else ('FAIL' if item['overall']=='FAIL' else 'MISSING')]+=1
+        pdata[str(leaf)]=item
+    summary['results'][profile]=pdata
+summary['identity_counts']=counts
+out=review_root/'summary.json'
+out.write_text(json.dumps(summary,indent=2,sort_keys=True)+'\n')
+print(out)
+for profile in profiles:
+    vals=list(summary['results'][profile].values())
+    passed=sum(v['overall']=='PASS' for v in vals)
+    failed=sum(v['overall']=='FAIL' for v in vals)
+    incomplete=len(vals)-passed-failed
+    print(f'{profile:14s} identities PASS={passed:2d} FAIL={failed:2d} INCOMPLETE={incomplete:2d}')
+print(f"TOTAL identities PASS={counts['PASS']} FAIL={counts['FAIL']} INCOMPLETE={counts['MISSING']}")
+PYSUM
+}
+run_leaf_pipeline() (
+ load
+ mkdir "$STATE/batch.lock" 2>/dev/null || fail 'A batch is active or a lock needs inspection.'
+ trap 'rmdir "$STATE/batch.lock" 2>/dev/null || true' EXIT
+ [[ ! -d "$STATE/lock" ]] || fail 'A stage is active or a lock needs inspection.'
+ local step state count=0
+ for step in "${STEPS[@]}"; do
+  [[ "$step" == 120.* ]] && continue
+  state=''
+  [[ ! -f "$STATE/$step.status" ]] || state=$(cat "$STATE/$step.status")
+  case "$state" in running*) fail "Stage marked running: $step. Inspect its process and log before continuing.";; esac
+ done
+ for step in "${STEPS[@]}"; do
+  [[ "$step" == 120.* ]] && continue
+  state=''
+  [[ ! -f "$STATE/$step.status" ]] || state=$(cat "$STATE/$step.status")
+  case "$state" in completed*) printf 'SKIP completed: %s\n' "$step"; continue;; esac
+  printf 'Leaf batch stage: %s\n' "$step"
+  run_step "$step" batch || exit "$?"
+  count=$((count+1))
+ done
+ printf 'Leaf pipeline completed: %s stages.\n' "$count"
+)
+run_all_profiles() {
+ local name=${1:-$(date -u +%Y%m%dT%H%M%SZ)} profile leaf leaf4 leaf_state stress_state
+ [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid matrix campaign name.'
+ [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] || fail 'Initialize mt-cert-scaling before starting the profile/leaf matrix.'
+ mkdir -p "$MATRIX_STATE_ROOT/$name"
+ printf 'Protocol-validation matrix: %s\n' "$name"
+ printf 'Profiles: %s\n' "${PROFILE_MATRIX[*]}"
+ printf 'Leaves per profile: 0..%s (N=16).\n' "$((LEAF_COUNT-1))"
+ printf 'TLS identities to validate: %s.\n' "$(( ${#PROFILE_MATRIX[@]} * LEAF_COUNT ))"
+ for profile in "${PROFILE_MATRIX[@]}"; do
+  printf '\n############################################################\n'
+  printf 'Profile: %s\n' "$profile"
+  printf '############################################################\n'
+  for ((leaf=0; leaf<LEAF_COUNT; leaf++)); do
+   printf -v leaf4 '%04d' "$leaf"
+   leaf_state="$MATRIX_STATE_ROOT/$name/$profile/leaf-$leaf4"
+   printf '\n============================================================\n'
+   printf 'Profile: %s  leaf/key: %d/%s\n' "$profile" "$leaf" "$leaf"
+   printf '============================================================\n'
+   if [[ ! -f "$leaf_state/paths.env" ]]; then
+    MT_PROTOCOL_STATE="$leaf_state" "$SELF" init-profile "$name" "$profile" "$leaf"
+   fi
+   MT_PROTOCOL_STATE="$leaf_state" "$SELF" run LEAF-ALL
+  done
+  # Invalid-input stress is fixture/profile-wide, not leaf-specific: run it once per profile.
+  stress_state="$MATRIX_STATE_ROOT/$name/$profile/leaf-0000"
+  printf '\nProfile-wide invalid-input stress: %s (executed once, using leaf 0 state)\n' "$profile"
+  MT_PROTOCOL_STATE="$stress_state" "$SELF" run ALL
+ done
+ write_matrix_summary "$name"
+ printf '\nAll profile/leaf validations completed. Summary: artifacts/protocol-review/%s/summary.json\n' "$name"
+}
+
 new_campaign() {
  local name=${1:-$(date -u +%Y%m%dT%H%M%SZ)}
  [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid name.'
@@ -236,30 +426,40 @@ new_campaign() {
 menu() {
  local choice value key
  while true; do
-  printf '\nProtocol validation: 1 Initialize  2 Status  3 Show command\n                     4 Run stage  5 Change path  6 New campaign\n                     7 Run ALL pending stages (includes captures and stress checks)  0 Back\n'
+  printf '\nProtocol validation: 1 Initialize  2 Status  3 Show command\n                     4 Run stage  5 Change path  6 New campaign\n                     7 Run ALL pending stages (includes captures and stress checks)\n                     8 Run ALL PROFILES × ALL LEAVES (9 × 16 identities)  0 Back\n'
   read -r -p '> ' choice || return 0
   case "$choice" in
    1) read -r -p 'Date/name (empty=new): ' value; "$SELF" init "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
    2) "$SELF" status || true;;
    3|4) printf '%s\n' "${STEPS[@]}"; read -r -p 'Number: ' value
      if [[ "$choice" == 3 ]]; then "$SELF" show "$value" || true; else "$SELF" run "$value" || true; fi;;
-   5) read -r -p 'Variable FIX, KEY, CAP or PROFILE: ' key; read -r -p 'Relative path: ' value; "$SELF" set "$key" "$value" || true;;
+   5) read -r -p 'Variable FIX, KEY, CAP, PROFILE or LEAF: ' key; read -r -p 'Relative path: ' value; "$SELF" set "$key" "$value" || true;;
    6) read -r -p 'New date/name (empty=new): ' value; "$SELF" new "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
    7) "$SELF" run ALL || true;;
+   8) read -r -p 'Matrix date/name (empty=new): ' value; "$SELF" run ALL-PROFILES "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
    0) return 0;;
   esac
  done
 }
 case "${1:-menu}" in
  init) init "${2:-$(date -u +%Y%m%dT%H%M%SZ)}";;
+ init-profile) init_profile "${2:?Campaign name required}" "${3:?Profile required}" "${4:-0}";;
  init-legacy) init "${2:-$(date -u +%Y%m%dT%H%M%SZ)}" legacy;;
  new) new_campaign "${2:-$(date -u +%Y%m%dT%H%M%SZ)}";;
  status) status;;
  list) printf '%s\n' "${STEPS[@]}";;
+ profiles) printf '%s\n' "${PROFILE_MATRIX[@]}";;
  show) load; plan "${2:?Stage required}"; show;;
- run) [[ "$#" == 2 ]] || fail 'Usage: run STAGE|ALL'; if [[ "$2" == ALL ]]; then run_all; else run_step "$2"; fi;;
+ run)
+  case "${2:-}" in
+   ALL) [[ "$#" == 2 ]] || fail 'Usage: run ALL'; run_all;;
+   LEAF-ALL) [[ "$#" == 2 ]] || fail 'Usage: run LEAF-ALL'; run_leaf_pipeline;;
+   ALL-PROFILES) [[ "$#" -le 3 ]] || fail 'Usage: run ALL-PROFILES [NAME]'; run_all_profiles "${3:-$(date -u +%Y%m%dT%H%M%SZ)}";;
+   '') fail 'Usage: run STAGE|ALL|ALL-PROFILES [NAME]';;
+   *) [[ "$#" == 2 ]] || fail 'Usage: run STAGE'; run_step "$2";;
+  esac;;
  set) set_path "${2:?Variable required}" "${3:?Path required}";;
  menu) menu;;
- help|--help|-h) printf 'Usage: %s [menu|init [NAME]|init-legacy [NAME]|new [NAME]|status|list|show STAGE|run STAGE|run ALL|set FIX/KEY/CAP/PROFILE VALUE]\nSTAGE accepts a number (10) or full name (10.offline-existing).\nrun ALL executes pending stages in order, including captures, independent transcript verification and invalid-input stress checks; stops on failure.\nManual workflow: init/status/show do not invoke Docker. No builds, deletion or matrices.\n' "$SELF";;
+ help|--help|-h) printf 'Usage: %s [menu|init [NAME]|init-profile NAME PROFILE [LEAF]|init-legacy [NAME]|new [NAME]|status|list|profiles|show STAGE|run STAGE|run ALL|run ALL-PROFILES [NAME]|set FIX/KEY/CAP/PROFILE/LEAF VALUE]\nSTAGE accepts a number (10) or full name (10.offline-existing).\nrun ALL executes all pending stages for the configured profile/leaf.\nrun ALL-PROFILES [NAME] validates all nine Paper-1 profiles across all 16 N=16 leaves (144 identities, landmark + standalone), with independent TLS transcript verification for every capture; invalid-input stress runs once per profile. It writes artifacts/protocol-review/NAME/summary.json.\nManual workflow: init/status/show do not invoke Docker. No builds or deletion.\n' "$SELF";;
  *) fail 'Unknown command; use help.';;
 esac

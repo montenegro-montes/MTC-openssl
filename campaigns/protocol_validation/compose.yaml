@@ -8,7 +8,7 @@ services:
       - ${PROTOCOL_KEY:?}:/server.key:ro
       - ${PROTOCOL_OUTPUT:?}:/capture
     entrypoint: [python3, /protocol/capture.py]
-    command: [--inside, server, --mode, "${PROTOCOL_MODE}", --profile, "${PROTOCOL_PROFILE}"]
+    command: [--inside, server, --mode, "${PROTOCOL_MODE}", --profile, "${PROTOCOL_PROFILE}", --leaf, "${PROTOCOL_LEAF}"]
     healthcheck:
       test: [CMD, test, -f, /capture/server.ready]
       interval: 1s
@@ -20,7 +20,7 @@ services:
     volumes:
       - ${PROTOCOL_OUTPUT:?}:/capture
     entrypoint: [tcpdump]
-    command: [-i, eth0, -s, "0", -U, --immediate-mode, -w, /capture/handshake.pcap, "tcp port 4433"]
+    command: [-i, eth0, -s, "0", -U, -w, /capture/handshake.pcap, "tcp port 4433"]
   client:
     image: ${PROTOCOL_IMAGE:?}
     volumes:
@@ -28,4 +28,4 @@ services:
       - ${PROTOCOL_FIXTURE:?}:/fixture:ro
       - ${PROTOCOL_OUTPUT:?}:/capture
     entrypoint: [python3, /protocol/capture.py]
-    command: [--inside, client, --mode, "${PROTOCOL_MODE}", --profile, "${PROTOCOL_PROFILE}"]
+    command: [--inside, client, --mode, "${PROTOCOL_MODE}", --profile, "${PROTOCOL_PROFILE}", --leaf, "${PROTOCOL_LEAF}"]
