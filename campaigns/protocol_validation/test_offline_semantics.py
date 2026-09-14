@@ -54,6 +54,41 @@ class SemanticsTests(unittest.TestCase):
         self.assertFalse(result['landmark_group_advertised'])
         self.assertEqual(result['landmark_group_recommendation']['status'], 'UNRESOLVED')
 
+    def group_mapping(self, requested=(32473,112,2,1,1), selected=(32473,112,1,1,1)):
+        return trust_mapping(encode_list([requested]), encode_list([selected]),
+                             [dict(length=0, data=b'')], '32473.112', 'landmark', 1, 1)
+
+    def test_initial_group_selection(self):
+        result = self.group_mapping()
+        self.assertEqual(result['status'], 'PASS_EXPERIMENTAL_CODEPOINT')
+        self.assertTrue(result['landmark_group_advertised'])
+        self.assertTrue(result['group_membership_valid'])
+        self.assertEqual(result['landmark_group_id'], '32473.112.2.1.1')
+        self.assertEqual(result['individual_landmark_id'], '32473.112.1.1.1')
+        self.assertEqual(result['landmark_group_recommendation']['status'], 'PASS')
+
+    def test_group_wrong_ca(self):
+        self.assertEqual(self.group_mapping(requested=(32473,113,2,1,1))['status'], 'FAIL')
+
+    def test_group_wrong_log(self):
+        self.assertEqual(self.group_mapping(requested=(32473,112,2,2,1))['status'], 'FAIL')
+
+    def test_group_nonmember_individual(self):
+        result = self.group_mapping(selected=(32473,112,1,1,2))
+        self.assertEqual(result['status'], 'FAIL')
+        self.assertFalse(result['group_membership_valid'])
+
+    def test_extractor_group_and_exact_selection(self):
+        from extract_pcap import signal
+        individual = (32473,112,1,1,1)
+        group = (32473,112,2,1,1)
+        for requested in (individual, group):
+            signal(encode_list([requested]), encode_id(individual), encode_id(group))
+        with self.assertRaises(ValueError):
+            signal(encode_list([(32473,112,2,2,1)]), encode_id(individual), encode_id(group))
+        with self.assertRaises(ValueError):
+            signal(encode_list([group]), encode_id(individual))
+
     def test_wrong_certificate_extension(self):
         for marker in (dict(length=1,data=b'\0'), dict(length=0,data=b'\0'), dict(length=1,data=b'')):
             self.assertEqual(self.mapping(marker)['status'], 'FAIL')

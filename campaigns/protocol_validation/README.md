@@ -376,10 +376,18 @@ It is local review output, not committed scientific evidence.
 The private **0xffa7** codepoint remains experimental; TA-04 ExtensionType is
 **TBD**. The observed single-candidate CH/EE lists and zero-length first-entry
 confirmation support **PASS_EXPERIMENTAL_CODEPOINT** for this restricted semantic
-mapping. The client sends individual CA.1.log.landmark, not recommended group
-CA.2.log.landmark: MTC-05 §8.2.1 remains unresolved. The native implementation
-also lacks general group membership and retry, and rejects an empty requested list
-although TA-04 permits it. No negotiation behavior was changed to hide these gaps.
+mapping. That historical capture advertised an individual landmark; it does not
+provide evidence of the new group negotiation.
+
+Normal landmark clients now advertise `32473.112.2.1.1` (CA.2.1.1), and the server
+selects member `32473.112.1.1.1` (CA.1.1.1). Exact individual IDs remain accepted
+for selection/retry by callers; automatic retry is not implemented. Successful
+offline group semantics report `landmark_group_advertised: true`, both IDs,
+`group_membership_valid: true`, and `landmark_group_recommendation.status: PASS`.
+This is restricted to initial log 1 / landmark 1. General group membership,
+standalone-CA fallback from a group, automatic retry and empty requested lists
+remain unsupported. The unchanged private `0xffa7` is experimental; this remains
+**implemented-subset conformance**, not full MTC-05 conformance.
 
 Timestamp reports separate (a) zero timestamp used for MTCProof signatures,
 (b) checkpoint uint64 encoding and signed range, (c) unproven actual signing-time

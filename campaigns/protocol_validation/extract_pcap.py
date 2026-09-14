@@ -117,7 +117,7 @@ def extension_map(handshake):
     return out
 
 
-def signal(value, expected):
+def signal(value, expected, alternative=None):
     require(value is not None, 'missing trust-anchor extension payload')
     r = Reader(value)
     ids = Reader(r.vector())
@@ -126,7 +126,7 @@ def signal(value, expected):
     while ids.pos < len(ids.data):
         values.append(ids.vector(1))
     ids.end()
-    require(values == [expected], 'wrong/ambiguous trust anchor selection')
+    require(values == [expected] or (alternative is not None and values == [alternative]), 'wrong/ambiguous trust anchor selection')
 
 
 def extract(a):
@@ -232,7 +232,8 @@ def extract(a):
     )
 
     require(0xffa7 in ch_ext, 'missing private 0xffa7 ClientHello signal')
-    signal(ch_ext[0xffa7]['data'], anchor)
+    signal(ch_ext[0xffa7]['data'], anchor,
+           core.relid(p['ca_id'] + '.2.1.1') if meta['mode'] == 'landmark' else None)
     require(41 not in ch_ext and 42 not in ch_ext, 'resumption or early data offered')
 
     # ServerHello
@@ -378,7 +379,7 @@ def extract(a):
         cipher='TLS_AES_256_GCM_SHA384',
         key_exchange='X25519',
         unresolved=[
-            'Private 0xffa7 supports only exact individual-ID selection; MTC-05 recommended landmark groups and complete trust_anchors behavior remain outside the implementation',
+            'Private 0xffa7 supports initial single-log group and exact individual-ID selection; general groups, automatic retry and complete trust_anchors behavior remain outside the implementation',
             'CertificateVerify/Finished cryptographic acceptance is endpoint evidence, not independent transcript verification',
         ],
     )

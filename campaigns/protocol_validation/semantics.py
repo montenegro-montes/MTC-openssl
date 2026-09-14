@@ -61,11 +61,11 @@ def encode_list(ids):
 
 
 def trust_mapping(ch, ee, certificate_extensions, ca_id, mode, log, landmark):
-    """Classify observed payloads; single-candidate exact-ID subset only."""
+    """Classify observed payloads; single-candidate initial-group / exact-ID subset only."""
     result = dict(draft_revision=DRAFT, extension_codepoint=CODEPOINT,
                   codepoint_status='experimental/private', draft_extension_type='TBD',
                   wire_structure_match=False, message_semantics_match=False,
-                  scope='single candidate, exact individual-ID negotiation; not complete trust_anchors support')
+                  scope='single candidate, initial single-log group or exact individual-ID negotiation; not complete trust_anchors support')
     try:
         requested = decode_list(ch)
         available = decode_list(ee, available=True)
@@ -87,14 +87,17 @@ def trust_mapping(ch, ee, certificate_extensions, ca_id, mode, log, landmark):
                       landmark_group_id='.'.join(map(str, group)),
                       landmark_group_advertised=group in requested,
                       requested_order='unordered', available_order='single candidate; preference order trivial')
-        require(requested == [expected] and available == [expected],
+        group_selected = mode == 'landmark' and requested == [group]
+        membership = group_selected and log == 1 and landmark == 1 and available == [individual]
+        result['group_membership_valid'] = membership if group_selected else None
+        require((requested == [expected] or membership) and available == [expected],
                 'observed IDs do not match the configured single-candidate individual anchor')
         result.update(status='PASS_EXPERIMENTAL_CODEPOINT', message_semantics_match=True,
-                      reason='Observed single-candidate wire structures and exact-ID selection match trust-anchor-ids-04; codepoint remains private.')
+                      reason='Observed single-candidate wire structures and configured group-member or exact-ID selection match trust-anchor-ids-04; codepoint remains private.')
         result['landmark_group_recommendation'] = dict(
-            status='UNRESOLVED' if mode == 'landmark' else 'NOT_APPLICABLE',
+            status=('PASS' if membership else 'UNRESOLVED') if mode == 'landmark' else 'NOT_APPLICABLE',
             section='MTC-05 8.2.1',
-            reason='Current client advertises an individual landmark, not the recommended single-log group; group selection and retry are not implemented.')
+            reason=('Initial single-log group advertised and its individual landmark selected.' if membership else 'No landmark group negotiation observed; exact individual selection remains supported. General groups and automatic retry are not implemented.'))
     except (ValueError, TypeError, KeyError) as error:
         result.update(status='FAIL', reason=str(error))
     return result

@@ -1,9 +1,15 @@
 #include "mtc.c"
 #define CONTEXT (SSL_EXT_TLS_ONLY|SSL_EXT_TLS1_3_ONLY|SSL_EXT_CLIENT_HELLO|SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS|SSL_EXT_TLS1_3_CERTIFICATE)
 typedef int (*SecurityCallback)(const SSL *,const SSL_CTX *,int,int,int,void *,void *);
-typedef struct {SecurityCallback previous_security;MTCConfig *trust;unsigned char id[80],list[83];size_t n;int server;} TLSConfig;
+typedef struct {SecurityCallback previous_security;MTCConfig *trust;unsigned char id[80],group[80],list[83];size_t n;int server,has_group;} TLSConfig;
 typedef struct {int matched,available,confirmed;} TLSState;
 static int ci=-1,si=-1;
+/* Restricted initial single-log group. id_encode supplies canonical components;
+   the preceding termination bit ensures .1.1.1 starts at a component boundary. */
+static int initial_group(TLSConfig *c){
+    if(c->n<4||(c->id[c->n-4]&0x80)||c->id[c->n-3]!=1||c->id[c->n-2]!=1||c->id[c->n-1]!=1)return 0;
+    memcpy(c->group,c->id,c->n);c->group[c->n-3]=2;return 1;
+}
 static void config_free(void *parent,void *ptr,CRYPTO_EX_DATA *ad,int idx,long l,void *arg){TLSConfig *c=ptr;(void)parent;(void)ad;(void)idx;(void)l;(void)arg;if(c){mtc_free(c->trust);OPENSSL_free(c);}}
 static void state_free(void *parent,void *ptr,CRYPTO_EX_DATA *ad,int idx,long l,void *arg){(void)parent;(void)ad;(void)idx;(void)l;(void)arg;OPENSSL_free(ptr);}
 static TLSState *state(SSL *ssl){TLSState *s=SSL_get_ex_data(ssl,si);if(!s){s=OPENSSL_zalloc(sizeof(*s));if(s&&!SSL_set_ex_data(ssl,si,s)){OPENSSL_free(s);s=NULL;}}return s;}
@@ -20,7 +26,7 @@ static int parse(SSL *ssl,unsigned type,unsigned context,const unsigned char *in
     if(!s)goto bad;
     if(context==SSL_EXT_TLS1_3_CERTIFICATE){if(n||chainidx||!s->available)goto bad;s->confirmed=1;return 1;}
     if(!vector(&p,2,&list)||p.n||!list.n)goto bad;
-    while(list.n){if(!vector(&list,1,&id)||!id.n)goto bad;if(id.n==c->n&&!memcmp(id.p,c->id,id.n))match=1;}
+    while(list.n){if(!vector(&list,1,&id)||!id.n)goto bad;if(id.n==c->n&&(!memcmp(id.p,c->id,id.n)||(context==SSL_EXT_CLIENT_HELLO&&c->server&&c->has_group&&!memcmp(id.p,c->group,id.n))))match=1;}
     if(!match)goto bad;
     if(context==SSL_EXT_CLIENT_HELLO)s->matched=1;else s->available=1;
     return 1;
@@ -67,7 +73,7 @@ static int install(SSL_CTX *ctx,TLSConfig *c){
     if(ci<0)ci=SSL_CTX_get_ex_new_index(0,NULL,NULL,NULL,config_free);
     if(si<0)si=SSL_get_ex_new_index(0,NULL,NULL,NULL,state_free);
     if(ci<0||si<0||!SSL_CTX_set_ex_data(ctx,ci,c))return 0;
-    put(c->list,c->n+1,2);c->list[2]=(unsigned char)c->n;memcpy(c->list+3,c->id,c->n);
+    put(c->list,c->n+1,2);c->list[2]=(unsigned char)c->n;memcpy(c->list+3,!c->server&&c->has_group?c->group:c->id,c->n);
     if(!SSL_CTX_add_custom_ext(ctx,MTC_EXT,CONTEXT,add,NULL,c,parse,c))return 0;
     if(!c->server)SSL_CTX_set_cert_verify_callback(ctx,verify,c);
     else {c->previous_security=SSL_CTX_get_security_callback(ctx);SSL_CTX_set_security_callback(ctx,mtc_security);}
@@ -77,9 +83,11 @@ int mtc_client(SSL_CTX *ctx,const char *path,int landmark){
     TLSConfig *c=OPENSSL_zalloc(sizeof(*c));if(!c)return 0;
     c->trust=mtc_load(path,landmark);if(!c->trust){OPENSSL_free(c);return 0;}
     SSL_CTX_set_verify(ctx,SSL_VERIFY_PEER,NULL);
-    c->n=c->trust->signal_len;memcpy(c->id,c->trust->signal,c->n);return install(ctx,c);
+    c->n=c->trust->signal_len;memcpy(c->id,c->trust->signal,c->n);
+    if(landmark){c->has_group=initial_group(c);if(!c->has_group){mtc_free(c->trust);OPENSSL_free(c);return 0;}}
+    return install(ctx,c);
 }
 int mtc_server(SSL_CTX *ctx,const char *id){
     TLSConfig *c=OPENSSL_zalloc(sizeof(*c));if(!c)return 0;c->server=1;
-    if(!id_encode(id,c->id,&c->n)){OPENSSL_free(c);return 0;}return install(ctx,c);
+    if(!id_encode(id,c->id,&c->n)){OPENSSL_free(c);return 0;}c->has_group=initial_group(c);return install(ctx,c);
 }
