@@ -140,4 +140,69 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
 Stage 1 validation uses deterministic frame tables, including zero retransmissions,
 retransmission de-duplication, multiple streams and unavailable Finished. No existing
 PCAP was available under `artifacts/captures` during implementation; live tshark
-and PCAP/OpenSSL cross-checks remain pending. Stages 2–4 are not integrated.
+and PCAP/OpenSSL cross-checks remain pending. Campaign integration remains deferred.
+
+
+## Metric semantics and sanity comparison (Stage 2)
+
+### Timing boundaries
+
+| Metric | Measurement boundary | Role |
+| --- | --- | --- |
+| `handshake_wall_ms` | Existing OpenSSL-instrumented TLS handshake interval; excludes TCP connection establishment | Primary TLS timing; unchanged |
+| `tls_from_pcap_wall_ms` | Captured ClientHello completion frame to client Finished completion frame | Secondary TLS timing validation |
+| `tcp_connect_wall_ms` | Captured first SYN to matching final ACK of the three-way handshake | TCP establishment at the capture point |
+| `connection_handshake_wall_ms` | Captured first SYN to client Finished completion frame | Combined connection/handshake interval at the capture point |
+
+OpenSSL measures an application-side interval; PCAP measures frame timestamps at
+server-side `eth0`. Scheduling, buffering, transit to the capture point, segmentation,
+and reassembly completion can therefore produce different durations. Neither a
+fixed offset nor numerical equality is required. The client Finished endpoint does
+not include arbitrary later ACKs. It need not coincide with the return of the
+instrumented OpenSSL call.
+
+Within a valid capture, `connection_handshake_wall_ms >= tls_from_pcap_wall_ms`.
+The difference is SYN-to-ClientHello time, not necessarily `tcp_connect_wall_ms`:
+there may be a gap between the final TCP ACK and ClientHello. Do not add TCP time
+to `handshake_wall_ms` and label the result an OpenSSL TLS measurement.
+
+### Byte accounting layers
+
+| Metric | What is counted | What is outside this layer |
+| --- | --- | --- |
+| `transport_total_bytes` | Existing OpenSSL/BIO total, retaining the existing read/written counters and measurement scope | TCP retransmission copies and TCP/IP/link headers |
+| `connection_handshake_tcp_payload_bytes` | Sum of observed TCP payload in both directions, first SYN through client Finished frame inclusive | TCP/IP/link headers |
+| `connection_handshake_ip_bytes` | Sum of IPv4 packet lengths over the same frames, including IP/TCP headers and payload | Link headers |
+| `connection_handshake_frame_bytes` | Sum of captured-interface original frame lengths over the same frames | Physical-medium overhead absent from the capture |
+
+These are successive accounting layers, not interchangeable byte metrics. All
+three PCAP byte sums include observed retransmissions; BIO counters do not count
+kernel retransmission copies. ACK-only frames add IP/frame bytes but zero TCP
+payload. Whole-frame inclusion may count coalesced data beyond the semantic TLS
+endpoint. Different BIO sampling boundaries, capture loss, or offloading can also
+prevent equality between BIO total and observed TCP payload. There is no general
+required inequality between those two differently scoped measurements.
+
+For the supported capture layout, the extractor checks frame bytes >= IP bytes
+>= TCP payload bytes. `frame.len` must never be described simply as "TCP bytes".
+The frame-length and virtual-interface caveats in Stage 1 apply unchanged.
+
+### Cross-check status and interpretation
+
+Stage 2 checked only the known `artifacts/captures` location; that directory was
+absent. No immediately available PCAP and corresponding OpenSSL observation were
+identified, so **the numerical cross-check was not performed**. No broad data
+search, capture, campaign, Docker operation, or historical-result rewrite was
+performed. This documentation validation is not a successful empirical comparison.
+
+When a matching pair is available, compare `handshake_wall_ms` with
+`tls_from_pcap_wall_ms`, and `transport_total_bytes` with
+`connection_handshake_tcp_payload_bytes`, for the same observation and selected
+TCP stream. Record both values and their differences without requiring equality
+or inventing missing historical values. A missing decryptable client Finished is
+an unavailable measurement, not zero. Key-log contents must not enter reports.
+
+Capture and key logging may perturb execution. Such a comparison checks
+instrumentation semantics only; it cannot establish performance equivalence with
+uncaptured experiments or support scientific performance conclusions. The next
+stage is an integration plan only; no experimental campaign has been modified.
