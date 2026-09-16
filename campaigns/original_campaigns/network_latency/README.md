@@ -9,6 +9,22 @@ There is no bandwidth limit, loss, jitter, reordering, duplication or corruption
 The design uses RTT targets 0, 10, 20, 50, 100 and 200 ms, five campaigns per
 target, five warmups and thirty measured randomized rounds over six PQ scenarios.
 
+PCAP capture is an explicit diagnostic option for a fresh run:
+
+```sh
+python3 campaigns/original_campaigns/network_latency/run.py --pcap "$LATENCY_ROOT"
+```
+
+It preserves the six scenarios, RTT/qdisc setup, probes, warmups and measurement
+CSV files. Only measured observations request a per-observation tcpdump capture;
+warmups remain uncaptured. The capture sidecar shares the server namespace and
+observes server `eth0`, so it is not a dual-endpoint trace. Derived results use
+the common `pcap-metrics.jsonl` schema and the Stage-1 extractor; failures remain
+`null` and do not rewrite successful OpenSSL measurements. Captured runs are
+marked `performance_comparable_to_uncaptured: false` and must not be pooled with
+historical uncaptured latency results. The primary metric remains
+`handshake_wall_ms`; PCAP timing and byte fields are secondary diagnostics.
+
 Run every command from the repository root. Choose one new path and keep the same
 shell variable through all steps.
 

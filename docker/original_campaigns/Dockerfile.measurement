@@ -7,5 +7,6 @@ RUN cp -a /opt/src/openssl-mtc /opt/src/openssl-measurement && \
     mkdir -p /opt/openssl-measurement/bin && cp apps/openssl /opt/openssl-measurement/bin/openssl && \
     cp CONTROLLED_MEASUREMENT_SHA256 /opt/openssl-measurement/
 COPY campaigns/original_campaigns/controlled_n16_campaign /opt/measurement
+COPY campaigns/common/pcap_capture.py /opt/measurement/pcap_capture.py
 RUN chmod +x /opt/measurement/openssl.sh
 WORKDIR /work

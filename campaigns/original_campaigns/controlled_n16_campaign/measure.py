@@ -78,7 +78,7 @@ once("k not in ['round','order','tree_size']","k not in ['round','order','tree_s
 once("values=[r[metric] for r in group]","values=[r[metric] for r in group if r[metric] is not None]\n        if not values:continue")
 once("write_csv(out/'summary.csv',summary)","write_csv(out/'summary.csv',[{k:r.get(k,'') for k in sorted({k for q in summary for k in q})} for r in summary])")
 if os.environ.get('MEASUREMENT_PCAP') == '1':
-    from capture import observation
+    from pcap_capture import observation
     once('def sample(scenario,round_number,order,warm):',
          'def captured_sample(scenario,round_number,order,warm,capture_keylog):')
     command='client_args(scenario,a.host,4433+ALL_SCENARIOS.index(scenario))'

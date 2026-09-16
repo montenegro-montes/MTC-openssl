@@ -52,7 +52,7 @@ def validate(directory,seed,rtt,runs,warmups,probe):
          'checks':['TLS1.3/X25519/cipher','no client authentication','no resumption','CertificateVerify active','expected Compact/MTC authentication marker','paired randomized rounds']})
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('root',type=Path);parser.add_argument('--smoke',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('root',type=Path);parser.add_argument('--smoke',action='store_true');parser.add_argument('--pcap',action='store_true',help='Opt-in per-observation PCAP capture');args=parser.parse_args()
     root=args.root.resolve();gate=load(root/'tests-status.json')
     if not gate['passed']: raise SystemExit('ABORT: tests did not pass')
     image=json.loads(subprocess.check_output(['docker','image','inspect','mt-tls-network:latency'],text=True))[0]['Id']
@@ -61,8 +61,11 @@ def main():
     status_path=root/('smoke-status.json' if args.smoke else 'campaign-status.json')
     if status_path.exists(): raise SystemExit('Refusing to overwrite/retry')
     output=root/('smoke' if args.smoke else 'campaigns');output.mkdir()
-    status={'experiment':'latency-only','image_id':image,'passed':False,'failed_campaign':None,'campaigns':[]};save(status_path,status)
-    env=os.environ.copy();env['MEASUREMENT_RUN_ROOT']='/work/'+str(output.relative_to(REPO/'artifacts'))
+    status={'experiment':'latency-only','image_id':image,'passed':False,'failed_campaign':None,'campaigns':[],'pcap_enabled':args.pcap,'performance_comparable_to_uncaptured':False if args.pcap else True};save(status_path,status)
+    env=os.environ.copy();env['MEASUREMENT_RUN_ROOT']='/work/'+str(output.relative_to(REPO/'artifacts'));env['MEASUREMENT_PCAP']='1' if args.pcap else '0'
+    if args.pcap:
+        capture_image=json.loads(subprocess.check_output(['docker','image','inspect','mt-tls-capture:local'],text=True))[0]
+        status['capture_image_id']=capture_image['Id'];save(status_path,status)
     rtts=[0,50,100] if args.smoke else RTTS;campaigns=[1] if args.smoke else range(1,6);runs,warmups=(5,3) if args.smoke else (30,5)
     resources0=network0=None;containers=set()
     try:
@@ -83,7 +86,14 @@ def main():
                 tolerance=max(5.0,rtt*.15)
                 if rtt and abs(probe['measured_rtt_median_ms']-rtt)>tolerance: raise RuntimeError('Measured RTT outside declared tolerance')
                 if not rtt and probe['measured_rtt_median_ms']>3: raise RuntimeError('Unexpected baseline RTT')
-                with (directory/'driver.log').open('w') as log: subprocess.run(COMPOSE+['run','--rm','client','measure','--runs',str(runs),'--warmup',str(warmups),'--seed',str(seed),'--image-id',image,'--scenarios',*SCENARIOS],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
+                if args.pcap:
+                    subprocess.run(COMPOSE+['--profile','pcap','up','-d','--no-deps','--force-recreate','capture'],env=env,stdout=(directory/'capture-start.log').open('w'),stderr=subprocess.STDOUT,check=True)
+                try:
+                    with (directory/'driver.log').open('w') as log: subprocess.run(COMPOSE+['run','--rm','client','measure','--runs',str(runs),'--warmup',str(warmups),'--seed',str(seed),'--image-id',image,'--scenarios',*SCENARIOS],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
+                finally:
+                    if args.pcap:
+                        subprocess.run(COMPOSE+['--profile','pcap','run','--rm','--no-deps','capture','python3','/opt/pcap-core/pcap_capture.py','analyze',env['MEASUREMENT_RUN_ROOT']+'/'+cid],env=env,stdout=(directory/'pcap-analysis.log').open('w'),stderr=subprocess.STDOUT,check=False)
+                        subprocess.run(COMPOSE+['--profile','pcap','stop','capture'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=False)
                 server_after=subprocess.check_output(['docker','exec',container,'tc','-s','qdisc','show','dev','eth0'],text=True);(directory/'server-qdisc-after.txt').write_text(server_after);(directory/'server-qdisc-statistics.txt').write_text(server_after)
                 driver=(directory/'driver.log').read_text();match=re.search(r'QDISC_CLIENT_AFTER_BEGIN\n(.*?)QDISC_CLIENT_AFTER_END',driver,re.S)
                 if not match: raise RuntimeError('Missing client qdisc statistics')
