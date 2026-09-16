@@ -1,5 +1,5 @@
 .DS_Store
-artifacts/
+/artifacts/
 !results/
 !results/**
 .mt-state/
