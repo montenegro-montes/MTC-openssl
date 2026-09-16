@@ -112,6 +112,145 @@ class ReportingTest(unittest.TestCase):
             existing=subprocess.run([sys.executable,'-m','campaigns.common.reporting',str(source),'--output',str(target)],capture_output=True,text=True)
             self.assertNotEqual(existing.returncode,0);self.assertEqual(target.read_text(),'preserve')
 
+    def test_certificate_size_crossover_report(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+
+            (root/'analysis_extended.json').write_text(json.dumps({
+                'schema':1,
+                'result_domain':'CERTIFICATE_SIZE_CROSSOVER',
+                'draft':'draft-ietf-plants-merkle-tree-certs-05',
+                'merkle_hash':'SHA-256',
+                'boundary':'TLS Certificate handshake header + body',
+                'implementation_limit':1024,
+                'maximum_supported_N':281474976710655,
+                'draft_limit':281474976710656,
+                'draft_endpoint_limit':281474976710655,
+                'limiting_field':'MTCProof.end uint48',
+                'limiting_reason':'test limit',
+                'measured_anchor_count':9,
+                'tls_campaign_executed':False,
+                'baseline_preserved':True,
+                'source_hashes':{'example':'abc'},
+                'draft_source_hashes':{},
+                'fixture_provenance':{},
+                'limitations':['analytical beyond implementation limit']
+            }))
+
+            (root/'x509_reference_validation.csv').write_text(
+                'algorithm,depth,compatible,selected_reference_source\n'
+                'ecdsa-p256,3,True,real TLS Certificate message\n'
+            )
+
+            (root/'serialization_breakdown.csv').write_text(
+                'algorithm,N,tls_certificate_bytes\n'
+                'ecdsa-p256,16,460\n'
+            )
+
+            (root/'crossover_extended.csv').write_text(
+                'algorithm,x509_depth,crossover_N\n'
+                'ecdsa-p256,3,262145\n'
+            )
+
+            (root/'mtc_size_model.csv').write_text(
+                'algorithm,N,tls_certificate_bytes\n'
+                'ecdsa-p256,16,460\n'
+            )
+
+            png=b'\x89PNG\r\n\x1a\nTEST'
+            (root/'crossover-by-depth.png').write_bytes(png)
+            (root/'crossover-curves.png').write_bytes(png)
+            (root/'crossover-by-depth.pdf').write_bytes(b'%PDF-test')
+            (root/'README.md').write_text('# crossover')
+
+            before={
+                path.name:digest(path)
+                for path in root.iterdir()
+                if path.is_file()
+            }
+
+            model=load(root)
+            page=render(model)
+
+            self.assertEqual(
+                model['adapter'],
+                'certificate-size-crossover'
+            )
+
+            inventory={r['artifact'] for r in model['inventory']}
+            for name in (
+                'analysis_extended.json',
+                'crossover_extended.csv',
+                'x509_reference_validation.csv',
+                'serialization_breakdown.csv',
+                'mtc_size_model.csv',
+                'crossover-by-depth.png',
+                'crossover-curves.png',
+                'crossover-by-depth.pdf',
+                'README.md'
+            ):
+                self.assertIn(name,inventory)
+
+            self.assertIn(
+                'Certificate-size crossover scope',
+                page
+            )
+            self.assertIn(
+                'Empirical X.509 reference validation',
+                page
+            )
+            self.assertIn(
+                'Exact crossover results',
+                page
+            )
+            self.assertIn(
+                'D=3 — representative',
+                page
+            )
+            self.assertIn('262145',page)
+            self.assertIn('1024',page)
+            self.assertIn('281474976710655',page)
+            self.assertIn(
+                'real TLS Certificate message',
+                page
+            )
+            self.assertIn(
+                'data:image/png;base64,',
+                page
+            )
+            self.assertNotIn('<script',page)
+            self.assertNotIn('http://',page)
+            self.assertNotIn('https://',page)
+
+            after={
+                path.name:digest(path)
+                for path in root.iterdir()
+                if path.is_file()
+            }
+            self.assertEqual(before,after)
+
+    def test_crossover_values_are_presented_not_recomputed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+
+            (root/'analysis_extended.json').write_text(json.dumps({
+                'result_domain':'CERTIFICATE_SIZE_CROSSOVER',
+                'implementation_limit':1024,
+                'maximum_supported_N':281474976710655
+            }))
+
+            # Deliberately unusual source value. The renderer must reproduce
+            # it rather than derive a crossover independently.
+            (root/'crossover_extended.csv').write_text(
+                'algorithm,x509_depth,crossover_N\n'
+                'test-algorithm,3,123456789\n'
+            )
+
+            page=render(load(root))
+
+            self.assertIn('123456789',page)
+            self.assertIn('test-algorithm',page)
+
     def test_configured_and_measured_bandwidth_are_separate(self):
         with tempfile.TemporaryDirectory() as d:
             page=render(self.make(d,**{'validation.json':{'bandwidth_target_mbps':5,'bandwidth_measured_mbps':4.75,'bandwidth_forward_mbps':4.8,'bandwidth_reverse_mbps':4.75}}))

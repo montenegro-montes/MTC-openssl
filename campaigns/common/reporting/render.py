@@ -1,4 +1,5 @@
 """Self-contained HTML presentation; no JavaScript, network, or inference engine."""
+import base64
 import html
 import json
 import math
@@ -57,12 +58,173 @@ def timing(model, keys, title, boundaries):
         body+='<h3>Incomplete / unavailable observations</h3><p>Incomplete or unavailable timing: no completed TLS timeline is asserted. Missing boundaries remain unavailable.</p>'+table(incomplete)
     return panel(title,body)
 
+def crossover_report(model):
+    """Present existing certificate-size crossover artifacts without recomputation."""
+    analysis=model['documents'].get('analysis_extended.json',{})
+    tables=model['tables']
+
+    crossover=next(
+        (rows for name,rows in tables.items()
+         if Path(name).name=='crossover_extended.csv'),
+        []
+    )
+    validation=next(
+        (rows for name,rows in tables.items()
+         if Path(name).name=='x509_reference_validation.csv'),
+        []
+    )
+    serialization=next(
+        (rows for name,rows in tables.items()
+         if Path(name).name=='serialization_breakdown.csv'),
+        []
+    )
+    size_model=next(
+        (rows for name,rows in tables.items()
+         if Path(name).name=='mtc_size_model.csv'),
+        []
+    )
+
+    out=[]
+
+    scope_fields=(
+        'result_domain','draft','merkle_hash','boundary',
+        'leaf_index','log_number','landmark_policy',
+        'implementation_limit','maximum_supported_N',
+        'draft_limit','draft_limit_definition',
+        'draft_endpoint_limit','limiting_field','limiting_reason',
+        'tls_campaign_executed','baseline_preserved'
+    )
+    scope=[
+        {'field':key,'recorded value':analysis.get(key)}
+        for key in scope_fields if key in analysis
+    ]
+    out.append(panel(
+        'Certificate-size crossover scope',
+        '<p>This section presents the existing exact landmark-MTC / X.509 '
+        'Certificate-message size analysis. It does not recompute crossover '
+        'thresholds, statistics, serialization sizes, or TLS measurements.</p>'
+        +table(scope)
+    ))
+
+    if validation:
+        out.append(panel(
+            'Empirical X.509 reference validation',
+            '<p>Rows are reproduced from x509_reference_validation.csv. '
+            'Compatibility and selected reference sources are existing scientific '
+            'results and are not inferred by this report.</p>'
+            +table(validation,limit=len(validation))
+        ))
+
+    if serialization:
+        out.append(panel(
+            'MTC serialization anchors / breakdown',
+            '<p>Existing serialized landmark-MTC evidence; no sizes are '
+            'reconstructed by the HTML renderer.</p>'
+            +table(serialization,limit=len(serialization))
+        ))
+
+    if crossover:
+        depths={}
+        for row in crossover:
+            depth=row.get('x509_depth')
+            depths.setdefault(str(depth),[]).append(row)
+
+        body=(
+            '<p>Exact crossover rows are reproduced from crossover_extended.csv. '
+            'Depth D includes the trusted root. D=3 is the representative '
+            'configuration in the existing analysis; D=2 and D=4–5 are retained '
+            'as sensitivity cases.</p>'
+        )
+        for depth in ('2','3','4','5'):
+            rows=depths.get(depth,[])
+            if rows:
+                label='D='+depth
+                if depth=='3':
+                    label+=' — representative'
+                body+='<h3>'+esc(label)+'</h3>'+table(rows,limit=len(rows))
+        remaining=[
+            row for depth,rows in depths.items()
+            if depth not in ('2','3','4','5')
+            for row in rows
+        ]
+        if remaining:
+            body+='<h3>Other recorded depths</h3>'+table(
+                remaining,limit=len(remaining)
+            )
+        out.append(panel('Exact crossover results',body))
+
+    if size_model:
+        out.append(panel(
+            'Existing MTC size-model output',
+            '<p>Recorded model output only. The HTML renderer does not execute '
+            'the serializer or evaluate the size model.</p>'
+            +table(size_model,limit=min(len(size_model),200))
+        ))
+
+    limits=[]
+    for key in (
+        'implementation_limit','maximum_supported_N','draft_limit',
+        'draft_endpoint_limit','limiting_field','limiting_reason'
+    ):
+        if key in analysis:
+            limits.append({'field':key,'recorded value':analysis[key]})
+    if limits:
+        out.append(panel(
+            'Implementation and analytical domain',
+            '<p>Implementation support and analytical/model range are distinct. '
+            'Values below are copied from analysis_extended.json.</p>'
+            +table(limits)
+        ))
+
+    figures=[]
+    for name in ('crossover-by-depth.png','crossover-curves.png'):
+        path=model['source']/name
+        if path.is_file():
+            encoded=base64.b64encode(path.read_bytes()).decode('ascii')
+            figures.append(
+                '<figure><figcaption><strong>'+esc(name)+'</strong></figcaption>'
+                '<img alt="'+esc(name)+'" '
+                'style="max-width:100%;height:auto" '
+                'src="data:image/png;base64,'+encoded+'"></figure>'
+            )
+    if figures:
+        out.append(panel(
+            'Existing crossover figures',
+            '<p>Figures are embedded byte-for-byte from the existing PNG '
+            'artifacts; they are not regenerated by this report.</p>'
+            +''.join(figures)
+        ))
+
+    provenance=[]
+    for key in (
+        'existing_n16_validation','measured_anchor_count',
+        'tls_campaign_executed','baseline_preserved'
+    ):
+        if key in analysis:
+            provenance.append({'field':key,'recorded value':analysis[key]})
+    if provenance:
+        out.append(panel(
+            'Crossover provenance',
+            table(provenance)
+            +details('Recorded source hashes',analysis.get('source_hashes',{}))
+            +details('Recorded draft source hashes',
+                     analysis.get('draft_source_hashes',{}))
+            +details('Recorded fixture provenance',
+                     analysis.get('fixture_provenance',{}))
+            +details('Recorded limitations',analysis.get('limitations',[]))
+        ))
+
+    return ''.join(out)
+
+
 def render(model):
     out=['<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:; base-uri \'none\'; form-action \'none\'"><title>Experiment evidence report</title><style>body{font:15px system-ui,sans-serif;background:#f1f5f9;color:#172b4d;margin:0}main{max-width:1240px;margin:auto;padding:32px}header,section{background:white;border:1px solid #dbe3ed;border-radius:12px;padding:24px;margin:18px 0}h1{font-size:28px;margin:8px 0}h2{font-size:20px}p{line-height:1.6}.banner{background:#fff0cc;border-left:6px solid #bd6200;padding:18px;font-weight:700}.warning{background:#ffe6e6;color:#8d1515;padding:16px}.status{font-weight:700;color:#185b65}.muted{color:#53647c}.scroll{overflow:auto}table{border-collapse:collapse;min-width:100%;font-size:13px}th,td{padding:10px;border-bottom:1px solid #dde4ee;text-align:left;white-space:nowrap}th{background:#edf3f8}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}details{margin:12px 0}summary{cursor:pointer;font-weight:600}.timeline{display:flex;align-items:center;flex-wrap:wrap;gap:10px}.timeline span{padding:12px;background:#edf3f8;border-radius:8px}a{color:#175c99}</style></head><body><main>']
     out+=['<header><p class="muted">EVIDENCE PRESENTATION · '+esc(model['adapter'])+'</p><h1>'+esc(model['source'].name)+'</h1><p class="status">'+esc(model['status'])+'</p><p>'+NOTICE+'</p>']
     if model['smoke']: out+=['<div class="banner">INTEGRATION SMOKE — NOT SCIENTIFIC PERFORMANCE DATA</div>']
     out+=[table([model['flags']]),'<p>TLS keylog file present (contents never read): '+fmt(model['keylog_available'])+'.</p>','<p>PCAP-derived data present: '+fmt(model['pcap_present'])+'. Missing flags are not inferred.</p><p>Captured and uncaptured observations are separate measurement populations. This report never pools them or computes statistical inference.</p></header>']
     if model['warnings']: out += [panel('Warnings / integrity failures','<div class="warning">'+ '<br>'.join(esc(w) for w in model['warnings'])+'</div>')]
+    if model['adapter']=='certificate-size-crossover':
+        out += [crossover_report(model)]
     # Counts use one existing population file hierarchy only, avoiding aggregate/per-campaign duplicates.
     tables=model['tables']
     measured=[n for n in tables if Path(n).name=='all-samples.csv'] or [n for n in tables if Path(n).name in ('samples.csv','observations.csv')]

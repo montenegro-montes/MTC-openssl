@@ -43,10 +43,11 @@ def load(source):
     for path in sorted(source.rglob('*')):
         if not path.is_file() or path.is_symlink(): continue
         name=str(path.relative_to(source))
-        if path.suffix not in ('.json','.jsonl','.csv','.pcap'): continue
-        # Packet tables can be large; provenance is retained without parsing them.
+        if path.suffix not in ('.json','.jsonl','.csv','.pcap','.md','.png','.pdf'): continue
+        # All supported evidence artifacts are inventoried and hashed. Binary/document
+        # presentation artifacts are preserved as provenance but are never parsed.
         model['inventory'].append({'artifact':name,'bytes':path.stat().st_size,'sha256':digest(path)})
-        if path.name=='packets.csv' or path.suffix=='.pcap': continue
+        if path.name=='packets.csv' or path.suffix in ('.pcap','.md','.png','.pdf'): continue
         try:
             if path.suffix=='.csv':
                 with path.open(newline='') as stream: data=list(csv.DictReader(stream))
@@ -76,7 +77,17 @@ def load(source):
     # Presence is labelled separately; never infer the experiment's pcap_enabled flag.
     model['keylog_available']=any(p.is_file() for pattern in ('*.keys','*.keylog') for p in source.rglob(pattern))
     model['pcap_present']=any('tcp_connect_wall_ms' in r or 'connection_handshake_packets' in r for _,r in model['metrics'])
-    model['adapter']='integration-smoke' if model['smoke'] else ('campaign-csv' if model['tables'] else 'json-records')
+    analysis=model['documents'].get('analysis_extended.json', {})
+    crossover=(
+        isinstance(analysis,dict)
+        and analysis.get('result_domain')=='CERTIFICATE_SIZE_CROSSOVER'
+    )
+    model['adapter']=(
+        'certificate-size-crossover' if crossover
+        else 'integration-smoke' if model['smoke']
+        else 'campaign-csv' if model['tables']
+        else 'json-records'
+    )
     execution=model['documents'].get('result.json', {})
     status=execution.get('status') if isinstance(execution,dict) else None
     if status in ('FAIL','FAILURE'): model['status']='FAILURE'
