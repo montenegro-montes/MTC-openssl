@@ -152,3 +152,63 @@ git status --short
 ```
 
 Use `campaigns/original_campaigns/combined_network_campaign/cleanup.sh` only to stop this Compose project. It does not delete result directories. No Git tag is created in this preparation phase.
+
+
+## Opt-in PCAP instrumentation (Stage 6B.4)
+
+`run.py` accepts `--pcap`; use a new initialized result root for this separate
+measurement population. Capture is off by default: no tcpdump sidecar, tshark
+extraction, keylog or PCAP artifacts. Existing CSV columns, failure accounting,
+profiles, network checks, timeout and statistical analysis are unchanged.
+The existing `mt-tls-capture:local` image must already be available.
+
+The thin adapter calls the shared failure-aware PCAP session. The measurement
+client still calls the packet-loss driver, with the current core mounted into
+`/opt/measurement/pcap_capture.py`. One server-namespace `eth0` capture is associated
+with each measured attempt, including failures; ordinary warmups are excluded.
+Existing probe validation precedes the session. The measured client applies the
+same qdisc before any observation request. Readiness precedes TLS; `finally`
+requests stop, followed by bounded drain, SIGINT directly to tcpdump, close,
+readability and hash checks, shared full/partial extraction, and later teardown.
+The runner's existing post-driver qdisc/nstat checks remain unchanged.
+
+TLS timeout remains 30 seconds with no retries. Readiness is separately bounded
+at 8 seconds, finalization at 12 seconds (1.2-second drain plus up to 5 seconds
+close and 5 seconds readability), and extraction at 60 seconds per observation.
+A TLS timeout is an outcome, not a capture failure. External termination may
+prevent an outcome row or native diagnostic from being emitted; original attempt
+accounting still detects missing attempts, and PCAP association fails closed.
+
+Artifacts follow the common convention: `pcap/sample-<round>-<scenario>/` contains
+identity, keylog, PCAP, capture/TLS status, Stage-1 summary and `derived.json`;
+`pcap-metrics.jsonl` stores independent TLS/capture/analysis states. Failed native
+diagnostics remain in `native-timing.json` sidecars rather than new CSV columns.
+A failed TLS attempt can report `TLS_MEASUREMENT_FAILURE / SUCCESS / PARTIAL`.
+Missing client Finished leaves TLS/full connection timing and successful-handshake
+packet/byte/retransmission metrics null. TCP timing is available only when its
+normal SYN/SYN-ACK/established ACK boundaries are observed. No timeout, last
+packet or shutdown time substitutes for completion. Native timings remain direct
+measurements with original boundaries and null behavior; full native timing is
+not calculated as TCP plus TLS. `handshake_wall_ms` remains primary.
+
+Success retransmissions retain SYN → client Finished. Partial
+`capture_retransmission_frames` covers the entire selected captured TCP attempt.
+Server capture may miss client-egress drops. PCAP retransmissions, qdisc drops,
+namespace nstat, ping loss and configured netem probability are complementary,
+not interchangeable. Existing qdisc/ping/iperf validation remains authoritative.
+The runner executes forward/reverse iperf but currently validates the last
+(reverse) receiver result; this existing behavior is preserved.
+
+Association retains unique campaign/round/scenario/warmup identity and matching
+order, plus client_random/keylog for successful observations. Failed attempts
+may lack client_random and report reduced tuple-only confidence; ambiguous or
+wrong associations fail closed. Actual PCAP SHA-256 must match capture-status
+and extractor output for full and partial analysis. Empty captures are not
+scientific zero traffic.
+
+Use `bin/artifacts/mt-report <result-directory>` for the common derived HTML,
+including configured/measured conditions, independent outcomes and incomplete
+metrics without a completed TLS timeline. Captured and uncaptured native timings
+must not be pooled for inference simply because metric names match. Failures
+remain in outcome accounting. Disposable instrumentation smoke evidence is not
+scientific or performance-comparable data.

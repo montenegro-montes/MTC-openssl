@@ -2,6 +2,7 @@
 import argparse,csv,datetime,hashlib,json,os,re,subprocess
 from pathlib import Path
 from config import *
+from pcap_adapter import capture_session
 from network import commands,own_tbf_drops,parse_iperf,parse_ping,qdisc_kind_drops,section,validate_qdisc,validate_throughput
 REPO=Path(__file__).resolve().parents[3]
 COMPOSE=['docker','compose','-f',str(REPO/'docker/original_campaigns/compose.network-combined.yaml')]
@@ -52,7 +53,7 @@ def parse_nstat(text):
         if not m:raise RuntimeError('missing '+key)
         out[key]=int(m.group(1))
     return out
-def execute(root,mode,selected):
+def execute(root,mode,selected,pcap=False):
     spec=design(mode,selected); gate=load(root/'tests-status.json'); image=json.loads(subprocess.check_output(['docker','image','inspect',IMAGE],text=True))[0]['Id']
     if not gate['passed'] or gate['image_id']!=image:raise SystemExit('ABORT: tested image mismatch')
     if mode!='preflight' and not load(root/'preflight-status.json')['passed']:raise SystemExit('ABORT: preflight required')
@@ -62,7 +63,11 @@ def execute(root,mode,selected):
     if out.exists():raise SystemExit('refusing existing output directory: '+str(out))
     out.mkdir()
     status={'experiment':'combined-network','passed':False,'failed_campaign':None,'expected':spec,'campaigns':[]};save(status_path,status)
-    env=os.environ.copy(); campaigns=range(1,6) if mode=='full' else [1]
+    if pcap:
+        status.update(pcap_enabled=True,performance_comparable_to_uncaptured=False,
+                      measurement_population='pcap-enabled; separate from uncaptured')
+        save(status_path,status)
+    env=os.environ.copy();env['MEASUREMENT_PCAP']='1' if pcap else '0'; campaigns=range(1,6) if mode=='full' else [1]
     try:
       for name in spec['profiles']:
        profile=PROFILES[name]
@@ -76,7 +81,8 @@ def execute(root,mode,selected):
         probe_run=subprocess.run(COMPOSE+['run','--rm','client','probe'],env=env,text=True,capture_output=True,check=True);probe_text=probe_run.stdout+probe_run.stderr;(directory/'network-validation.log').write_text(probe_text);validate_qdisc(section(probe_text,'QDISC_CLIENT_BEGIN','QDISC_CLIENT_END'),profile);probe=parse_ping(probe_text,spec['probe_packets']);throughput=parse_iperf(probe_text)
         if abs(probe['measured_rtt_median_ms']-profile['rtt_ms'])>10:raise RuntimeError('RTT outside +/-10 ms gate')
         validate_throughput(throughput,profile['rate_mbit'])
-        with (directory/'driver.log').open('w') as log:subprocess.run(COMPOSE+['run','--rm','client','measure','--runs',str(spec['measured_rounds']),'--warmup',str(spec['warmup_rounds']),'--seed',str(s),'--image-id',image,'--scenarios',*spec['scenarios']],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
+        with capture_session(COMPOSE,directory,env,pcap,spec['measured_rounds']*len(spec['scenarios'])):
+            with (directory/'driver.log').open('w') as log:subprocess.run(COMPOSE+['run','--rm','client','measure','--runs',str(spec['measured_rounds']),'--warmup',str(spec['warmup_rounds']),'--seed',str(s),'--image-id',image,'--scenarios',*spec['scenarios']],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
         ensure_failures(directory/'failures.csv');failure=add_fields(directory/'failures.csv',{'experiment':'combined-network','network_profile':name,'configured_loss_percent':profile['loss_percent']});good=add_fields(directory/'samples.csv',{'experiment':'combined-network','network_profile':name,'is_warmup':'0','configured_rtt_ms':profile['rtt_ms'],'configured_bandwidth_mbit':profile['rate_mbit'] if profile['rate_mbit'] is not None else 'unconstrained','configured_loss_percent':profile['loss_percent'],'measured_rtt_ms':probe['measured_rtt_median_ms'],'measured_bandwidth_mbit':throughput});warm=add_fields(directory/'warmups.csv',{'experiment':'combined-network','network_profile':name,'is_warmup':'1'})
         expected=(spec['measured_rounds']+spec['warmup_rounds'])*len(spec['scenarios'])
         if len(good)+len(warm)+len(failure)!=expected:raise RuntimeError('attempt accounting mismatch')
@@ -94,9 +100,12 @@ def execute(root,mode,selected):
     finally:
       with (root/(mode+'-shutdown.log')).open('w') as log:subprocess.run(COMPOSE+['down'],env=env,stdout=log,stderr=subprocess.STDOUT,check=False)
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);g=p.add_mutually_exclusive_group();g.add_argument('--preflight',action='store_true');g.add_argument('--smoke',action='store_true');g.add_argument('--dry-run',action='store_true');p.add_argument('--scenarios',nargs='+',choices=SCENARIOS);a=p.parse_args();mode='preflight' if a.preflight else ('smoke' if a.smoke else 'full')
-    if a.dry_run:print(json.dumps(design(mode,a.scenarios),indent=2));return
+    p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);p.add_argument('--pcap',action='store_true');g=p.add_mutually_exclusive_group();g.add_argument('--preflight',action='store_true');g.add_argument('--smoke',action='store_true');g.add_argument('--dry-run',action='store_true');p.add_argument('--scenarios',nargs='+',choices=SCENARIOS);a=p.parse_args();mode='preflight' if a.preflight else ('smoke' if a.smoke else 'full')
+    if a.dry_run:
+        spec=design(mode,a.scenarios)
+        if a.pcap: spec.update(pcap_enabled=True,measurement_population='pcap-enabled; separate from uncaptured')
+        print(json.dumps(spec,indent=2));return
     root=a.root.resolve()
     if not root.is_relative_to(REPO/'artifacts/results'):raise SystemExit('root must be under artifacts/results')
-    execute(root,mode,a.scenarios)
+    execute(root,mode,a.scenarios,a.pcap)
 if __name__=='__main__':main()
