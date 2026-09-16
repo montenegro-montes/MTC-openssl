@@ -77,4 +77,14 @@ once("k not in ['round','order','tree_size']","k not in ['round','order','tree_s
 # campaign-level analyzer instead of coercing missing values to zero.
 once("values=[r[metric] for r in group]","values=[r[metric] for r in group if r[metric] is not None]\n        if not values:continue")
 once("write_csv(out/'summary.csv',summary)","write_csv(out/'summary.csv',[{k:r.get(k,'') for k in sorted({k for q in summary for k in q})} for r in summary])")
+if os.environ.get('MEASUREMENT_PCAP') == '1':
+    from capture import observation
+    once('def sample(scenario,round_number,order,warm):',
+         'def captured_sample(scenario,round_number,order,warm,capture_keylog):')
+    command='client_args(scenario,a.host,4433+ALL_SCENARIOS.index(scenario))'
+    once(command, command+"+(['-keylogfile',str(capture_keylog)] if capture_keylog else [])")
+    once('for warm,rounds in [(True,a.warmup),(False,a.runs)]:', """def sample(scenario,round_number,order,warm):
+    with observation(out,scenario,round_number,order,warm,4433+ALL_SCENARIOS.index(scenario)) as keylog:
+        return captured_sample(scenario,round_number,order,warm,keylog)
+for warm,rounds in [(True,a.warmup),(False,a.runs)]:""")
 exec(compile(source,'saved-mtc-benchmark-with-measurement-accounting','exec'))

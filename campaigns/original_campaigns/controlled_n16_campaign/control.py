@@ -27,6 +27,7 @@ SOURCE_PREFIXES = (
     "src/profiling/", "codigoOriginal/C/", "scripts/", "bin/",
 )
 SOURCE_FILES = {
+    "campaigns/original_campaigns/handshake_capture/analyze.py",
     ".dockerignore", ".gitignore", "docker/original_campaigns/Dockerfile",
     "docker/original_campaigns/Dockerfile.compact", "docker/original_campaigns/Dockerfile.compact.dockerignore",
     "docker/original_campaigns/Dockerfile.profile", "docker/original_campaigns/Dockerfile.profile.dockerignore",

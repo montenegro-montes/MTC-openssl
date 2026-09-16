@@ -162,3 +162,75 @@ No null-hypothesis significance tests are performed.
 Compact/MTC pairs are architectural comparisons, not protocol-equivalent. Standalone
 MTC includes a local cosigner while the X509 reference has no SCTs. The previous
 component profile's SPKI-encoding cost must not be relabelled as Merkle hashing cost.
+
+## Optional per-observation PCAP accounting (Stage 4)
+
+Capture is disabled by default. To opt in for a **new instrumented run**, add
+`--pcap` to `run.py` (including the measurement preflight if capture is desired
+there). This option does not reduce the existing campaign loops: do not use it
+as a one-handshake smoke command. All existing image/test/preflight gates remain.
+An existing `mt-tls-capture:local` image is required; the integration does not build
+it. Initialize fresh source provenance after applying this patch. Capture scripts
+are mounted read-only; no native measurement-image rebuild is needed for this adapter.
+
+The persistent capture sidecar shares server networking and observes `eth0`.
+Measured observations request one tcpdump process each, filtered by server port;
+warmups do not request captures. A `listening on eth0` message confirms readiness
+before the client starts. Each client uses its observation's `tls.keys` via
+`-keylogfile`. After the original sample function returns or raises, the driver
+requests shutdown. The sidecar allows 1.2 seconds for buffer delivery, sends
+SIGINT, waits for clean exit, checks size and tests readability with tcpdump.
+All coordination/draining is outside the existing process and OpenSSL timers.
+
+After the measurement driver finishes, the adapter invokes the unchanged
+`handshake_capture/analyze.py` once per successful observation capture. No tshark
+analysis runs alongside measured handshakes. It remains the only metric parser.
+
+Artifacts live under `<root>/<campaign_id>/pcap/sample-<zero-based-round>-<scenario>/`:
+
+- `observation.json`: existing campaign, one-based `round_id`, zero-based `round`,
+  scenario, order, warmup flag and links to the existing sample CSV/client log.
+- `connections.json`, `handshakes.pcap`, `tls.keys`: Stage-1 input layout.
+- `request.json`, `ready.json`, `stop`, `capture-status.json`, `tls-status.json`,
+  optional `client-capture-error.json`, and `tcpdump.log`: coordination/audit trail.
+- `packets.csv`, `summary.json`, `analysis.log`, `tshark.log`, `derived.json`:
+  extractor outputs and the joined observation result.
+
+`<campaign_id>/pcap-metrics.jsonl` joins the observation tuple to the successful
+sample's existing `client_random`, PCAP hash, artifact directory, boundary fields
+and eight Stage-1 metrics. The adapter checks the key log against that same
+`client_random`; no key material is copied into derived reports. Key logs and
+captures remain sensitive ignored artifacts. No compression or retention changes
+are introduced; storage grows with the number and size of captured observations.
+
+Capture status is `SUCCESS` or `CAPTURE_FAILURE`. Analysis status is `SUCCESS`,
+`ANALYSIS_FAILURE` or `NOT_EXECUTED`. TLS status separately records `SUCCESS` or
+`TLS_MEASUREMENT_FAILURE`; existing handshake/telemetry failures still abort the
+campaign. Capture/analysis failures preserve successful TLS rows and set derived
+`metrics` to JSON `null`, never fabricated zeros. An analyzer-container failure is
+also recorded in `pcap-analysis-status.json` and campaign status. No measurements
+are retried. A capture coordination timeout is bounded and recorded explicitly.
+
+Existing `samples.csv`, warmups, statistical analysis, `handshake_wall_ms`,
+`transport_total_bytes`, `transport_read_bytes` and `transport_written_bytes`
+retain their definitions. `handshake_wall_ms` remains primary; PCAP timing is
+secondary. Campaign status records `pcap_enabled`, capture image identity and
+`performance_comparable_to_uncaptured: false`. Do not pool instrumented timings
+with historical uncaptured runs: key logging/capture load and between-sample
+coordination can perturb execution even though timer boundaries are unchanged.
+See the [extractor semantics](../handshake_capture/README.md) for byte layers,
+retransmissions, frame-completion endpoints and IPv4 limitations.
+
+Lightweight validation:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s campaigns/original_campaigns/controlled_n16_campaign -p test_capture.py
+```
+
+Tests cover mocked readiness/drain/SIGINT/readability coordination, observation
+joining, extractor delegation, null failure metrics, key-log mismatch, disabled
+capture, warmups and source transformation guards. A tiny synthetic PCAP is read
+by local tcpdump when available. These checks are not an end-to-end Docker/TLS
+validation; a live capture remains unexecuted. No full campaign was run for this
+integration. Latency, bandwidth, loss and combined campaigns remain unchanged.
