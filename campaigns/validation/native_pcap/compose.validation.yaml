@@ -1,0 +1,23 @@
+services:
+  server:
+    image: ${VALIDATION_NETWORK_IMAGE:-mt-tls-network:latency}
+    volumes:
+      - ../../campaigns/validation/native_pcap:/opt/native-pcap-validation:ro
+    command: ["python3", "/opt/native-pcap-validation/server.py"]
+
+  client:
+    image: ${VALIDATION_NETWORK_IMAGE:-mt-tls-network:latency}
+    volumes:
+      - ../../campaigns/validation/native_pcap:/opt/native-pcap-validation:ro
+    environment:
+      PYTHONPATH: /opt/measurement
+      VALIDATION_NETWORK_FAMILY: ${VALIDATION_NETWORK_FAMILY:-latency}
+    entrypoint: ["/opt/native-pcap-validation/client.sh"]
+    command: []
+
+  capture:
+    environment:
+      MEASUREMENT_PCAP_CLIENT_RANDOM_STREAM: "1"
+    image: ${VALIDATION_CAPTURE_IMAGE:-mt-tls-capture:local}
+    volumes:
+      - ../../campaigns/validation/native_pcap:/opt/native-pcap-validation:ro

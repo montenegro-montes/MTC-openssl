@@ -64,6 +64,30 @@ class MetricsTests(unittest.TestCase):
         rows=fixture(); rows[4]['tls.handshake.type']=''
         with self.assertRaisesRegex(ValueError,'Finished'): handshake_metrics(rows,4433)
 
+    def test_syn_ack_timestamp_may_precede_syn_when_metric_boundaries_are_valid(self):
+        rows = fixture()
+
+        # Cross-direction capture timestamps may be slightly inverted even
+        # though the protocol/frame order is unambiguous. SYN-ACK time is
+        # not an endpoint of any published duration.
+        rows[1]['frame.time_epoch'] = '9.999'
+
+        m = handshake_metrics(rows, 4433)
+
+        self.assertEqual(m['tcp_connect_wall_ms'], 2)
+        self.assertEqual(m['tls_from_pcap_wall_ms'], 2)
+        self.assertEqual(m['connection_handshake_wall_ms'], 4)
+        self.assertEqual(
+            [m[k + '_frame'] for k in (
+                'syn',
+                'syn_ack',
+                'tcp_established',
+                'client_hello',
+                'client_finished',
+            )],
+            [1, 2, 3, 3, 5],
+        )
+
     def test_bad_ack_ipv6_lengths_and_timestamp_fail(self):
         for index,key,value in ((2,'tcp.ack_raw','999'),(0,'ipv6.src','::1'),
                                 (2,'ip.len','9999'),(4,'frame.time_epoch','9')):

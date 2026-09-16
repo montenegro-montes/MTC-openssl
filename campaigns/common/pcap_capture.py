@@ -190,6 +190,12 @@ def analyze(campaign, allow_failed=False):
             if not random and len({e[1].lower() for e in entries})>1:
                 raise RuntimeError('ambiguous failed observation key log')
             command=[sys.executable,str(EXTRACTOR),str(directory)]
+            random_stream = (os.environ.get('MEASUREMENT_PCAP_CLIENT_RANDOM_STREAM') == '1'
+                             and (not failed or bool(random)))
+            if random_stream:
+                if not re.fullmatch(r'[0-9a-f]{64}', random):
+                    raise RuntimeError('missing or malformed native client_random')
+                command += ['--client-random', random]
             if failed: command.append('--allow-incomplete')
             proc=subprocess.run(command,text=True,capture_output=True,timeout=60)
             (directory/'analysis.log').write_text(proc.stdout+proc.stderr)
@@ -201,6 +207,9 @@ def analyze(campaign, allow_failed=False):
             if summary.get('pcap_sha256') != actual_hash:
                 raise RuntimeError('PCAP hash does not match extractor output')
             metrics=summary['scenarios'][0]
+            if random_stream and (metrics.get('client_random') != random
+                                  or not isinstance(metrics.get('tcp_stream'), int)):
+                raise RuntimeError('extractor client_random/stream association mismatch')
             partial = metrics.get('pcap_analysis_status')=='PARTIAL'
             if partial and not failed:
                 raise RuntimeError('successful TLS observation has incomplete PCAP boundaries')

@@ -1,5 +1,5 @@
 """Extract per-packet and per-scenario summaries with tshark."""
-import argparse,csv,hashlib,json,subprocess
+import argparse,csv,hashlib,json,re,subprocess
 from pathlib import Path
 from decimal import Decimal
 
@@ -7,6 +7,29 @@ FIELDS=['frame.number','frame.time_epoch','frame.len','ip.src','ip.dst','tcp.src
 FIELDS += ['ip.len', 'ipv6.src', 'tcp.stream', 'tcp.flags.syn', 'tcp.flags.ack',
            'tcp.seq_raw', 'tcp.ack_raw', 'tcp.analysis.fast_retransmission',
            'tcp.analysis.spurious_retransmission']
+
+
+def client_random_stream(pcap, client_random, server_port):
+    """Ask tshark for ClientHello matches; reuse tcp_stream in the existing extractor."""
+    if not isinstance(client_random, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", client_random):
+        raise ValueError("missing or malformed native client_random")
+    if not isinstance(server_port, int) or not 1 <= server_port <= 65535:
+        raise ValueError("invalid server port")
+    random_bytes = ":".join(client_random[i:i+2] for i in range(0,64,2)).lower()
+    display_filter = (f"tcp.dstport == {server_port} && tls.handshake.type == 1 "
+                      f"&& tls.handshake.random == {random_bytes}")
+    result = subprocess.run(["tshark", "-2", "-r", str(pcap), "-Y", display_filter,
+                             "-T", "fields", "-e", "tcp.stream"],
+                            text=True, capture_output=True, check=True, timeout=60)
+    values = result.stdout.splitlines()
+    if not values:
+        raise ValueError("no ClientHello matches native client_random")
+    if any(not re.fullmatch(r"[0-9]+", value) for value in values):
+        raise ValueError("invalid or ambiguous ClientHello tcp_stream output")
+    streams = {int(value) for value in values}
+    if len(streams) != 1:
+        raise ValueError("multiple streams match native client_random")
+    return streams.pop()
 
 
 def handshake_metrics(rows, server_port, stream=None, allow_incomplete=False):
@@ -122,8 +145,14 @@ def handshake_metrics(rows, server_port, stream=None, allow_incomplete=False):
         raise ValueError('invalid handshake boundary order')
     interval = [r for r in flow if indices[0] <= number(r, 'frame.number') <= indices[-1]]
     stamps = [Decimal(r['frame.time_epoch']) for r in interval]
-    if any(not t.is_finite() for t in stamps) or stamps != sorted(stamps):
-        raise ValueError('non-monotonic or invalid capture timestamps')
+    if any(not t.is_finite() for t in stamps):
+        raise ValueError('invalid capture timestamps')
+    if not (
+        times[2] >= times[0] and
+        times[4] >= times[3] and
+        times[4] >= times[0]
+    ):
+        raise ValueError('invalid handshake timing boundaries')
     totals = {key: sum(number(r, key) for r in interval)
               for key in ('frame.len', 'ip.len', 'tcp.len')}
     if any(not (number(r,'frame.len') >= number(r,'ip.len') >= number(r,'tcp.len') >= 0) for r in interval):
@@ -147,7 +176,7 @@ def handshake_metrics(rows, server_port, stream=None, allow_incomplete=False):
 
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('root',type=Path);parser.add_argument('--allow-incomplete',action='store_true');args=parser.parse_args();root=args.root.resolve();pcap=root/'handshakes.pcap';keys=root/'tls.keys'
+    parser=argparse.ArgumentParser();parser.add_argument('root',type=Path);parser.add_argument('--allow-incomplete',action='store_true');parser.add_argument('--client-random');args=parser.parse_args();root=args.root.resolve();pcap=root/'handshakes.pcap';keys=root/'tls.keys'
     command=['tshark','-2','-r',str(pcap)]
     if keys.exists() or not args.allow_incomplete: command+=['-o',f'tls.keylog_file:{keys}']
     command+=['-Y','tcp','-T','fields']
@@ -157,7 +186,18 @@ def main():
     connections=json.loads((root/'connections.json').read_text());rows=list(csv.DictReader(result.stdout.splitlines()));summary=[]
     for item in connections:
         port=str(item['server_port']);selected=[r for r in rows if r['tcp.srcport']==port or r['tcp.dstport']==port]
-        metrics=handshake_metrics(rows, item['server_port'], item.get('tcp_stream'),allow_incomplete=args.allow_incomplete)
+        stream = item.get('tcp_stream')
+        if args.client_random is not None:
+            matched = client_random_stream(pcap, args.client_random, item['server_port'])
+            if stream is not None and str(stream) != str(matched):
+                raise ValueError('configured tcp_stream conflicts with native client_random')
+            stream = matched
+        metrics=handshake_metrics(rows, item['server_port'], stream,allow_incomplete=args.allow_incomplete)
+        if args.client_random is not None:
+            if metrics.get('tcp_stream') != stream:
+                raise ValueError('extractor stream association mismatch')
+            metrics['client_random'] = args.client_random.lower()
+            selected = [r for r in selected if r['tcp.stream'] == str(stream)]
         summary.append({'scenario':item['scenario'],'server_port':item['server_port'],'packets':len(selected),'wire_bytes':sum(int(r['frame.len'] or 0) for r in selected),'tcp_payload_bytes':sum(int(r['tcp.len'] or 0) for r in selected),'retransmission_frames':sum(bool(r['tcp.analysis.retransmission']) for r in selected),'tls_handshake_types':sorted({value for r in selected for value in r['tls.handshake.type'].split(',') if value})})
         summary[-1].update(metrics)
     output={'pcap_sha256':hashlib.sha256(pcap.read_bytes()).hexdigest(),'tls_decryption_keylog_used':keys.exists(), 'allow_incomplete':args.allow_incomplete,'scenarios':summary};(root/'summary.json').write_text(json.dumps(output,indent=2)+'\n');print(root/'summary.json')
