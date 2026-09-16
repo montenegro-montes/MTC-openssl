@@ -22,7 +22,7 @@ meta={'draft':'draft-ietf-plants-merkle-tree-certs-05','trust_anchor_draft':'dra
       'configuration':{'tls':'1.3','group':'X25519','cipher':'TLS_AES_256_GCM_SHA384','resumption':False,'tickets':False,'new_client_per_sample':True,'persistent_servers':True,'detail':0},
       'deviations':['private trust_anchors codepoint 0xffa7','exact ID matching only; no groups/retry','single initial log/landmark snapshot','local cosigner; no public transparency','direct CA and X509 leaf validation; no general MTC PKIX chains'],
       'byte_definitions':{'transport':'TLS BIO bytes through client handshake-done, no network headers or retransmissions','certificate_message':'TLS handshake header plus body','certificate_verify':'TLS handshake header plus body; not a Merkle proof','mtc_certificate':'DER','mtc_tbs':'DER TBSCertificate','mtc_inclusion_proof':'hash array payload excluding vector length','mtc_signature':'raw CA subtree signature','mtc_cosignature':'raw additional signatures','mtc_checkpoint':'zero in TLS; separate OOB trust file','mtc_landmark_reference':'12 bytes MTCProof start/end; no explicit landmark number in certificate','mtc_predistributed':'entire local landmark configuration file, including trust keys/signatures'},
-      'timing_definitions':{'handshake':'same INFO start/done wall/process CPU as profile phase','mtc_setup':'per-client config loading plus landmark validation before handshake','mtc_trust_validation':'checkpoint signatures checked in setup','client_process_http':'subprocess start through successful HTTP and exit'},
+      'timing_definitions':{'handshake':'same INFO start/done wall/process CPU as profile phase','tcp_connect_wall_ms_native':'native connection entry to successful return (init_client in current s_client, BIO_do_connect where available); may include resolver/address selection; not equal to PCAP TCP timing','connection_establishment_wall_ms_native':'original native connect entry through SSL_CB_HANDSHAKE_DONE, including the application gap; client side only','mtc_setup':'per-client config loading plus landmark validation before handshake','mtc_trust_validation':'checkpoint signatures checked in setup','client_process_http':'subprocess start through successful HTTP and exit'},
       'timing_limit':'new process each sample, not persistent application cache; paired-round intervals conditional on this run'}
 for name,path in {'openssl_commit':'/opt/openssl/SOURCE_COMMIT','liboqs_commit':'/opt/oqs/SOURCE_COMMIT','oqs_provider_commit':'/opt/oqs/PROVIDER_COMMIT','mtc_hash':'/opt/openssl-mtc/MTC_SHA256','compact_hash':'/opt/openssl-compact/COMPACT_SHA256','profile_hash':'/opt/openssl-profile/PROFILE_SHA256'}.items():meta[name]=Path(path).read_text().strip()
 meta['versions']={'openssl':'3.5.8','liboqs':'0.14.0','oqs_provider':'0.10.0'}
@@ -58,6 +58,7 @@ def sample(scenario,round_number,order,warm):
          'mtc_mode':mode,'tree_size':fixture[family]['tree_size'],'root_or_landmark_distribution':'predistributed' if mode=='landmark' or scenario.endswith('-warm') else ('in-handshake' if mtc or comp else 'CA-or-pin'),
          'scenario':scenario,'round':round_number,'order':order,'client_random':key,
          'handshake_wall_ms':m['handshake_wall_ms'],'handshake_client_cpu_ms':m['handshake_cpu_ms'],'handshake_server_cpu_ms':server['handshake_cpu_ms'],'handshake_total_cpu_ms':m['handshake_cpu_ms']+server['handshake_cpu_ms'],
+         'tcp_connect_wall_ms_native':m.get('tcp_connect_wall_ms_native'),'connection_establishment_wall_ms_native':m.get('connection_establishment_wall_ms_native'),
          'transport_read_bytes':m['transport_read_bytes'],'transport_written_bytes':m['transport_written_bytes'],'transport_total_bytes':m['transport_read_bytes']+m['transport_written_bytes'],
          'certificate_message_bytes':m['certificate_message_bytes'],'certificate_verify_bytes':m['certificate_verify_message_bytes'],'encrypted_extensions_bytes':m['encrypted_extensions_bytes'],'client_process_http_wall_ms':wall}
     fields=['mtc_certificate_bytes','mtc_tbs_bytes','mtc_inclusion_proof_bytes','mtc_proof_encoded_bytes','mtc_signature_bytes','mtc_cosignature_bytes','mtc_checkpoint_bytes','mtc_landmark_reference_bytes','mtc_predistributed_bytes']
@@ -77,11 +78,14 @@ for warm,rounds in [(True,a.warmup),(False,a.runs)]:
         for i,scenario in enumerate(order):sample(scenario,r,i,warm)
         print('warmup' if warm else 'round',r+1,flush=True)
 metrics=[k for k,v in rows[0].items() if isinstance(v,(int,float)) and k not in ['round','order','tree_size']]
+for name in ['tcp_connect_wall_ms_native','connection_establishment_wall_ms_native']:
+    if name not in metrics: metrics.append(name)
 summary=[]
 for scenario in a.scenarios:
     group=[r for r in rows if r['scenario']==scenario];row={'scenario':scenario,'n':len(group)}
     for metric in metrics:
-        values=[r[metric] for r in group]
+        values=[r[metric] for r in group if r.get(metric) is not None]
+        if not values: continue
         for suffix,fn in [('median',statistics.median),('min',min),('max',max)]:row[metric+'_'+suffix]=fn(values)
     summary.append(row)
 write_csv(out/'summary.csv',summary)
@@ -96,7 +100,9 @@ for left,right in pairs:
     for metric in ['transport_total_bytes','handshake_wall_ms','handshake_client_cpu_ms','handshake_total_cpu_ms','client_process_http_wall_ms']:
         x={r['round']:r[metric] for r in rows if r['scenario']==left};y={r['round']:r[metric] for r in rows if r['scenario']==right}
         dif=[x[i]-y[i] for i in sorted(x)];boots=sorted(statistics.median(rng.choices(dif,k=len(dif))) for _ in range(2000))
-        comparisons.append({'scenario':left,'baseline':right,'metric':metric,'paired_delta_median':statistics.median(dif),'bootstrap95_low':boots[49],'bootstrap95_high':boots[1949],
+        comparisons.append({'scenario':left,'baseline':right,'metric':metric,
+                            'paired_delta_median':statistics.median(dif),'bootstrap95_low':boots[49],
+                            'bootstrap95_high':boots[1949],
                             'percentage_byte_difference':100*(statistics.median(x.values())/statistics.median(y.values())-1) if metric=='transport_total_bytes' else '',
                             'protocol_equivalent':False})
 write_csv(out/'comparisons.csv',comparisons)

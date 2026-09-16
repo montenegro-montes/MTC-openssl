@@ -131,6 +131,18 @@ s=once(s,'    OPENSSL_free(der);','    OPENSSL_free(der);\n    SSL_profile_end(s
 shutil.copyfile(here/'metrics.c',source/'apps/metrics.c')
 for app in ['s_client','s_server']:
     p=source/'apps'/f'{app}.c';s=p.read_text()
+    if app == 's_client':
+        s=once(s,'#include "compact.h"','#include "compact.h"\n#include "ssl/profile.h"')
+        if 'BIO_do_connect(sbio)' in s:
+            s=once(s,'BIO_do_connect(sbio)','lab_metrics_connect(con, sbio)')
+        else:
+            # Current OpenSSL s_client resolves/connects through init_client.
+            s=once(s,'    if (init_client(&sock, host, port, bindhost, bindport, socket_family,',
+                   '    lab_metrics_connect_start(con);\n    if (init_client(&sock, host, port, bindhost, bindport, socket_family,')
+            s=once(s,'        BIO_printf(bio_err, "connect:errno=%d\\n", get_last_socket_error());',
+                   '        lab_metrics_connect_done(con, 0);\n        BIO_printf(bio_err, "connect:errno=%d\\n", get_last_socket_error());')
+            s=once(s,'    BIO_printf(bio_c_out, "CONNECTED(%08X)\\n", sock);',
+                   '    lab_metrics_connect_done(con, 1);\n    BIO_printf(bio_c_out, "CONNECTED(%08X)\\n", sock);')
     s=once(s,'    OPT_COMMON,','    OPT_COMMON,\n    OPT_PROFILE_RPK_ONLY,')
     extra='    {"profile_rpk_only", OPT_PROFILE_RPK_ONLY, \'-\', "Diagnostic RPK-only negotiation"},\n'
     s=once(s,'#include "compact.h"','#include "compact.h"\nstatic int profile_rpk_only = 0;\nstatic const unsigned char profile_rpk_type[] = { TLSEXT_cert_type_rpk };')

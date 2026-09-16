@@ -12,4 +12,7 @@ int SSL_profile_reset(SSL *s, int enabled);
 void SSL_profile_begin(SSL *s, int category);
 void SSL_profile_end(SSL *s, int category);
 int SSL_profile_snapshot(SSL *s, double *wall, double *cpu, unsigned long *calls, size_t count);
+int lab_metrics_connect(SSL *ssl, BIO *bio);
+void lab_metrics_connect_start(SSL *ssl);
+void lab_metrics_connect_done(SSL *ssl, int success);
 #endif

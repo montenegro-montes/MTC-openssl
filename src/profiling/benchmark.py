@@ -29,6 +29,7 @@ metadata={'detail':detail,'runs':a.runs,'warmup':a.warmup,'seed':a.seed,'scenari
     'platform':platform.platform(),'cpus':os.cpu_count(),'pins':{s:pin(s) for s in ['classic','pq']},
     'pin_scope':'trusted local mapping server -> SHA256(SPKI); no DNS query, chain, validity or batch semantics',
     'timing_scope':'endpoint handshake wall and process CPU; setup/TCP/HTTP excluded',
+    'native_connection_timing':'native connect entry to successful return for TCP (current s_client: init_client); original connect entry to SSL_CB_HANDSHAKE_DONE for full establishment; resolver/address selection included, distinct from PCAP packet boundaries',
     'components_scope':'inclusive timers, nested categories must not be summed',
     'join':'TLS ClientHello random, not a new extension','batch':str(BATCH)}
 for name in ['cpu.max','memory.max']:
@@ -80,6 +81,7 @@ def sample(scenario,round_number,warm):
     setup=json.loads(bootstrap[0]) if bootstrap else {'wall_ms':0,'cpu_ms':0}
     row={'scenario':scenario,'round':round_number,'client_random':key,'detail':detail,
          'client_handshake_wall_ms':client['handshake_wall_ms'],'client_handshake_cpu_ms':client['handshake_cpu_ms'],
+         'tcp_connect_wall_ms_native':client.get('tcp_connect_wall_ms_native'),'connection_establishment_wall_ms_native':client.get('connection_establishment_wall_ms_native'),
          'server_handshake_wall_ms':server['handshake_wall_ms'],'server_handshake_cpu_ms':server['handshake_cpu_ms'],
          'combined_handshake_cpu_ms':client['handshake_cpu_ms']+server['handshake_cpu_ms'],
          'client_process_http_wall_ms':wall,'root_signature_setup_wall_ms':setup['wall_ms'],'root_signature_setup_cpu_ms':setup['cpu_ms'],
@@ -100,7 +102,9 @@ fields=[name for name in rows[0] if name not in ['scenario','round','client_rand
 summary=[]
 for scenario in SCENARIOS:
     group=[r for r in rows if r['scenario']==scenario];entry={'scenario':scenario,'n':len(group)}
-    for field in fields:entry[field+'_median']=statistics.median(r[field] for r in group)
+    for field in fields:
+        values=[r[field] for r in group if r.get(field) is not None]
+        if values: entry[field+'_median']=statistics.median(values)
     summary.append(entry)
 csv_write(output/'summary.csv',summary)
 parts=[]

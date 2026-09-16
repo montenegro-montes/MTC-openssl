@@ -60,3 +60,35 @@ successive Docker Desktop blocks do not isolate that cost causally. These are
 local exploratory results without latency or bandwidth emulation.
 
 See the [profiling results](../../docs/profile-results.md).
+
+## Native connection timing (Stage 6C)
+
+`tcp_connect_wall_ms_native` measures native connection entry to successful
+return. The current OpenSSL `s_client` uses `init_client`, which performs
+resolver/address selection and socket connection. Versions using
+`BIO_do_connect` are instrumented around that call instead. This boundary is
+not identical to the packet-based PCAP `tcp_connect_wall_ms`.
+
+`connection_establishment_wall_ms_native` measures the original native connect
+entry through the existing `SSL_CB_HANDSHAKE_DONE` timestamp. It includes any
+application gap before TLS starts; it is not calculated by adding TCP and TLS
+durations. Both timestamps use `CLOCK_MONOTONIC` and belong to the individual
+SSL connection, with state reset before each connection attempt.
+
+`handshake_wall_ms` retains its existing `SSL_CB_HANDSHAKE_START` to
+`SSL_CB_HANDSHAKE_DONE` interval. PCAP extraction is independent: diagnostic
+pairs are native TCP versus `tcp_connect_wall_ms`, TLS versus
+`tls_from_pcap_wall_ms`, and full establishment versus
+`connection_handshake_wall_ms`. Equality is not required.
+
+Successful handshakes include both native values in `PROFILE_METRICS`.
+`NATIVE_CONNECTION_METRICS` is also emitted when the SSL object is freed:
+failed connections have both values `null`; successful connections followed
+by incomplete TLS retain numeric TCP timing and `null` full timing. Failed
+attempts do not acquire a fabricated successful campaign observation.
+Forced process termination may prevent this final diagnostic record.
+
+The small offline test `python3 src/profiling/test_native_timing.py` compiles
+against host OpenSSL headers/libraries (`OPENSSL_PREFIX` overrides the prefix)
+and checks boundaries, a deterministic application gap, connection isolation,
+and numeric/null JSON. It opens no network connections.
