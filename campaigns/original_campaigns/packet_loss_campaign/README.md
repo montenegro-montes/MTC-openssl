@@ -172,22 +172,77 @@ is shown, or create a venv using `campaigns/original_campaigns/scaling_campaign/
 - `plots/`: four supported figures. Figure 5 is deliberately omitted because
   per-connection retransmission attribution is unavailable.
 
-## Optional capture for one validation campaign
+## Optional PCAP instrumentation (Stage 6B.3)
 
-Capture is deliberately outside the full runner. In one terminal, after a smoke
-server is running, identify its container and capture only the selected validation:
+The runner accepts `--pcap`, disabled by default. Use a new initialized result
+root for the captured population. With capture off, no tcpdump sidecar, tshark
+extraction or keylog is needed; scientific success/failure CSV schemas remain
+unchanged. With capture on, the shared core captures each measured attempt
+(one PCAP per observation), including failures, but excludes ordinary warmups.
+The separate `mt-tls-capture:local` image must already be available; the runner
+does not install tools inside validated measurement containers.
 
-```sh
-mkdir -p "$LOSS_ROOT/captures"
-SERVER_ID=$(docker compose -f docker/original_campaigns/compose.network-loss.yaml ps -q server)
-docker exec "$SERVER_ID" timeout 60 tcpdump -i eth0 -w /tmp/selected-loss.pcap
-docker cp "$SERVER_ID:/tmp/selected-loss.pcap" "$LOSS_ROOT/captures/"
-```
+The sidecar shares the server network namespace and captures `eth0`, filtered
+by the observation's server port. Existing qdisc and ping validation precedes
+capture. Readiness has its own 8-second bound; the unchanged TLS timeout is
+30 seconds with no retry. Finalization has a separate 12-second allowance
+(1.2-second drain, up to 5 seconds for SIGINT close and 5 for readability),
+followed by at most 60 seconds of Stage-1 analysis per observation. Teardown
+follows finalization/analysis and the existing qdisc/nstat post-driver evidence.
+An external client/container kill may prevent a failure row or native diagnostic
+from being emitted; missing/ambiguous observation association fails closed.
+The existing attempt-accounting gate still invalidates an incomplete campaign.
 
-The current network image may not contain `tcpdump`; if absent, do not install it
-inside a running validated container. Build and record a separate capture image.
-Capture bytes are network-wire observations and must remain separate from TLS BIO
-counters. Capture is optional and not used by the default analysis.
+Artifacts under each campaign directory:
+
+- `pcap/sample-<round>-<scenario>/`: identity, readiness, tcpdump log, keylog,
+  PCAP, capture/TLS status, Stage-1 summary and `derived.json`.
+- `pcap-metrics.jsonl`: independent `tls_status`, `capture_status` and
+  `analysis_status`, identity, integrity and derived metrics.
+- `native-timing.json` beside a failed capture: only emitted native timing,
+  or explicit nulls, without changing the original failure CSV columns.
+
+Success retains the Stage-1 SYN → client Finished timing/byte/packet interval
+and ClientHello → client Finished TLS timing. Failure enables the same
+extractor's explicit `--allow-incomplete` mode. A normal SYN/SYN-ACK/final ACK
+can yield TCP timing even without TLS completion. Missing client Finished leaves
+TLS/full connection timing and all successful-handshake packet/byte counts null.
+No timeout or last-packet timestamp substitutes for handshake completion.
+Valid incomplete evidence reports `TLS_MEASUREMENT_FAILURE / SUCCESS / PARTIAL`;
+a capture failure is independent of TLS outcome and prevents extraction.
+Malformed/ambiguous evidence or a hash mismatch remains an analysis/integrity
+failure, not a partial success. Empty captures are not scientific zero traffic.
+
+Partial diagnostics describe observed boundaries, `last_observed_frame`,
+`capture_packet_count` and `capture_retransmission_frames` across the entire
+selected captured TCP attempt. The success metric
+`connection_handshake_retransmission_frames` keeps its SYN → client Finished
+interval. Both count a frame once if tshark marks retransmission, fast
+retransmission or spurious retransmission. No elapsed partial interval is added.
+
+Association requires a unique `(campaign_id, round_id, scenario, is_warmup)`
+with matching order where recorded. Successful observations also require matching
+client_random/keylog. A failed attempt can lack client_random and keylog; it then
+reports `association_confidence=observation_tuple_only`. It is never attached
+by guessing a random or selecting another observation. Actual PCAP SHA-256 must
+match capture status and extractor output for either success or partial analysis.
+
+The server capture sees packets reaching that namespace and packets leaving at
+its capture point. It may miss packets dropped on client egress before arrival.
+PCAP retransmissions, qdisc drops and namespace nstat counters are complementary;
+they must not be equated. Existing loss configuration/ping validation remains
+authoritative; PCAP does not estimate or validate configured loss.
+
+`handshake_wall_ms` remains the primary timing metric. Native connection timings
+retain their original boundaries. Failure/forced termination may leave native
+metrics unavailable; zero is never fabricated. Captured and uncaptured packet-loss
+observations are separate measurement populations and must not be pooled for
+inference merely because metric names match. Failures remain in outcome accounting.
+Instrumentation smoke captures provide no performance conclusions.
+
+Use the common read-only `bin/artifacts/mt-report <result-directory>` for derived
+HTML. Incomplete attempts show available evidence and unavailable metrics without
+a completed TLS timeline. The scientific analyzer and its statistics are unchanged.
 
 ## Step 10 — cleanup
 

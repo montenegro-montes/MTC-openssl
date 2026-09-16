@@ -9,7 +9,7 @@ FIELDS += ['ip.len', 'ipv6.src', 'tcp.stream', 'tcp.flags.syn', 'tcp.flags.ack',
            'tcp.analysis.spurious_retransmission']
 
 
-def handshake_metrics(rows, server_port, stream=None):
+def handshake_metrics(rows, server_port, stream=None, allow_incomplete=False):
     """IPv4 capture accounting; fail closed on missing/ambiguous boundaries."""
     def number(r, key):
         value = r.get(key, '')
@@ -34,10 +34,49 @@ def handshake_metrics(rows, server_port, stream=None):
         raise ValueError('only single-layer IPv4 flows are supported')
     if len({number(r, 'frame.number') for r in flow}) != len(flow):
         raise ValueError('duplicate frame numbers')
+    def partial(reason, syn=None, established=None):
+        if not allow_incomplete:
+            raise ValueError(reason)
+        stamps = [Decimal(r['frame.time_epoch']) for r in flow]
+        if any(not t.is_finite() for t in stamps) or stamps != sorted(stamps):
+            raise ValueError('non-monotonic or invalid capture timestamps')
+        if any(not (number(r,'frame.len') >= number(r,'ip.len') >= number(r,'tcp.len') >= 0) for r in flow):
+            raise ValueError('inconsistent frame/IP/TCP lengths')
+        endpoints = {frozenset(((r['ip.src'],r['tcp.srcport']),
+                               (r['ip.dst'],r['tcp.dstport']))) for r in flow}
+        if len(endpoints) != 1:
+            raise ValueError('inconsistent stream endpoints')
+        def client_tls(kind):
+            return [r for r in flow if r['tcp.dstport'] == str(server_port)
+                    and kind in r.get('tls.handshake.type','').split(',')]
+        hellos, finishes = client_tls('1'), client_tls('20')
+        if len(hellos) > 1 or len(finishes) > 1:
+            raise ValueError('ambiguous ClientHello/client Finished')
+        if finishes:
+            raise ValueError('client Finished observed without complete normal boundaries')
+        if established and hellos and number(hellos[0],'frame.number') < number(established,'frame.number'):
+            raise ValueError('invalid handshake boundary order')
+        result = {k:None for k in (
+            'tcp_connect_wall_ms','tls_from_pcap_wall_ms','connection_handshake_wall_ms',
+            'connection_handshake_packets','connection_handshake_frame_bytes',
+            'connection_handshake_ip_bytes','connection_handshake_tcp_payload_bytes',
+            'connection_handshake_retransmission_frames')}
+        if syn and established:
+            result['tcp_connect_wall_ms'] = float((Decimal(established['frame.time_epoch'])-Decimal(syn['frame.time_epoch']))*1000)
+        result.update(tcp_stream=int(stream),pcap_analysis_status='PARTIAL',
+                      incomplete_reason=reason,tcp_established_observed=established is not None,
+                      client_hello_observed=bool(hellos),client_finished_observed=False,
+                      last_observed_frame=number(flow[-1],'frame.number'),capture_packet_count=len(flow),
+                      capture_retransmission_frames=sum(any(r.get(k) for k in (
+                          'tcp.analysis.retransmission','tcp.analysis.fast_retransmission',
+                          'tcp.analysis.spurious_retransmission')) for r in flow))
+        return result
     syns = [r for r in flow if flag(r, 'tcp.flags.syn') and not flag(r, 'tcp.flags.ack')]
     if not syns:
-        raise ValueError('initial SYN missing')
+        return partial('initial SYN missing')
     syn = syns[0]
+    if allow_incomplete and number(syn,'tcp.len'):
+        raise ValueError('TCP Fast Open is outside this extractor subset')
     client = (syn['ip.src'], syn['tcp.srcport'])
     server = (syn['ip.dst'], syn['tcp.dstport'])
     if server[1] != str(server_port):
@@ -55,7 +94,7 @@ def handshake_metrics(rows, server_port, stream=None):
     replies = [r for r in flow if after(r, syn) and direction(r) == 'server'
                and flag(r, 'tcp.flags.syn') and flag(r, 'tcp.flags.ack')
                and number(r, 'tcp.ack_raw') == next_seq(syn)]
-    if not replies: raise ValueError('matching SYN-ACK missing')
+    if not replies: return partial('matching SYN-ACK missing',syn)
     syn_ack = replies[0]
     if number(syn, 'tcp.len') or any(number(r, 'tcp.len') for r in replies):
         raise ValueError('TCP Fast Open is outside this extractor subset')
@@ -65,12 +104,14 @@ def handshake_metrics(rows, server_port, stream=None):
             and not flag(r, 'tcp.flags.syn') and flag(r, 'tcp.flags.ack')
             and number(r, 'tcp.seq_raw') == next_seq(syn)
             and number(r, 'tcp.ack_raw') == next_seq(syn_ack)]
-    if not acks: raise ValueError('final TCP handshake ACK missing')
+    if not acks: return partial('final TCP handshake ACK missing',syn)
     established = acks[0]
     def tls_frames(kind):
         return [r for r in flow if direction(r) == 'client'
                 and kind in r.get('tls.handshake.type', '').split(',')]
     hellos, finishes = tls_frames('1'), tls_frames('20')
+    if len(hellos) <= 1 and not finishes and allow_incomplete:
+        return partial('client Finished unavailable',syn,established)
     if len(hellos) != 1 or len(finishes) != 1:
         raise ValueError('unique ClientHello/client Finished unavailable; check decryption, reassembly or retries')
     hello, finished = hellos[0], finishes[0]
@@ -106,16 +147,18 @@ def handshake_metrics(rows, server_port, stream=None):
 
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('root',type=Path);args=parser.parse_args();root=args.root.resolve();pcap=root/'handshakes.pcap';keys=root/'tls.keys'
-    command=['tshark','-2','-r',str(pcap),'-o',f'tls.keylog_file:{keys}','-Y','tcp','-T','fields']
+    parser=argparse.ArgumentParser();parser.add_argument('root',type=Path);parser.add_argument('--allow-incomplete',action='store_true');args=parser.parse_args();root=args.root.resolve();pcap=root/'handshakes.pcap';keys=root/'tls.keys'
+    command=['tshark','-2','-r',str(pcap)]
+    if keys.exists() or not args.allow_incomplete: command+=['-o',f'tls.keylog_file:{keys}']
+    command+=['-Y','tcp','-T','fields']
     for field in FIELDS:command+=['-e',field]
     command+=['-E','header=y','-E','separator=,','-E','quote=d','-E','occurrence=a']
     result=subprocess.run(command,text=True,capture_output=True,check=True);(root/'tshark.log').write_text(result.stderr);(root/'packets.csv').write_text(result.stdout)
     connections=json.loads((root/'connections.json').read_text());rows=list(csv.DictReader(result.stdout.splitlines()));summary=[]
     for item in connections:
         port=str(item['server_port']);selected=[r for r in rows if r['tcp.srcport']==port or r['tcp.dstport']==port]
-        metrics=handshake_metrics(rows, item['server_port'], item.get('tcp_stream'))
+        metrics=handshake_metrics(rows, item['server_port'], item.get('tcp_stream'),allow_incomplete=args.allow_incomplete)
         summary.append({'scenario':item['scenario'],'server_port':item['server_port'],'packets':len(selected),'wire_bytes':sum(int(r['frame.len'] or 0) for r in selected),'tcp_payload_bytes':sum(int(r['tcp.len'] or 0) for r in selected),'retransmission_frames':sum(bool(r['tcp.analysis.retransmission']) for r in selected),'tls_handshake_types':sorted({value for r in selected for value in r['tls.handshake.type'].split(',') if value})})
         summary[-1].update(metrics)
-    output={'pcap_sha256':hashlib.sha256(pcap.read_bytes()).hexdigest(),'tls_decryption_keylog_used':True,'scenarios':summary};(root/'summary.json').write_text(json.dumps(output,indent=2)+'\n');print(root/'summary.json')
+    output={'pcap_sha256':hashlib.sha256(pcap.read_bytes()).hexdigest(),'tls_decryption_keylog_used':keys.exists(), 'allow_incomplete':args.allow_incomplete,'scenarios':summary};(root/'summary.json').write_text(json.dumps(output,indent=2)+'\n');print(root/'summary.json')
 if __name__=='__main__':main()

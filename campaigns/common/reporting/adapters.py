@@ -59,7 +59,8 @@ def load(source):
                     model['metrics'] += [(name,row) for row in metric_records(data)]
                 for key,value in leaves(data):
                     terminal=key.rsplit('.',1)[-1]
-                    if (terminal in ('passed','hash_match','association_valid','source_and_fixture_hashes_unchanged') and value is False) or (terminal.endswith('status') and isinstance(value,str) and any(x in value.upper() for x in ('FAIL','ERROR'))):
+                    if (terminal in ('passed','hash_match','association_valid','source_and_fixture_hashes_unchanged') and value is False) or (terminal.endswith('status') and terminal!='tls_status' and path.name!='tls-status.json'
+                            and isinstance(value,str) and any(x in value.upper() for x in ('FAIL','ERROR'))):
                         model['warnings'].append(f'{name}: {key} = {value}')
                 if path.name in ('capture-status.json','summary.json') and isinstance(data,dict) and data.get('pcap_sha256'):
                     pcap=path.parent/'handshakes.pcap'

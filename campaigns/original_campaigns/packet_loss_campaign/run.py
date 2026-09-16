@@ -3,6 +3,7 @@ import argparse,csv,datetime,hashlib,json,os,random,re,subprocess,sys
 from pathlib import Path
 from config import *
 from network import *
+from pcap_adapter import capture_session
 
 REPO=Path(__file__).resolve().parents[3]
 COMPOSE=['docker','compose','-f',str(REPO/'docker/original_campaigns/compose.network-loss.yaml')]
@@ -54,16 +55,17 @@ def parse_nstat(text):
         if not match:raise RuntimeError('Missing nstat '+name)
         values[name]=int(match.group(1))
     return values
-def execute(root,mode):
+def execute(root,mode,pcap=False):
     gate=load(root/'tests-status.json');image=json.loads(subprocess.check_output(['docker','image','inspect',IMAGE],text=True))[0]['Id']
     if not gate['passed'] or gate['image_id']!=image:raise SystemExit('ABORT: tested image mismatch')
     if mode!='preflight' and not load(root/'preflight-status.json')['passed']:raise SystemExit('ABORT: preflight has not passed')
     if mode=='full' and not load(root/'smoke-status.json')['passed']:raise SystemExit('ABORT: smoke has not passed')
     hashes(root);spec=plan(root,mode);losses=spec['loss_conditions_percent'];campaign_ids=[1] if mode in ['preflight','smoke'] else range(1,6);runs,warmups=(2,1) if mode=='preflight' else ((5,3) if mode=='smoke' else (30,5));probe_packets=spec['probe_packets']
+    if pcap: spec.update(pcap_enabled=True,measurement_population='pcap-enabled; separate from uncaptured')
     status_path=root/(mode+'-status.json' if mode!='full' else 'campaign-status.json')
     if status_path.exists():raise SystemExit('Refusing to overwrite or retry')
     output=root/(mode if mode!='full' else 'campaigns');output.mkdir();status={'experiment':'packet-loss-only','mode':mode,'passed':False,'image_id':image,'failed_campaign':None,'campaigns':[],'expected':spec};save(status_path,status)
-    env=os.environ.copy();env['MEASUREMENT_RUN_ROOT']='/work/'+str(output.relative_to(REPO/'artifacts'));env['LOSS_PROBE_PACKETS']=str(probe_packets);env['HANDSHAKE_TIMEOUT_SECONDS']=str(HANDSHAKE_TIMEOUT_SECONDS);resources0=network0=None;containers=set()
+    env=os.environ.copy();env['MEASUREMENT_PCAP']='1' if pcap else '0';env['MEASUREMENT_RUN_ROOT']='/work/'+str(output.relative_to(REPO/'artifacts'));env['LOSS_PROBE_PACKETS']=str(probe_packets);env['HANDSHAKE_TIMEOUT_SECONDS']=str(HANDSHAKE_TIMEOUT_SECONDS);resources0=network0=None;containers=set()
     try:
         for loss in losses:
             for index in campaign_ids:
@@ -82,7 +84,8 @@ def execute(root,mode):
                 probe_run=subprocess.run(COMPOSE+['run','--rm','client','probe'],env=env,text=True,capture_output=True,check=True);probe_text=probe_run.stdout+probe_run.stderr;(directory/'network-validation.log').write_text(probe_text);client_qdisc=section(probe_text,'QDISC_CLIENT_BEGIN','QDISC_CLIENT_END');validate_qdisc(client_qdisc,loss);probe=parse_ping(probe_text,probe_packets)
                 if abs(probe['measured_rtt_median_ms']-RTT_MS)>10:raise RuntimeError('Measured RTT outside predeclared ±10ms operational gate')
                 if loss=='0' and probe['loss_measured_percent']!=0:raise RuntimeError('Unexpected loss in zero-loss condition')
-                with (directory/'driver.log').open('w') as log:subprocess.run(COMPOSE+['run','--rm','client','measure','--runs',str(runs),'--warmup',str(warmups),'--seed',str(campaign_seed),'--image-id',image,'--scenarios',*SCENARIOS],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
+                with capture_session(COMPOSE,directory,env,pcap,runs*len(SCENARIOS)):
+                    with (directory/'driver.log').open('w') as log:subprocess.run(COMPOSE+['run','--rm','client','measure','--runs',str(runs),'--warmup',str(warmups),'--seed',str(campaign_seed),'--image-id',image,'--scenarios',*SCENARIOS],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
                 empty_failures(directory/'failures.csv');condition={'experiment':'packet-loss-only','loss_target_percent':loss,'configured_rtt_ms':RTT_MS,'rtt_measured_ms':probe['measured_rtt_median_ms']};successes,failures=validate_observations(directory,condition,runs,warmups)
                 driver=(directory/'driver.log').read_text();client_after=section(driver,'QDISC_CLIENT_AFTER_BEGIN','QDISC_CLIENT_AFTER_END');validate_qdisc(client_after,loss);server_after=subprocess.check_output(['docker','exec',container,'tc','-s','qdisc','show','dev','eth0'],text=True);validate_qdisc(server_after,loss);(directory/'client-qdisc-after.txt').write_text(client_after);(directory/'server-qdisc-after.txt').write_text(server_after)
                 cb=counters(driver,'CLIENT_BEFORE');ca=counters(driver,'CLIENT_AFTER');tcp_server_after=parse_nstat(subprocess.check_output(['docker','exec',container,'nstat','-az','TcpRetransSegs','TcpOutSegs','TcpInSegs'],text=True));tcp={'client':delta(cb,ca),'server':delta(tcp_server_before,tcp_server_after)};save(directory/'tcp-counters.json',tcp)
@@ -96,9 +99,11 @@ def execute(root,mode):
     finally:
         with (root/(mode+'-shutdown.log')).open('w') as log:subprocess.run(COMPOSE+['down'],env=env,stdout=log,stderr=subprocess.STDOUT,check=False)
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);m=p.add_mutually_exclusive_group();m.add_argument('--preflight',action='store_true');m.add_argument('--smoke',action='store_true');m.add_argument('--dry-run',action='store_true');a=p.parse_args();root=a.root.resolve();mode='preflight' if a.preflight else ('smoke' if a.smoke else 'full')
+    p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);p.add_argument('--pcap',action='store_true');m=p.add_mutually_exclusive_group();m.add_argument('--preflight',action='store_true');m.add_argument('--smoke',action='store_true');m.add_argument('--dry-run',action='store_true');a=p.parse_args();root=a.root.resolve();mode='preflight' if a.preflight else ('smoke' if a.smoke else 'full')
     if a.dry_run:
-        print(json.dumps(plan(root,'full'),indent=2));return
+        spec=plan(root,'full')
+        if a.pcap: spec.update(pcap_enabled=True,measurement_population='pcap-enabled; separate from uncaptured')
+        print(json.dumps(spec,indent=2));return
     if not root.is_relative_to(REPO/'artifacts/results'):raise SystemExit('root must be under artifacts/results')
-    execute(root,mode)
+    execute(root,mode,a.pcap)
 if __name__=='__main__':main()

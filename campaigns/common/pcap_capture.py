@@ -5,6 +5,7 @@ import csv
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import subprocess
@@ -64,11 +65,14 @@ def observation(out, scenario, round_number, order, warm, port):
             save(directory/'tls-status.json', dict(status='TLS_MEASUREMENT_FAILURE', error=str(error)))
             raise
         else:
-            save(directory/'tls-status.json', dict(status='SUCCESS'))
+            # Failure-aware wrappers may return normally after recording a failed attempt.
+            if not (directory/'tls-status.json').exists():
+                save(directory/'tls-status.json', dict(status='SUCCESS'))
     finally:
         (directory/'stop').touch()
         try:
-            wait_for(lambda: (directory/'capture-status.json').exists(), 8)
+            wait_for(lambda: (directory/'capture-status.json').exists(),
+                     float(os.environ.get('MEASUREMENT_PCAP_FINALIZATION_SECONDS','8')))
         except TimeoutError as error:
             save(directory/'client-capture-error.json', dict(error=str(error)))
 
@@ -104,6 +108,9 @@ def capture_one(directory):
             process.send_signal(signal.SIGINT)
             if process.wait(timeout=5) != 0:
                 raise RuntimeError('tcpdump did not terminate cleanly')
+        captured=re.search(r'(\d+) packets captured', (directory/'tcpdump.log').read_text())
+        if not captured or int(captured.group(1))==0:
+            raise RuntimeError('tcpdump did not record captured packets')
         pcap = directory/'handshakes.pcap'
         if not pcap.is_file() or pcap.stat().st_size <= 24:
             raise RuntimeError('PCAP missing or contains no packet records')
@@ -112,7 +119,7 @@ def capture_one(directory):
                                 capture_output=True, text=True, timeout=5)
         if result.returncode or not result.stdout.strip():
             raise RuntimeError('PCAP is unreadable or empty')
-        save(directory/'capture-status.json', dict(status='SUCCESS', pcap_bytes=pcap.stat().st_size,
+        save(directory/'capture-status.json', dict(status='SUCCESS', captured_packets=int(captured.group(1)), pcap_bytes=pcap.stat().st_size,
              pcap_sha256=hashlib.sha256(pcap.read_bytes()).hexdigest()))
     except Exception as error:
         save(directory/'capture-status.json', dict(status='CAPTURE_FAILURE', error=str(error)))
@@ -131,21 +138,32 @@ def serve(root):
         time.sleep(.05)
 
 
-def analyze(campaign):
+def analyze(campaign, allow_failed=False):
     samples = campaign/'samples.csv'
     with samples.open() if samples.exists() else contextlib.nullcontext([]) as handle:
         rows = list(csv.DictReader(handle)) if samples.exists() else []
+    failed_rows = []
+    if allow_failed and (campaign/'failures.csv').exists():
+        with (campaign/'failures.csv').open() as handle:
+            failed_rows = list(csv.DictReader(handle))
     results = []
     for directory in sorted((campaign/'pcap').glob('sample-*')):
         identity = json.loads((directory/'observation.json').read_text())
         result = dict(**identity, artifact_directory=str(directory.relative_to(campaign)),
                       metrics=None, capture_status='CAPTURE_FAILURE', analysis_status='NOT_EXECUTED',
-                      tls_status='TLS_MEASUREMENT_FAILURE')
+                      tls_status='TLS_OUTCOME_UNAVAILABLE' if allow_failed else 'TLS_MEASUREMENT_FAILURE')
         matches = [r for r in rows if r['campaign_id']==identity['campaign_id']
                    and int(r['round_id'])==identity['round_id'] and r['scenario']==identity['scenario']
                    and int(r['is_warmup'])==0]
-        if len(matches)==1:
-            result.update(tls_status='SUCCESS', client_random=matches[0]['client_random'])
+        failures = [r for r in failed_rows if r['campaign_id']==identity['campaign_id']
+                    and int(r['round_id'])==identity['round_id'] and r['scenario']==identity['scenario']
+                    and int(r['is_warmup'])==0]
+        associated = matches + failures
+        failed = len(failures)==1 and not matches
+        if len(associated)==1:
+            result.update(tls_status='TLS_MEASUREMENT_FAILURE' if failed else 'SUCCESS',
+                          client_random=associated[0].get('client_random'),
+                          association_confidence='client_random' if associated[0].get('client_random') else 'observation_tuple_only')
         try:
             if (directory/'client-capture-error.json').exists():
                 raise RuntimeError(json.loads((directory/'client-capture-error.json').read_text())['error'])
@@ -157,16 +175,23 @@ def analyze(campaign):
             if status.get('pcap_sha256') != actual_hash:
                 raise RuntimeError('PCAP hash does not match capture status')
             result.update(capture_status='SUCCESS', pcap_sha256=actual_hash)
-            if len(matches)!=1:
-                raise RuntimeError('no unique successful OpenSSL observation')
+            if len(associated)!=1 or (failed and not allow_failed):
+                raise RuntimeError('no unique OpenSSL observation')
+            if 'order_in_round' in associated[0] and int(associated[0]['order_in_round'])!=identity['order_in_round']:
+                raise RuntimeError('observation order mismatch')
             keylog=directory/'tls.keys'
             # Check correlation without copying any secrets into reports.
-            random=matches[0]['client_random'].lower()
-            entries=[line.split() for line in keylog.read_text().splitlines() if line and not line.startswith('#')]
-            if not entries or any(len(e)!=3 or e[1].lower()!=random for e in entries):
+            random=(associated[0].get('client_random') or '').lower()
+            entries=[line.split() for line in keylog.read_text().splitlines() if line and not line.startswith('#')] if keylog.exists() else []
+            if any(len(e)!=3 for e in entries) or (random and any(e[1].lower()!=random for e in entries)):
+                raise RuntimeError('mismatched observation key log')
+            if not failed and (not random or not entries):
                 raise RuntimeError('missing or mismatched observation key log')
-            proc=subprocess.run([sys.executable,str(EXTRACTOR),str(directory)],
-                                text=True,capture_output=True,timeout=60)
+            if not random and len({e[1].lower() for e in entries})>1:
+                raise RuntimeError('ambiguous failed observation key log')
+            command=[sys.executable,str(EXTRACTOR),str(directory)]
+            if failed: command.append('--allow-incomplete')
+            proc=subprocess.run(command,text=True,capture_output=True,timeout=60)
             (directory/'analysis.log').write_text(proc.stdout+proc.stderr)
             if proc.returncode:
                 raise RuntimeError('Stage-1 extractor failed; see analysis.log')
@@ -176,9 +201,12 @@ def analyze(campaign):
             if summary.get('pcap_sha256') != actual_hash:
                 raise RuntimeError('PCAP hash does not match extractor output')
             metrics=summary['scenarios'][0]
-            if any(metrics.get(k) is None for k in METRICS):
+            partial = metrics.get('pcap_analysis_status')=='PARTIAL'
+            if partial and not failed:
+                raise RuntimeError('successful TLS observation has incomplete PCAP boundaries')
+            if not partial and any(metrics.get(k) is None for k in METRICS):
                 raise RuntimeError('extractor omitted required metrics')
-            result.update(metrics=metrics, analysis_status='SUCCESS')
+            result.update(metrics=metrics, analysis_status='PARTIAL' if partial else 'SUCCESS')
         except Exception as error:
             result['error']=str(error)
             if result['capture_status']=='SUCCESS': result['analysis_status']='ANALYSIS_FAILURE'
@@ -187,12 +215,71 @@ def analyze(campaign):
     (campaign/'pcap-metrics.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in results))
 
 
+# Shared core: drain 1.2s + SIGINT close 5s + readability probe 5s.
+FINALIZATION_SECONDS = 12
+ANALYSIS_SECONDS_PER_OBSERVATION = 60
+STARTUP_MARGIN_SECONDS = 8
+
+
+def save_status(directory, status, error):
+    (directory/'pcap-analysis-status.json').write_text(json.dumps({
+        'status':status,'metrics':None,'error':str(error)})+'\n')
+
+
+@contextlib.contextmanager
+def capture_session(compose, directory, env, enabled, observation_count, allow_failed=False):
+    if not enabled:
+        yield
+        return
+    start_error = None
+    try:
+        with (directory/'capture-start.log').open('w') as log:
+            subprocess.run(compose+['--profile','pcap','up','-d','--no-deps',
+                           '--force-recreate','capture'], env=env,stdout=log,
+                           stderr=subprocess.STDOUT,check=True)
+    except (OSError,subprocess.SubprocessError) as error:
+        start_error=error
+        save_status(directory,'CAPTURE_FAILURE',error)
+    try:
+        yield
+    finally:
+        try:
+            # A failed driver can leave a request pending; request an explicit
+            # tcpdump stop and allow the core to flush before analyzing/teardown.
+            requests=list((directory/'pcap').glob('sample-*/request.json'))
+            for request in requests:
+                (request.parent/'stop').touch()
+            if start_error is None:
+                deadline=time.monotonic()+FINALIZATION_SECONDS
+                while any(not (r.parent/'capture-status.json').exists() for r in requests):
+                    if time.monotonic()>=deadline:
+                        raise TimeoutError('capture finalization did not complete before analysis')
+                    time.sleep(.05)
+            with (directory/'pcap-analysis.log').open('w') as log:
+                subprocess.run(compose+['--profile','pcap','run','--rm','--no-deps',
+                               'capture','python3','/opt/pcap-core/pcap_capture.py',
+                               'analyze',env['MEASUREMENT_RUN_ROOT']+'/'+env['MEASUREMENT_CAMPAIGN_ID']]+(['--allow-failed'] if allow_failed else []),
+                               env=env,stdout=log,stderr=subprocess.STDOUT,check=True,
+                               timeout=STARTUP_MARGIN_SECONDS+ANALYSIS_SECONDS_PER_OBSERVATION*max(1,observation_count))
+        except (OSError,subprocess.SubprocessError,TimeoutError) as error:
+            save_status(directory,'ANALYSIS_FAILURE',error)
+        finally:
+            # Namespace is retained by the runner until after this context exits.
+            try:
+                subprocess.run(compose+['--profile','pcap','stop','capture'],env=env,
+                               stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=False)
+            except OSError as error:
+                save_status(directory,'CAPTURE_FAILURE',error)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['serve','analyze'])
     parser.add_argument('directory',type=Path)
+    parser.add_argument('--allow-failed',action='store_true')
     args=parser.parse_args()
-    (serve if args.action=='serve' else analyze)(args.directory)
+    if args.action=='serve': serve(args.directory)
+    else: analyze(args.directory,allow_failed=args.allow_failed)
 
 
 if __name__=='__main__': main()

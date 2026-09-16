@@ -41,11 +41,21 @@ def details(label,value):
 def panel(title,body): return '<section><h2>'+esc(title)+'</h2>'+body+'</section>'
 
 def timing(model, keys, title, boundaries):
-    rows=[{'source':name,'scenario':r.get('scenario'),'side':r.get('side'),**{k:r.get(k) for k in keys}} for name,r in model['metrics'] if any(k in r for k in keys)]
+    rows=[{'source':name,'scenario':r.get('scenario'),'side':r.get('side'),
+           **{k:r.get(k) for k in ('tls_status','capture_status','analysis_status','pcap_analysis_status') if k in r},
+           **{k:r.get(k) for k in keys}} for name,r in model['metrics'] if any(k in r for k in keys)]
     if not rows: return ''
     # Boundary diagram is conceptual, never a synthetic duration decomposition.
     diagram='<div class="timeline">'+''.join('<span>'+esc(text)+'</span>'+(' <b>→</b> ' if i<len(boundaries)-1 else '') for i,text in enumerate(boundaries))+'</div>'
-    return panel(title,diagram+'<p>Intermediate application/packet gaps may exist. Full elapsed time is a directly measured interval, not a sum.</p>'+table(rows))
+    complete=[r for r in rows if all(number(r[k]) is not None for k in keys)
+              and r.get('analysis_status')!='PARTIAL' and r.get('pcap_analysis_status')!='PARTIAL']
+    incomplete=[r for r in rows if r not in complete]
+    body=''
+    if complete:
+        body+='<h3>Recorded complete timing</h3>'+diagram+'<p>Intermediate application/packet gaps may exist. Full elapsed time is a directly measured interval, not a sum.</p>'+table(complete)
+    if incomplete:
+        body+='<h3>Incomplete / unavailable observations</h3><p>Incomplete or unavailable timing: no completed TLS timeline is asserted. Missing boundaries remain unavailable.</p>'+table(incomplete)
+    return panel(title,body)
 
 def render(model):
     out=['<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:; base-uri \'none\'; form-action \'none\'"><title>Experiment evidence report</title><style>body{font:15px system-ui,sans-serif;background:#f1f5f9;color:#172b4d;margin:0}main{max-width:1240px;margin:auto;padding:32px}header,section{background:white;border:1px solid #dbe3ed;border-radius:12px;padding:24px;margin:18px 0}h1{font-size:28px;margin:8px 0}h2{font-size:20px}p{line-height:1.6}.banner{background:#fff0cc;border-left:6px solid #bd6200;padding:18px;font-weight:700}.warning{background:#ffe6e6;color:#8d1515;padding:16px}.status{font-weight:700;color:#185b65}.muted{color:#53647c}.scroll{overflow:auto}table{border-collapse:collapse;min-width:100%;font-size:13px}th,td{padding:10px;border-bottom:1px solid #dde4ee;text-align:left;white-space:nowrap}th{background:#edf3f8}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}details{margin:12px 0}summary{cursor:pointer;font-weight:600}.timeline{display:flex;align-items:center;flex-wrap:wrap;gap:10px}.timeline span{padding:12px;background:#edf3f8;border-radius:8px}a{color:#175c99}</style></head><body><main>']
@@ -62,6 +72,14 @@ def render(model):
     if measured or warms or failures:
         counts={'recorded measured rows':sum(1 for r in rows if str(r.get('is_warmup','0'))=='0'),'recorded warmup rows':sum(len(tables[n]) for n in warms)+sum(1 for r in rows if str(r.get('is_warmup','0'))=='1'),'recorded failure rows':sum(len(tables[n]) for n in failures)+sum(1 for r in rows if str(r.get('success','')).lower() in ('0','false')),'successful measured rows (samples CSV contract)':sum(len(tables[n]) for n in measured if Path(n).name in ('samples.csv','all-samples.csv')) if any(Path(n).name in ('samples.csv','all-samples.csv') for n in measured) else None,'scenarios':', '.join(sorted({r['scenario'] for r in rows if r.get('scenario')})) or None,'seeds':', '.join(sorted({r['seed'] for r in rows if r.get('seed')})) or None,'campaign IDs':len({r.get('campaign_id',r.get('campaign')) for r in rows if r.get('campaign_id',r.get('campaign'))}) or None}
         out += [panel('Campaign / observation overview',table([counts])+'<p>Counts describe recorded rows only; failures and warmups retain their source classification.</p>')]
+    outcomes=[{'source':name,'scenario':r.get('scenario'),**{k:r.get(k) for k in (
+        'tls_status','capture_status','analysis_status','pcap_analysis_status',
+        'tcp_established_observed','client_hello_observed','client_finished_observed',
+        'capture_packet_count','capture_retransmission_frames','association_confidence')}}
+        for name,r in model['metrics'] if any(k in r for k in ('tls_status','capture_status','analysis_status'))]
+    if outcomes:
+        out += [panel('Independent TLS / capture / analysis outcomes',
+            '<p>A failed TLS attempt can have a valid capture and partial analysis. These are independent outcomes. Partial retransmission counts cover the entire selected captured TCP attempt; successful-handshake counts retain SYN → client Finished boundaries.</p>'+table(outcomes))]
     out += [timing(model,NATIVE,'Native timing',['Native connect start','Native connect complete','TLS handshake start','TLS handshake done'])]
     if any(any(k in r for k in NATIVE) for _,r in model['metrics']): out += [panel('Native boundaries','<p>Current OpenSSL s_client uses init_client: resolver work, address selection and socket connection may be included. TCP native timing ends at successful connection return. handshake_wall_ms remains SSL_CB_HANDSHAKE_START → SSL_CB_HANDSHAKE_DONE. Full native establishment starts at original connect entry and ends at that same handshake-done timestamp.</p>')]
     out += [timing(model,PCAP,'PCAP timing',['SYN','TCP established','ClientHello','Client Finished'])]
@@ -93,7 +111,7 @@ def render(model):
     bio=[{'source':name,**{k:r.get(k) for k in BIO}} for name,r in model['metrics'] if any(k in r for k in BIO)]
     if bio: out += [panel('OpenSSL / BIO bytes','<p>BIO counters exclude TCP/IP/frame headers and are distinct from observed wire payload and retransmissions.</p>'+table(bio))]
     fields=[{'source':name,'field':key,'recorded value':value} for name,data in model['documents'].items() for key,value in leaves(data)]
-    for title,terms in [('TLS / scenario configuration',('tls','cipher','group','authentication','signature','scenario','resumption','tickets','hrr','tree_size','depth')),('Configured network condition',('target','configured','qdisc','bandwidth','jitter')),('Measured / validated network condition',('measured_rtt','rtt_measured','measured_loss','loss_measured','goodput','bandwidth_measured','bandwidth_forward','bandwidth_reverse')),('Validation and integrity',('status','passed','hash','sha256','client_random','association','keylog','capture','readable')),('Reproducibility',('commit','dirty','version','image','seed','campaign_id','timestamp','platform','fixture'))]:
+    for title,terms in [('TLS / scenario configuration',('tls','cipher','group','authentication','signature','scenario','resumption','tickets','hrr','tree_size','depth')),('Configured network condition',('target','configured','qdisc','bandwidth','jitter')),('TCP namespace counter evidence',('tcpretrans','tcpout','tcpin','tcp_retrans','tcp_segments','nstat')),('Measured / validated network condition',('measured_rtt','rtt_measured','measured_loss','loss_measured','goodput','bandwidth_measured','bandwidth_forward','bandwidth_reverse')),('Validation and integrity',('status','passed','hash','sha256','client_random','association','keylog','capture','readable')),('Reproducibility',('commit','dirty','version','image','seed','campaign_id','timestamp','platform','fixture'))]:
         selected=[r for r in fields if any(term in r['field'].lower() for term in terms)]
         if title=='Configured network condition':
             selected=[r for r in selected if not any(term in r['field'].lower() for term in ('measured','goodput','bandwidth_forward','bandwidth_reverse'))]

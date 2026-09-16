@@ -40,6 +40,30 @@ class ReportingTest(unittest.TestCase):
             (Path(d)/'failures.csv').write_text('scenario,is_warmup,error\none,0,rejected\n')
             self.assertIn('rejected',render(load(d)))
 
+    def test_incomplete_attempt_has_no_completed_timeline(self):
+        with tempfile.TemporaryDirectory() as d:
+            page=render(self.make(d,**{'derived.json':{
+                'tls_status':'TLS_MEASUREMENT_FAILURE','capture_status':'SUCCESS','analysis_status':'PARTIAL',
+                'metrics':{'tcp_connect_wall_ms':2,'tls_from_pcap_wall_ms':None,
+                           'connection_handshake_wall_ms':None,'pcap_analysis_status':'PARTIAL',
+                           'tcp_established_observed':True,'client_finished_observed':False}},
+                'native-timing.json':{'tcp_connect_wall_ms_native':1,'handshake_wall_ms':None,
+                                      'connection_establishment_wall_ms_native':None}}))
+            self.assertNotIn('class="timeline"',page)
+            self.assertIn('Independent TLS / capture / analysis outcomes',page)
+            self.assertIn('no completed TLS timeline',page)
+            for text in ('TLS_MEASUREMENT_FAILURE','PARTIAL','unavailable','tcp_established_observed'):
+                self.assertIn(text,page)
+
+    def test_legitimate_tls_failure_is_not_validation_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            model=self.make(d,**{'result.json':{'status':'PASS'},
+                'derived.json':{'tls_status':'TLS_MEASUREMENT_FAILURE','capture_status':'SUCCESS',
+                                'analysis_status':'PARTIAL','metrics':{'tcp_connect_wall_ms':2}},
+                'tls-status.json':{'status':'TLS_MEASUREMENT_FAILURE'}})
+            self.assertFalse(model['warnings']);self.assertEqual(model['status'],'SUCCESS')
+            self.assertIn('TLS_MEASUREMENT_FAILURE',render(model))
+
     def test_escaping(self):
         with tempfile.TemporaryDirectory() as d:
             page=render(self.make(d,**{'metadata.json':{'scenario':'<script>alert(1)</script>','error':'<img src=x onerror=evil()>'}}))
