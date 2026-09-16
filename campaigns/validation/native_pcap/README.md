@@ -424,3 +424,97 @@ on-wire observation; captured observations stay separate from uncaptured scienti
 populations. No correction factors, equality/equivalence claims or retrospective
 correction of historical results. Full timing is directly measured, never TCP+TLS.
 This study does not quantify packet-capture overhead.
+
+## Native↔PCAP paired instrumentation validation — final execution and methodological closure
+
+The Native↔PCAP paired instrumentation validation is complete.
+
+This is an instrumentation-validation study, not an authentication-scheme
+performance experiment. Its purpose is to validate the relationship between the
+native application measurements and an independent PCAP-derived observation of
+the same successful TLS connection.
+
+The final accepted preflight is:
+
+    artifacts/results/stage9-preflight-final2-20260916T191735Z
+
+The final accepted full execution is:
+
+    artifacts/results/stage9-full-final2-20260916T191917Z
+
+These directory names are retained as immutable artifact identifiers. Both runs
+were executed with the final Native↔PCAP validation implementation.
+
+The three-condition preflight passed local, latency-100 and constrained before
+the full execution was started. The subsequent full execution also passed all
+three conditions.
+
+The full execution contains five warmups and 30 measured attempts per condition,
+for 15 warmups and 90 measured attempts in total. Only the `pq` scenario is used.
+
+### Final paired results
+
+Differences are defined throughout as:
+
+    Native - PCAP
+
+| Condition | TLS successes | Successful pairs | Unpairable | TCP median delta ms [95% CI] | TLS median delta ms [95% CI] | Full median delta ms [95% CI] |
+|---|---:|---:|---:|---:|---:|---:|
+| local | 30/30 | 30 | 0 | +0.782 [0.742, 0.898] | +0.276 [0.262, 0.301] | +0.834 [0.769, 0.940] |
+| latency-100 | 30/30 | 30 | 0 | +0.808 [0.307, 1.569] | +1.157 [0.560, 2.139] | +2.140 [1.644, 2.797] |
+| constrained | 30/30 | 29 | 1 | +1.208 [0.680, 1.682] | +0.857 [0.582, 1.332] | +2.214 [1.887, 3.219] |
+
+The intervals are 95% bootstrap intervals for the median paired difference,
+using 10,000 paired-observation resamples within each condition.
+
+Local and latency-100 produced complete Native/PCAP pairing for all 30 measured
+TLS connections.
+
+Constrained produced 30 successful TLS connections and 29 complete Native/PCAP
+pairs. One successful TLS observation had a successful packet capture but the
+independent analysis could not expose the complete TLS timing boundary required
+for pairing. It is retained explicitly as unpairable. No PCAP TLS/full timing,
+paired difference or bootstrap observation was fabricated from that attempt.
+
+The constrained profile retained the configured 1% independent packet-loss
+setting. Its 200-packet validation probe happened to observe 0% loss in the final
+run; this does not redefine the configured profile. The historical Combined
+reverse-only bandwidth acceptance rule also remains unchanged and documented.
+
+### Methodological interpretation
+
+Native and PCAP measurements intentionally use different clocks and timing
+boundaries. Equality is therefore neither required nor expected.
+
+The final paired results show small, consistently positive Native-minus-PCAP
+median differences under all three tested conditions. These differences are
+interpreted as boundary/instrumentation differences, not as an error to be
+corrected.
+
+No correction factor is derived.
+
+No Native measurement is retrospectively adjusted from PCAP.
+
+No full timing is reconstructed as TCP + TLS.
+
+No captured observation is merged into an uncaptured scientific population.
+
+The final methodological disposition is:
+
+    Native timing
+        = primary scientific performance measurement
+
+    PCAP timing
+        = independent on-wire observation and validation
+
+In particular, `handshake_wall_ms` remains the primary TLS handshake performance
+metric. PCAP-derived TLS timing provides an independent network-observation
+cross-check rather than a replacement measurement.
+
+This validation does not estimate packet-capture overhead and does not establish
+mathematical equivalence between the two measurement domains. It provides
+empirical paired validation that their independently defined boundaries behave
+consistently across local, high-latency and constrained network conditions.
+
+The Native↔PCAP paired instrumentation validation is CLOSED.
+No additional validation handshakes are required.
