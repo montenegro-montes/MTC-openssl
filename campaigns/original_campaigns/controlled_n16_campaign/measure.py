@@ -75,7 +75,13 @@ once("k not in ['round','order','tree_size']","k not in ['round','order','tree_s
 # The saved secondary summary infers numeric fields from one row. Some new setup
 # fields are explicitly unavailable for X509/RPK: summarize them in the final
 # campaign-level analyzer instead of coercing missing values to zero.
-once("values=[r[metric] for r in group]","values=[r[metric] for r in group if r[metric] is not None]\n        if not values:continue")
+# Both frozen benchmark versions have the same null-filtering semantics.
+legacy_summary="values=[r[metric] for r in group]"
+current_summary="values=[r[metric] for r in group if r.get(metric) is not None]"
+if legacy_summary in source:
+    once(legacy_summary,"values=[r[metric] for r in group if r[metric] is not None]\n        if not values:continue")
+elif source.count(current_summary)!=1 or source.count("if not values: continue")!=1:
+    raise ValueError('Measurement summary source drift')
 once("write_csv(out/'summary.csv',summary)","write_csv(out/'summary.csv',[{k:r.get(k,'') for k in sorted({k for q in summary for k in q})} for r in summary])")
 if os.environ.get('MEASUREMENT_PCAP') == '1':
     from pcap_capture import observation

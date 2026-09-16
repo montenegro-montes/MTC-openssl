@@ -1,8 +1,10 @@
 """Latency-only campaigns using the frozen N=16 measurement driver."""
-import argparse,csv,datetime,hashlib,json,os,random,re,subprocess
+import argparse,csv,datetime,hashlib,json,os,random,re,subprocess,sys
 from pathlib import Path
 
 REPO=Path(__file__).resolve().parents[3]
+sys.path.insert(0,str(REPO/'campaigns/common'))
+from pcap_capture import capture_session
 RTTS=[0,10,20,50,100,200]
 SCENARIOS=['pq','pq-rpk','pq-compact-warm','pq-compact-cold','pq-mtc-experimental-landmark','pq-mtc-experimental-standalone']
 COMPOSE=['docker','compose','-f',str(REPO/'docker/original_campaigns/compose.network-latency.yaml')]
@@ -86,14 +88,8 @@ def main():
                 tolerance=max(5.0,rtt*.15)
                 if rtt and abs(probe['measured_rtt_median_ms']-rtt)>tolerance: raise RuntimeError('Measured RTT outside declared tolerance')
                 if not rtt and probe['measured_rtt_median_ms']>3: raise RuntimeError('Unexpected baseline RTT')
-                if args.pcap:
-                    subprocess.run(COMPOSE+['--profile','pcap','up','-d','--no-deps','--force-recreate','capture'],env=env,stdout=(directory/'capture-start.log').open('w'),stderr=subprocess.STDOUT,check=True)
-                try:
+                with capture_session(COMPOSE,directory,env,args.pcap,runs*len(SCENARIOS)):
                     with (directory/'driver.log').open('w') as log: subprocess.run(COMPOSE+['run','--rm','client','measure','--runs',str(runs),'--warmup',str(warmups),'--seed',str(seed),'--image-id',image,'--scenarios',*SCENARIOS],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
-                finally:
-                    if args.pcap:
-                        subprocess.run(COMPOSE+['--profile','pcap','run','--rm','--no-deps','capture','python3','/opt/pcap-core/pcap_capture.py','analyze',env['MEASUREMENT_RUN_ROOT']+'/'+cid],env=env,stdout=(directory/'pcap-analysis.log').open('w'),stderr=subprocess.STDOUT,check=False)
-                        subprocess.run(COMPOSE+['--profile','pcap','stop','capture'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=False)
                 server_after=subprocess.check_output(['docker','exec',container,'tc','-s','qdisc','show','dev','eth0'],text=True);(directory/'server-qdisc-after.txt').write_text(server_after);(directory/'server-qdisc-statistics.txt').write_text(server_after)
                 driver=(directory/'driver.log').read_text();match=re.search(r'QDISC_CLIENT_AFTER_BEGIN\n(.*?)QDISC_CLIENT_AFTER_END',driver,re.S)
                 if not match: raise RuntimeError('Missing client qdisc statistics')

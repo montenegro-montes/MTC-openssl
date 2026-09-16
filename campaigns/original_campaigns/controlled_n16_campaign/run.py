@@ -2,6 +2,8 @@
 import argparse,datetime,hashlib,json,os,subprocess,sys
 from pathlib import Path
 REPO=Path(__file__).resolve().parents[3]
+sys.path.insert(0,str(REPO/'campaigns/common'))
+from pcap_capture import capture_session
 p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);p.add_argument('--preflight',action='store_true');p.add_argument('--pcap',action='store_true',help='Opt-in instrumented per-observation capture');a=p.parse_args();root=a.root.resolve()
 if not root.is_relative_to(REPO/'artifacts/results'):p.error('root must be under artifacts/results')
 base=['docker','compose','-f',str(REPO/'docker/original_campaigns/compose.measurement.yaml')]
@@ -51,23 +53,12 @@ try:
         (directory/'server-environment.json').write_text(json.dumps(record,indent=2)+'\n');save()
         client_options=[]
         if a.pcap:
-            with (directory/'capture-start.log').open('w') as log:
-                started=subprocess.run(base+['up','-d','--no-deps','--force-recreate','capture'],env=env,stdout=log,stderr=subprocess.STDOUT,check=False)
-            record['capture_start_returncode']=started.returncode
-            client_options=['-v',str(REPO/'campaigns/original_campaigns/controlled_n16_campaign')+':/opt/measurement:ro']
-        try:
+            client_options=['-v',str(REPO/'campaigns/original_campaigns/controlled_n16_campaign')+':/opt/measurement:ro',
+                            '-v',str(REPO/'campaigns/common')+':/opt/pcap-core:ro',
+                            '-e','PYTHONPATH=/opt/pcap-core']
+        with capture_session(base,directory,env,a.pcap,(2 if a.preflight else 30)*14):
             with (directory/'driver.log').open('w') as log:
                 subprocess.run(base+['run','--rm',*client_options,'client','python3','/opt/measurement/measure.py','--runs','2' if a.preflight else '30','--warmup','1' if a.preflight else '5','--seed',str(seed),'--image-id',image['Id']],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
-        finally:
-            if a.pcap:
-                # Analysis runs only after the measurement driver stops.
-                with (directory/'pcap-analysis.log').open('w') as log:
-                    analyzed=subprocess.run(base+['run','--rm','--no-deps','capture','python3','/opt/measurement/capture.py','analyze',env['MEASUREMENT_RUN_ROOT']+'/'+cid],env=env,stdout=log,stderr=subprocess.STDOUT,check=False)
-                record['pcap_analysis_returncode']=analyzed.returncode
-                if analyzed.returncode:
-                    (directory/'pcap-analysis-status.json').write_text(json.dumps({'status':'ANALYSIS_FAILURE','metrics':None,'reason':'analysis process failed; see pcap-analysis.log'})+'\n')
-                subprocess.run(base+['stop','capture'],env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=False)
-                save()
         import csv
         rows=list(csv.DictReader((directory/'samples.csv').open()));warm=list(csv.DictReader((directory/'warmups.csv').open()))
         expected=2 if a.preflight else 30;warming=1 if a.preflight else 5

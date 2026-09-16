@@ -104,7 +104,10 @@ class CaptureTests(unittest.TestCase):
         def wait(predicate,seconds=8):
             if (d/'ready.json').exists(): (d/'stop').touch()
             self.assertTrue(predicate())
-        proc.send_signal.side_effect=lambda sig: events.append(('signal',sig))
+        def signal(sig):
+            events.append(('signal',sig))
+            with (d/'tcpdump.log').open('a') as log:log.write('2 packets captured\n')
+        proc.send_signal.side_effect=signal
         proc.wait.side_effect=lambda **kwargs: events.append(('wait',)) or 0
         with patch.object(capture.subprocess,'Popen',side_effect=popen), patch.object(capture,'wait_for',side_effect=wait), patch.object(capture.time,'sleep',side_effect=lambda t:events.append(('drain',t))), patch.object(capture.subprocess,'run',return_value=Mock(returncode=0,stdout='packet')) as read:
             capture.capture_one(d)
@@ -125,6 +128,56 @@ class CaptureTests(unittest.TestCase):
                          struct.pack('<IIII',1,0,len(frame),len(frame))+frame)
         result=subprocess.run(['tcpdump','-n','-r',str(pcap),'-c','1'],capture_output=True,text=True,timeout=5)
         self.assertEqual(result.returncode,0);self.assertTrue(result.stdout.strip())
+
+    def test_legacy_and_current_benchmark_summary_hooks(self):
+        base=Path(__file__).resolve().parent
+        driver=(base/'measure.py').read_text()
+        saved=(base.parents[2]/'src/mtc/benchmark.py').read_text()
+        transforms=driver[driver.index('def once('):driver.index("exec(compile(source,")]
+        old=saved.replace("values=[r[metric] for r in group if r.get(metric) is not None]\n        if not values: continue",
+                          "values=[r[metric] for r in group]")
+        with patch.dict(os.environ,MEASUREMENT_PCAP='0'):
+            for version in (old,saved):
+                namespace=dict(source=version,os=os)
+                exec(compile(transforms,'summary-compatibility','exec'),namespace)
+                ast.parse(namespace['source'])
+                self.assertIn('if not values:',namespace['source'])
+            unknown=saved.replace('if not values: continue','if not values: pass')
+            with self.assertRaisesRegex(ValueError,'summary source drift'):
+                exec(compile(transforms,'summary-drift','exec'),dict(source=unknown,os=os))
+
+    def test_measurement_context_includes_shared_module(self):
+        repo=Path(__file__).resolve().parents[3]
+        rules=(repo/"docker/original_campaigns/Dockerfile.measurement.dockerignore").read_text().splitlines()
+        self.assertIn("!campaigns/common/",rules)
+        self.assertIn("!campaigns/common/pcap_capture.py",rules)
+
+    def test_runtime_mount_and_runner_finalize_pending_requests(self):
+        repo=Path(__file__).resolve().parents[3]
+        compose=(repo/'docker/original_campaigns/compose.measurement.yaml').read_text()
+        runner=(Path(__file__).parent/'run.py').read_text()
+        self.assertIn('campaigns/common:/opt/pcap-core:ro',compose)
+        self.assertIn('/opt/pcap-core/pcap_capture.py',compose)
+        self.assertIn('PYTHONPATH=/opt/pcap-core',runner)
+        self.assertIn('with capture_session(base,directory,env,a.pcap',runner)
+        self.assertLess(runner.index('with capture_session'),runner.index("base+['down']"))
+
+    def test_session_stops_pending_capture_before_extraction(self):
+        d=self.root;request=d/'pcap/sample-0000-pq/request.json';request.parent.mkdir(parents=True);request.write_text('{}')
+        events=[]
+        def run(args,**kwargs):
+            if 'analyze' in args:
+                self.assertTrue((request.parent/'stop').exists())
+                self.assertTrue((request.parent/'capture-status.json').exists())
+            events.append(args)
+            return Mock(returncode=0)
+        def monotonic():
+            if (request.parent/'stop').exists():capture.save(request.parent/'capture-status.json',{'status':'SUCCESS'})
+            return 0
+        with patch.object(capture.subprocess,'run',side_effect=run),patch.object(capture.time,'monotonic',side_effect=monotonic):
+            with self.assertRaisesRegex(RuntimeError,'driver exited'):
+                with capture.capture_session([],d,{'MEASUREMENT_RUN_ROOT':'/work','MEASUREMENT_CAMPAIGN_ID':'one'},True,1):raise RuntimeError('driver exited')
+        self.assertIn('analyze',events[1]);self.assertIn('stop',events[2])
 
     def test_empty_pcap_rejected(self):
         d=self.root;capture.save(d/'request.json',dict(server_port=4433))

@@ -34,6 +34,6 @@ services:
     cap_add: [NET_RAW, NET_ADMIN]
     volumes:
       - ../../artifacts/results:/work/results
-      - ../../campaigns/original_campaigns/controlled_n16_campaign:/opt/measurement:ro
+      - ../../campaigns/common:/opt/pcap-core:ro
       - ../../campaigns/original_campaigns/handshake_capture:/opt/handshake-capture:ro
-    command: ["python3", "/opt/measurement/capture.py", "serve", "${MEASUREMENT_RUN_ROOT}/${MEASUREMENT_CAMPAIGN_ID:-campaign-01}/pcap"]
+    command: ["python3", "/opt/pcap-core/pcap_capture.py", "serve", "${MEASUREMENT_RUN_ROOT}/${MEASUREMENT_CAMPAIGN_ID:-campaign-01}/pcap"]

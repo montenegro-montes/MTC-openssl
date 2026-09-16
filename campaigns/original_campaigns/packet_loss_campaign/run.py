@@ -1,5 +1,5 @@
 """Manual packet-loss runner. No retries and no overwrite of campaign directories."""
-import argparse,csv,datetime,hashlib,json,os,random,re,subprocess,sys
+import argparse,csv,datetime,hashlib,json,os,random,re,subprocess,sys,time
 from pathlib import Path
 from config import *
 from network import *
@@ -81,7 +81,15 @@ def execute(root,mode,pcap=False):
                 subprocess.run(['docker','exec',container,'tc','qdisc','replace','dev','eth0','root','netem','delay','25ms','loss',loss+'%'],check=True)
                 server_before=subprocess.check_output(['docker','exec',container,'tc','-s','qdisc','show','dev','eth0'],text=True);validate_qdisc(server_before,loss);(directory/'server-qdisc-before.txt').write_text(server_before)
                 tcp_server_before=parse_nstat(subprocess.check_output(['docker','exec',container,'nstat','-az','TcpRetransSegs','TcpOutSegs','TcpInSegs'],text=True))
-                probe_run=subprocess.run(COMPOSE+['run','--rm','client','probe'],env=env,text=True,capture_output=True,check=True);probe_text=probe_run.stdout+probe_run.stderr;(directory/'network-validation.log').write_text(probe_text);client_qdisc=section(probe_text,'QDISC_CLIENT_BEGIN','QDISC_CLIENT_END');validate_qdisc(client_qdisc,loss);probe=parse_ping(probe_text,probe_packets)
+                probe_started_ns=time.monotonic_ns()
+                probe_run=subprocess.run(COMPOSE+['run','--rm','client','probe'],env=env,text=True,capture_output=True,check=True)
+                probe_wall_ms=(time.monotonic_ns()-probe_started_ns)/1e6
+                probe_text=probe_run.stdout+probe_run.stderr
+                (directory/'network-validation.log').write_text(probe_text)
+                client_qdisc=section(probe_text,'QDISC_CLIENT_BEGIN','QDISC_CLIENT_END')
+                validate_qdisc(client_qdisc,loss)
+                probe=parse_ping(probe_text,probe_packets)
+                validate_probe_integrity(probe,probe_wall_ms)
                 if abs(probe['measured_rtt_median_ms']-RTT_MS)>10:raise RuntimeError('Measured RTT outside predeclared ±10ms operational gate')
                 if loss=='0' and probe['loss_measured_percent']!=0:raise RuntimeError('Unexpected loss in zero-loss condition')
                 with capture_session(COMPOSE,directory,env,pcap,runs*len(SCENARIOS)):
@@ -89,8 +97,8 @@ def execute(root,mode,pcap=False):
                 empty_failures(directory/'failures.csv');condition={'experiment':'packet-loss-only','loss_target_percent':loss,'configured_rtt_ms':RTT_MS,'rtt_measured_ms':probe['measured_rtt_median_ms']};successes,failures=validate_observations(directory,condition,runs,warmups)
                 driver=(directory/'driver.log').read_text();client_after=section(driver,'QDISC_CLIENT_AFTER_BEGIN','QDISC_CLIENT_AFTER_END');validate_qdisc(client_after,loss);server_after=subprocess.check_output(['docker','exec',container,'tc','-s','qdisc','show','dev','eth0'],text=True);validate_qdisc(server_after,loss);(directory/'client-qdisc-after.txt').write_text(client_after);(directory/'server-qdisc-after.txt').write_text(server_after)
                 cb=counters(driver,'CLIENT_BEFORE');ca=counters(driver,'CLIENT_AFTER');tcp_server_after=parse_nstat(subprocess.check_output(['docker','exec',container,'nstat','-az','TcpRetransSegs','TcpOutSegs','TcpInSegs'],text=True));tcp={'client':delta(cb,ca),'server':delta(tcp_server_before,tcp_server_after)};save(directory/'tcp-counters.json',tcp)
-                validation={'passed':True,**probe,'configured_rtt_ms':RTT_MS,'loss_target_percent':loss,'client_qdisc':client_qdisc,'server_qdisc':server_after,'unexpected_bandwidth_limiter':False,'qdisc_dropped_packets':qdisc_drops(client_after)+qdisc_drops(server_after),'successful_attempts':len(successes),'failed_attempts':len(failures),'timeout_seconds':HANDSHAKE_TIMEOUT_SECONDS,'low_loss_note':'qdisc configuration is authoritative; finite probes need not observe exactly the target probability'};save(directory/'validation.json',validation)
-                rec.update(state='complete',measured_attempts=runs*6,warmup_attempts=warmups*6,successful_attempts=len(successes),failed_attempts=len(failures),**probe,tcp_counters=tcp,finished_utc=datetime.datetime.now(datetime.timezone.utc).isoformat());save(status_path,status);print(cid,'PASS',len(successes),'successes',len(failures),'failures',flush=True)
+                validation={'passed':True,**probe,'probe_wall_ms':probe_wall_ms,'probe_wall_clock':'host time.monotonic_ns around docker compose run client probe','configured_rtt_ms':RTT_MS,'loss_target_percent':loss,'client_qdisc':client_qdisc,'server_qdisc':server_after,'unexpected_bandwidth_limiter':False,'qdisc_dropped_packets':qdisc_drops(client_after)+qdisc_drops(server_after),'successful_attempts':len(successes),'failed_attempts':len(failures),'timeout_seconds':HANDSHAKE_TIMEOUT_SECONDS,'low_loss_note':'qdisc configuration is authoritative; finite probes need not observe exactly the target probability'};save(directory/'validation.json',validation)
+                rec.update(state='complete',measured_attempts=runs*6,warmup_attempts=warmups*6,successful_attempts=len(successes),failed_attempts=len(failures),**probe,probe_wall_ms=probe_wall_ms,tcp_counters=tcp,finished_utc=datetime.datetime.now(datetime.timezone.utc).isoformat());save(status_path,status);print(cid,'PASS',len(successes),'successes',len(failures),'failures',flush=True)
         hashes(root);status['passed']=True;save(status_path,status)
     except BaseException as error:
         status['failed_campaign']=status['campaigns'][-1]['campaign_id'] if status['campaigns'] else None;status['error']=repr(error)

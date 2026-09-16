@@ -206,3 +206,12 @@ Capture and key logging may perturb execution. Such a comparison checks
 instrumentation semantics only; it cannot establish performance equivalence with
 uncaptured experiments or support scientific performance conclusions. The next
 stage is an integration plan only; no experimental campaign has been modified.
+
+
+The strict successful-handshake requirements above describe the default mode.
+Stage 6B.3 added explicit `--allow-incomplete` analysis in this same extractor:
+a valid incomplete attempt may report observed TCP establishment and partial
+capture diagnostics, while TLS/full timing and successful-handshake byte/packet
+metrics remain null without client Finished. Partial retransmission diagnostics
+cover the entire selected captured TCP attempt. This does not weaken the default
+success definitions; shared association and SHA-256 checks still fail closed.

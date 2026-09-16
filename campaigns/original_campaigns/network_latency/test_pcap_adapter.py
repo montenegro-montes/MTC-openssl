@@ -27,7 +27,8 @@ class LatencyPcapAdapterTests(unittest.TestCase):
         self.assertIn('with observation(out,scenario,round_number,order,warm', measure)
         self.assertIn('if warm or os.environ.get', (ROOT / 'campaigns/common/pcap_capture.py').read_text())
         runner = (Path(__file__).parent / 'run.py').read_text()
-        self.assertLess(runner.index("'/opt/pcap-core/pcap_capture.py','analyze'"), runner.index("'stop','capture'"))
+        self.assertIn('with capture_session(COMPOSE,directory,env,args.pcap',runner)
+        self.assertLess(runner.index('with capture_session'),runner.index('server_after='))
 
     def test_all_edited_python_is_valid(self):
         for path in (Path(__file__).parent / 'run.py', Path(__file__).parent / 'test_pcap_adapter.py'):
