@@ -152,7 +152,11 @@ def analyze(campaign):
             status=json.loads((directory/'capture-status.json').read_text())
             if status['status']!='SUCCESS':
                 raise RuntimeError(status.get('error','capture failed'))
-            result.update(capture_status='SUCCESS', pcap_sha256=status['pcap_sha256'])
+            pcap = directory/'handshakes.pcap'
+            actual_hash = hashlib.sha256(pcap.read_bytes()).hexdigest()
+            if status.get('pcap_sha256') != actual_hash:
+                raise RuntimeError('PCAP hash does not match capture status')
+            result.update(capture_status='SUCCESS', pcap_sha256=actual_hash)
             if len(matches)!=1:
                 raise RuntimeError('no unique successful OpenSSL observation')
             keylog=directory/'tls.keys'
@@ -169,6 +173,8 @@ def analyze(campaign):
             summary=json.loads((directory/'summary.json').read_text())
             if len(summary['scenarios'])!=1 or summary['scenarios'][0]['scenario']!=identity['scenario']:
                 raise RuntimeError('extractor observation mismatch')
+            if summary.get('pcap_sha256') != actual_hash:
+                raise RuntimeError('PCAP hash does not match extractor output')
             metrics=summary['scenarios'][0]
             if any(metrics.get(k) is None for k in METRICS):
                 raise RuntimeError('extractor omitted required metrics')

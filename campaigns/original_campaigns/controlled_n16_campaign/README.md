@@ -234,3 +234,33 @@ capture, warmups and source transformation guards. A tiny synthetic PCAP is read
 by local tcpdump when available. These checks are not an end-to-end Docker/TLS
 validation; a live capture remains unexecuted. No full campaign was run for this
 integration. Latency, bandwidth, loss and combined campaigns remain unchanged.
+
+## Stage 5 audit closure
+
+The Stage 4 lifecycle was audited without rerunning a campaign. Each measured
+observation creates a private, collision-resistant directory, requests a fresh
+capture, waits for explicit tcpdump readiness, and stops the sidecar with a
+bounded drain and SIGINT. Stale readiness/status files cannot be reused because
+the directory must be new. Warmups remain uncaptured. Capture coordination and
+draining are outside all existing OpenSSL timers.
+
+The audit verifies the structured join `(campaign_id, round_id, scenario,
+is_warmup)` and independently checks `client_random` in the OpenSSL row and TLS
+key log. Duplicate or missing rows, wrong scenarios, missing key logs and failed
+TLS observations produce unavailable derived metrics. Capture and extractor
+statuses remain distinct, and a successful TLS row is retained when either
+secondary step fails. A capture is successful only after tcpdump readiness,
+clean termination, non-trivial size and readability. Its SHA-256 is recomputed
+from disk and must match both `capture-status.json` and the Stage-1 `summary.json`;
+changed PCAP content therefore fails closed.
+
+The original measurement CSV is never rewritten with PCAP values. Derived
+`pcap-metrics.jsonl` records provenance, status, PCAP hash and the Stage-1 fields;
+the existing handshake and BIO metrics remain primary/unchanged. Captured runs
+are explicitly marked non-comparable to uncaptured performance populations.
+
+The historical controlled-N16 fixture paths are unavailable, so no scientific
+N=16 PCAP preflight was claimed or executed. The completed live micro-E2E smoke
+is protocol/instrumentation validation only, not a performance result. This
+implementation is **PASS WITH DOCUMENTED LIMITATIONS** and is not propagated to
+network, bandwidth, loss or combined campaigns.

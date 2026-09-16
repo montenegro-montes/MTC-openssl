@@ -23,7 +23,9 @@ class CaptureTests(unittest.TestCase):
     def observation_fixture(self):
         directory=self.root/'pcap'/'sample-0000-pq'; directory.mkdir(parents=True)
         capture.save(directory/'observation.json',dict(campaign_id='campaign-01',round_id=1,scenario='pq',is_warmup=0))
-        capture.save(directory/'capture-status.json',dict(status='SUCCESS',pcap_sha256='test-hash'))
+        (directory/'handshakes.pcap').write_bytes(b'synthetic-pcap')
+        pcap_hash=capture.hashlib.sha256((directory/'handshakes.pcap').read_bytes()).hexdigest()
+        capture.save(directory/'capture-status.json',dict(status='SUCCESS',pcap_sha256=pcap_hash))
         (directory/'tls.keys').write_text('CLIENT_HANDSHAKE_TRAFFIC_SECRET abc secret\n')
         with (self.root/'samples.csv').open('w') as f:
             writer=csv.DictWriter(f,fieldnames=['campaign_id','round_id','scenario','is_warmup','client_random'])
@@ -62,7 +64,7 @@ class CaptureTests(unittest.TestCase):
     def test_analysis_reuses_extractor_and_joins(self):
         d=self.observation_fixture()
         metrics=dict.fromkeys(capture.METRICS,1);metrics.update(scenario='pq',tcp_stream=0)
-        capture.save(d/'summary.json',dict(scenarios=[metrics]))
+        capture.save(d/'summary.json',dict(pcap_sha256=capture.hashlib.sha256((d/'handshakes.pcap').read_bytes()).hexdigest(), scenarios=[metrics]))
         with patch.object(capture.subprocess,'run',return_value=Mock(returncode=0,stdout='',stderr='')) as run:
             capture.analyze(self.root)
         self.assertEqual(run.call_args.args[0][1],str(capture.EXTRACTOR))
@@ -79,7 +81,18 @@ class CaptureTests(unittest.TestCase):
                 capture.analyze(self.root)
             result=json.loads((d/'derived.json').read_text())
             self.assertIsNone(result['metrics']);self.assertEqual(result['tls_status'],'SUCCESS')
-            self.assertEqual(result['capture_status'],'CAPTURE_FAILURE' if kind=='capture' else 'SUCCESS')
+            self.assertEqual(result['capture_status'],'CAPTURE_FAILURE' if kind == 'capture' else 'SUCCESS')
+
+    def test_changed_pcap_hash_is_rejected(self):
+        d=self.observation_fixture()
+        capture.save(d/'capture-status.json',dict(status='SUCCESS',pcap_sha256='capture-hash'))
+        (d/'handshakes.pcap').write_bytes(b'changed')
+        capture.analyze(self.root)
+        result=json.loads((d/'derived.json').read_text())
+        self.assertIsNone(result['metrics'])
+        self.assertEqual(result['capture_status'],'CAPTURE_FAILURE')
+        self.assertEqual(result['analysis_status'],'NOT_EXECUTED')
+        self.assertIn('PCAP hash does not match capture status',result['error'])
 
     def test_shutdown_drain_sigint_wait_and_readability(self):
         d=self.root;capture.save(d/'request.json',dict(server_port=4433))
