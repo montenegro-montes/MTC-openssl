@@ -93,8 +93,10 @@ def render(model):
     bio=[{'source':name,**{k:r.get(k) for k in BIO}} for name,r in model['metrics'] if any(k in r for k in BIO)]
     if bio: out += [panel('OpenSSL / BIO bytes','<p>BIO counters exclude TCP/IP/frame headers and are distinct from observed wire payload and retransmissions.</p>'+table(bio))]
     fields=[{'source':name,'field':key,'recorded value':value} for name,data in model['documents'].items() for key,value in leaves(data)]
-    for title,terms in [('TLS / scenario configuration',('tls','cipher','group','authentication','signature','scenario','resumption','tickets','hrr','tree_size','depth')),('Configured network condition',('target','configured','qdisc','bandwidth','jitter')),('Measured / validated network condition',('measured_rtt','rtt_measured','measured_loss','loss_measured','goodput')),('Validation and integrity',('status','passed','hash','sha256','client_random','association','keylog','capture','readable')),('Reproducibility',('commit','dirty','version','image','seed','campaign_id','timestamp','platform','fixture'))]:
+    for title,terms in [('TLS / scenario configuration',('tls','cipher','group','authentication','signature','scenario','resumption','tickets','hrr','tree_size','depth')),('Configured network condition',('target','configured','qdisc','bandwidth','jitter')),('Measured / validated network condition',('measured_rtt','rtt_measured','measured_loss','loss_measured','goodput','bandwidth_measured','bandwidth_forward','bandwidth_reverse')),('Validation and integrity',('status','passed','hash','sha256','client_random','association','keylog','capture','readable')),('Reproducibility',('commit','dirty','version','image','seed','campaign_id','timestamp','platform','fixture'))]:
         selected=[r for r in fields if any(term in r['field'].lower() for term in terms)]
+        if title=='Configured network condition':
+            selected=[r for r in selected if not any(term in r['field'].lower() for term in ('measured','goodput','bandwidth_forward','bandwidth_reverse'))]
         if selected: out += [panel(title,table(selected,limit=150))]
     if model['integrity']: out += [panel('Read-only PCAP hash cross-check',table(model['integrity']))]
     for name,rows in tables.items():

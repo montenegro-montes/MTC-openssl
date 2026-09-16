@@ -210,3 +210,76 @@ python3 campaigns/original_campaigns/network_bandwidth/record_commit.py "$BANDWI
 ```
 
 Do not add `artifacts/`, private keys, Docker logs or transient output to Git.
+
+## Stage 6B.2: opt-in PCAP integration
+
+`python3 campaigns/original_campaigns/network_bandwidth/run.py <prepared-root> --pcap`
+adds the shared server-namespace capture sidecar. Omit `--pcap` for the existing
+scientific path: no sidecar, tcpdump, keylog or Stage-1 extraction is requested.
+The existing `--smoke` is still a multi-observation experiment smoke, not the
+single disposable integration check; it was not executed for this stage.
+
+The impairment remains root TBF (handle `1:`), child netem (parent `1:1`, handle
+`10:`) on both client/server `eth0`: unchanged rates, burst calculation,
+1000 ms queue latency and half-RTT delay. The original 20-ping RTT check,
+forward/reverse iperf3 (`-t 4 -O 4`, two-second inter-direction drain), received
+goodput tolerance 80–105%, zero iperf retransmissions and qdisc-drop gates remain
+authoritative. PCAP does not estimate or replace configured/validated bandwidth.
+
+After the existing bandwidth/RTT validation, `pcap_adapter.capture_session`
+starts `mt-tls-capture:local`, then yields to the unchanged driver invocation.
+The driver uses `campaigns/common/pcap_capture.py`: warmups skip capture; each
+measured observation requests capture, waits for `listening on eth0`, runs the
+original TLS operation, requests stop, drains 1.2 seconds and signals the actual
+tcpdump child with SIGINT (no shell-wrapped signal target). The core checks
+clean exit and PCAP readability before publishing capture status.
+
+The thin adapter finalizes pending requests, invokes the same Stage-1 extractor
+through the core and stops the sidecar before the runner inspects the server
+qdisc and later tears down Compose. Existing client qdisc logging remains where
+it was: after per-observation capture finalization, before campaign extraction.
+Server namespace and qdisc survive until capture finalization is complete.
+
+Timeouts retain the existing TLS timeout of 20 seconds. Shared readiness and
+client finalization waits are 8 seconds; tcpdump request watchdog is 60 seconds,
+covering readiness + TLS + bounded drain/finalization/readability work. The
+adapter's pending-finalization allowance is 12 seconds (1.2 second drain +
+5 second SIGINT close + 5 second readability check + margin). Stage-1 keeps its
+60-second per-observation timeout; the host analysis process allows
+`8 + 60 * measured_observation_count` seconds. No TLS timeout is shortened.
+
+Capture failures retain successful/failed TLS semantics. Capture or analysis
+errors leave PCAP metrics null, with `CAPTURE_FAILURE`, `ANALYSIS_FAILURE`,
+`TLS_MEASUREMENT_FAILURE` or `NOT_EXECUTED` as applicable. Adapter-level failures
+are also recorded in `pcap-analysis-status.json`; they do not fabricate values
+or turn a failed TLS measurement into a success.
+
+Existing CSV columns and validation functions remain intact, including native
+`tcp_connect_wall_ms_native`, `handshake_wall_ms` and
+`connection_establishment_wall_ms_native` where the installed binary produces
+them. Native connect follows current `init_client` and may include resolver or
+address selection; it is not SYN/SYN-ACK timing. Full native establishment is
+original connect entry through TLS handshake done, not the sum of TCP and TLS.
+Native timing requires the Stage-6C instrumented image; older images may omit it.
+
+Derived artifacts follow the shared convention: `pcap/sample-*/observation.json`,
+readiness/capture/TLS statuses, PCAP, local keylog, Stage-1 `summary.json`,
+`derived.json`, and campaign `pcap-metrics.jsonl`. Association is fail-closed on
+campaign/round/scenario/warmup/client-random mismatch. Actual PCAP SHA-256 must
+match capture status and Stage-1 summary. The keylog is sensitive local evidence.
+
+The sidecar shares the server network namespace and captures `eth0`. It observes
+traffic reaching/leaving that namespace; it need not see client-egress drops
+before arrival or represent post-shaper departure timestamps for server egress.
+No loss is intentionally introduced here. Namespace/qdisc counters and capture
+counters are different evidence domains and are not substituted for one another.
+
+The disposable PCAP-enabled integration smoke belongs under
+`artifacts/integration-smoke/bandwidth-pcap-<timestamp>/`, with
+`integration_smoke_only=true`, `scientific_measurement=false`,
+`performance_comparable=false`, `pcap_enabled=true`. It is not part of the
+scientific bandwidth population. Future captured and uncaptured observations
+must remain separate for performance inference despite identical metric names.
+Use `bin/artifacts/mt-report <smoke-directory>` for derived HTML outside source
+results. No full bandwidth campaign or historical fixture regeneration is
+required by the adapter's offline tests.

@@ -1,6 +1,7 @@
 """Controlled RTT x per-direction bandwidth campaigns; aborts on validation or drops."""
 import argparse,csv,datetime,hashlib,json,os,random,re,subprocess
 from pathlib import Path
+from pcap_adapter import capture_session
 
 REPO=Path(__file__).resolve().parents[3]
 RTTS=[10,50,100];RATES=[100,20,10,5,1]
@@ -60,14 +61,18 @@ def validate(directory,seed,rtt,rate,runs,warmups,probe):
             if '-mtc-experimental-' in row['scenario'] and 'MTC verification: OK' not in log:raise RuntimeError('MTC failure/fallback')
     save(directory/'validation.json',{'passed':True,'seed':seed,'rtt_target_ms':rtt,'bandwidth_target_mbps':rate,**probe,'qdisc_drops':0,'goodput_acceptance_ratio':[GOODPUT_MIN_RATIO,GOODPUT_MAX_RATIO]})
 def main():
-    p=argparse.ArgumentParser();p.add_argument('root',type=Path);p.add_argument('--smoke',action='store_true');a=p.parse_args();root=a.root.resolve();gate=load(root/'tests-status.json')
+    p=argparse.ArgumentParser();p.add_argument('root',type=Path);p.add_argument('--smoke',action='store_true');p.add_argument('--pcap',action='store_true',help='Opt-in measured-observation PCAP; separate performance population');a=p.parse_args();root=a.root.resolve();gate=load(root/'tests-status.json')
     if not gate['passed']:raise SystemExit('ABORT: regression gate failed')
     image=json.loads(subprocess.check_output(['docker','image','inspect','mt-tls-network:latency'],text=True))[0]['Id']
     if image!=gate['image_id']:raise SystemExit('ABORT: image differs from tested image')
     hashes(root);status_path=root/('smoke-status.json' if a.smoke else 'campaign-status.json')
     if status_path.exists():raise SystemExit('Refusing to overwrite/retry')
-    output=root/('smoke' if a.smoke else 'campaigns');output.mkdir();status={'experiment':'bandwidth-limited','passed':False,'image_id':image,'failed_campaign':None,'campaigns':[]};save(status_path,status)
-    conditions=[(50,x) for x in [20,5,1]] if a.smoke else [(r,b) for r in RTTS for b in RATES];campaigns=[1] if a.smoke else range(1,6);runs,warmups=(5,3) if a.smoke else (30,5);env=os.environ.copy();env['MEASUREMENT_RUN_ROOT']='/work/'+str(output.relative_to(REPO/'artifacts'));resources0=network0=None;containers=set()
+    output=root/('smoke' if a.smoke else 'campaigns');output.mkdir();status={'experiment':'bandwidth-limited','passed':False,'image_id':image,'failed_campaign':None,'campaigns':[]}
+    if a.pcap:
+        capture_image=json.loads(subprocess.check_output(['docker','image','inspect','mt-tls-capture:local'],text=True))[0]
+        status.update(pcap_enabled=True,performance_comparable_to_uncaptured=False,capture_image_id=capture_image['Id'])
+    save(status_path,status)
+    conditions=[(50,x) for x in [20,5,1]] if a.smoke else [(r,b) for r in RTTS for b in RATES];campaigns=[1] if a.smoke else range(1,6);runs,warmups=(5,3) if a.smoke else (30,5);env=os.environ.copy();env['MEASUREMENT_RUN_ROOT']='/work/'+str(output.relative_to(REPO/'artifacts'));env['MEASUREMENT_PCAP']='1' if a.pcap else '0';resources0=network0=None;containers=set()
     try:
         for rtt,rate in conditions:
             for index in campaigns:
@@ -88,7 +93,8 @@ def main():
                 probe=parse_probe(probe_text,rate)
                 rtt_tolerance=max(RTT_ABSOLUTE_TOLERANCE_MS,rtt*.15)
                 if abs(probe['measured_rtt_median_ms']-rtt)>rtt_tolerance:raise RuntimeError(f'Measured RTT outside tolerance: target={rtt}, median={probe["measured_rtt_median_ms"]}, tolerance={rtt_tolerance}')
-                with (directory/'driver.log').open('w') as log:subprocess.run(COMPOSE+['run','--rm','client','measure','--runs',str(runs),'--warmup',str(warmups),'--seed',str(seed),'--image-id',image,'--scenarios',*SCENARIOS],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
+                with capture_session(COMPOSE,directory,env,a.pcap,runs*len(SCENARIOS)):
+                    with (directory/'driver.log').open('w') as log:subprocess.run(COMPOSE+['run','--rm','client','measure','--runs',str(runs),'--warmup',str(warmups),'--seed',str(seed),'--image-id',image,'--scenarios',*SCENARIOS],env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
                 driver=(directory/'driver.log').read_text();server_after=subprocess.check_output(['docker','exec',container,'tc','-s','qdisc','show','dev','eth0'],text=True);(directory/'server-qdisc-after.txt').write_text(server_after);match=re.search(r'QDISC_CLIENT_AFTER_BEGIN\n(.*?)QDISC_CLIENT_AFTER_END',driver,re.S)
                 if not match:raise RuntimeError('Missing client qdisc statistics')
                 client_after=match.group(1);(directory/'client-qdisc-after.txt').write_text(client_after)

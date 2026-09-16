@@ -88,4 +88,16 @@ class ReportingTest(unittest.TestCase):
             existing=subprocess.run([sys.executable,'-m','campaigns.common.reporting',str(source),'--output',str(target)],capture_output=True,text=True)
             self.assertNotEqual(existing.returncode,0);self.assertEqual(target.read_text(),'preserve')
 
+    def test_configured_and_measured_bandwidth_are_separate(self):
+        with tempfile.TemporaryDirectory() as d:
+            page=render(self.make(d,**{'validation.json':{'bandwidth_target_mbps':5,'bandwidth_measured_mbps':4.75,'bandwidth_forward_mbps':4.8,'bandwidth_reverse_mbps':4.75}}))
+            configured=page.split('<h2>Configured network condition</h2>')[1].split('</section>')[0]
+            measured=page.split('<h2>Measured / validated network condition</h2>')[1].split('</section>')[0]
+            self.assertIn('bandwidth_target_mbps',configured)
+            self.assertNotIn('bandwidth_measured_mbps',configured)
+            self.assertIn('bandwidth_measured_mbps',measured)
+            self.assertIn('bandwidth_forward_mbps',measured)
+            self.assertIn('bandwidth_reverse_mbps',measured)
+            self.assertNotIn('bandwidth_target_mbps',measured)
+
 if __name__=='__main__': unittest.main()
