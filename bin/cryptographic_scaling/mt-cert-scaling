@@ -8,7 +8,7 @@ STATE="$REPO/.mt-state/cert-scaling"
 CONFIG="$STATE/paths.env"
 CHAIN=campaigns/cryptographic_scaling/cert_chain_scaling
 MTC=campaigns/cryptographic_scaling/mtc_profile_scaling/workflow.py
-STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 70.mtc-all 80.crossover 90.audit 100.cross-advanced 110.tls-preview 120.tls-full 130.tls-analysis 140.tls-plots)
+STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 70.mtc-all 80.crossover 90.audit 100.cross-advanced 110.tls-preview 120.tls-full 130.tls-analysis 140.tls-plots 150.html-report)
 DEFAULT_STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 80.crossover 90.audit)
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 usage() {
@@ -19,7 +19,7 @@ Usage: bin/cryptographic_scaling/mt-cert-scaling [COMMAND]
   protocol                  open the separate protocol-validation menu
   init [NAME]              save paths without running or generating fixtures
   status                    paths, stages and certificate progress
-  list                      available stages (70, 100 and 110–140 are optional)
+  list                      available stages (70, 100 and 110–150 are optional)
   show STAGE                print a command without executing it
   run STAGE                 execute one stage and save its log
   run --count X             execute up to X pending default stages in order
@@ -31,9 +31,10 @@ Variables: CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID
 Stages accept a number (80) or full name (80.crossover).
   cross                     N=16 crossover + plots (stage 80)
   cross-advanced            generate missing full fixtures, then crossover + plots
+  html-report               render existing advanced crossover evidence as offline HTML
   tls-full                  preview the full TLS matrix without executing it
   tls-full --execute        preview, execute, analyze and plot the full TLS matrix
-Default batches skip optional stages 70, 100 and 110–140.
+Default batches skip optional stages 70, 100 and 110–150.
 run ALL does not execute the TLS performance matrix.
 Full TLS execution is manual: run 120 or tls-full --execute.
 For a previous manual campaign, use init with its name and set its paths.
@@ -101,6 +102,8 @@ plan() {
    if [[ "$STEP" == 110.* ]]; then CMD+=(--dry-run); else CMD+=(--execute); fi;;
   130.*) OUT="$TLS_ROOT/summary.csv"; CMD=(python3 "$CHAIN/analyze.py" "$TLS_ROOT");;
   140.*) OUT="$TLS_ROOT/plots"; CMD=(python3 "$CHAIN/plots.py" "$STATIC_ROOT" --measurements "$TLS_ROOT" --output "$OUT");;
+  150.*) OUT="artifacts/reports/${ADVANCED_ROOT##*/}/report.html"
+   CMD=(bin/artifacts/mt-report "$ADVANCED_ROOT" --output "$OUT");;
   90.*) OUT=$AUDIT; CMD=(python3 "$CHAIN/validate.py" "$CHAIN_FIXTURES" --analysis "$STATIC_ROOT" --output "$AUDIT");;
  esac
 }
@@ -149,6 +152,16 @@ preflight() {
     ;;
   130.*) require_path "$TLS_ROOT/manifest.json";;
   140.*) require_path "$TLS_ROOT/summary.csv"; require_path "$STATIC_ROOT/analysis.json";;
+  150.*)
+    require_path "$ADVANCED_ROOT/analysis_extended.json"
+    require_path "$ADVANCED_ROOT/crossover_extended.csv"
+    require_path "$ADVANCED_ROOT/x509_reference_validation.csv"
+    require_path "$ADVANCED_ROOT/serialization_breakdown.csv"
+    require_path "$ADVANCED_ROOT/mtc_size_model.csv"
+    require_path "$ADVANCED_ROOT/crossover-by-depth.png"
+    require_path "$ADVANCED_ROOT/crossover-curves.png"
+    require_path "bin/artifacts/mt-report"
+    ;;
   10.*) [[ ! -e "$SUPPORT" ]] || fail "Output already exists: $SUPPORT";;
   30.*) require_path "$CHAIN_FIXTURES";;
   60.*) require_path "$MTC16/manifest.json";;
