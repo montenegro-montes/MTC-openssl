@@ -90,6 +90,46 @@ class FullTests(unittest.TestCase):
         self.assertEqual(len(pairs),1);self.assertEqual(c['partial_analyses'],1)
         self.assertEqual(pairs[0]['round_id'],'1')
 
+    def test_successful_tls_analysis_failure_is_unpairable_when_failure_aware(self):
+        def change(root):
+            p=root/'pcap-metrics.jsonl'
+            rows=[json.loads(s) for s in p.read_text().splitlines()]
+            target=next(r for r in rows if r['round_id']==2)
+            target['analysis_status']='ANALYSIS_FAILURE'
+            target['metrics']=None
+            target['error']='Stage-1 extractor failed; see analysis.log'
+            p.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+
+        pairs,c=self.collect(change)
+
+        self.assertEqual(len(pairs),1)
+        self.assertEqual(pairs[0]['round_id'],'1')
+        self.assertEqual(c['successful_tls_observations'],2)
+        self.assertEqual(c['successful_native_pcap_pairs'],1)
+        self.assertEqual(c['incomplete_or_unpairable_observations'],1)
+        self.assertEqual(c['unavailable_captures'],0)
+
+
+    def test_successful_tls_analysis_failure_is_fatal_when_not_failure_aware(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            dataset(root)
+
+            p=root/'pcap-metrics.jsonl'
+            rows=[json.loads(s) for s in p.read_text().splitlines()]
+            target=next(r for r in rows if r['round_id']==2)
+            target['analysis_status']='ANALYSIS_FAILURE'
+            target['metrics']=None
+            target['error']='Stage-1 extractor failed; see analysis.log'
+            p.write_text(''.join(json.dumps(r)+'\n' for r in rows))
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                'analysis_status'
+            ):
+                results.collect(
+                    root,'latency-100','test',2,1,False
+                )
     def test_incomplete_never_has_tls_full(self):
         def change(root):
             p=root/'pcap-metrics.jsonl';rows=[json.loads(s) for s in p.read_text().splitlines()];rows[0]['metrics']['tls_from_pcap_wall_ms']=1

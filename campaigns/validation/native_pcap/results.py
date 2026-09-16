@@ -76,7 +76,7 @@ def collect(directory,condition,campaign_id,measured_rounds,warmup_rounds,failur
     if set(pcap_by_id)!=measured_keys:raise RuntimeError('PCAP attempt accounting mismatch')
     folders=list((directory/'pcap').glob('sample-*'))
     if len(folders)!=measured_rounds:raise RuntimeError('PCAP directory accounting mismatch')
-    randoms=set();paired=[];partial=0;unavailable=0
+    randoms=set();paired=[];partial=0;unavailable=0;unpairable=0
     for success in good+warm:
         value=success.get('client_random','')
         if not re.fullmatch('[0-9a-f]{64}',value) or value in randoms:raise RuntimeError('Missing/malformed/duplicate client_random')
@@ -88,8 +88,27 @@ def collect(directory,condition,campaign_id,measured_rounds,warmup_rounds,failur
             randoms.add(value)
     for native in good:
         row=pcap_by_id[identity(native)]
-        for name in ['capture_status','analysis_status','tls_status']:
-            if row.get(name)!='SUCCESS':raise RuntimeError('Missing successful observation evidence: '+name)
+        if row.get('tls_status') != 'SUCCESS':
+            raise RuntimeError('Missing successful observation evidence: tls_status')
+
+        if row.get('capture_status') != 'SUCCESS':
+            raise RuntimeError('Missing successful observation evidence: capture_status')
+
+        if row.get('analysis_status') != 'SUCCESS':
+            if not failure_aware:
+                raise RuntimeError('Missing successful observation evidence: analysis_status')
+
+            # Under the failure-aware condition, a successful TLS handshake may
+            # occasionally have an intact PCAP that cannot independently expose
+            # the TLS Finished boundary (for example because tshark cannot
+            # reconstruct/decrypt the complete handshake). Preserve the
+            # observation as unpairable; never manufacture PCAP timing metrics.
+            if row.get('analysis_status') != 'ANALYSIS_FAILURE':
+                raise RuntimeError('Unexpected successful-TLS analysis status')
+
+            verify_capture(directory, row)
+            unpairable += 1
+            continue
         if row.get('association_confidence')!='client_random' or row.get('client_random')!=native['client_random']:raise RuntimeError('Native/PCAP client_random mismatch')
         folder,digest=verify_capture(directory,row);metrics=row.get('metrics')
         if not isinstance(metrics,dict) or metrics.get('client_random')!=native['client_random']:raise RuntimeError('Extractor client_random mismatch')
@@ -135,7 +154,7 @@ def collect(directory,condition,campaign_id,measured_rounds,warmup_rounds,failur
         if row.get('analysis_status')=='PARTIAL':
             partial+=1
             if any(row['metrics'].get(k) is not None for k in ['tls_from_pcap_wall_ms','connection_handshake_wall_ms','connection_handshake_tcp_payload_bytes','connection_handshake_ip_bytes','connection_handshake_frame_bytes']):raise RuntimeError('Fabricated incomplete TLS/full metrics')
-    accounting=dict(measured_attempts=measured_rounds,warmup_attempts=warmup_rounds,successful_tls_observations=len(good),failed_tls_observations=len(measured_failures),successful_native_pcap_pairs=len(paired),incomplete_or_unpairable_observations=len(measured_failures),partial_analyses=partial,unavailable_captures=unavailable,warmup_successes=len(warm),warmup_failures=len(failed)-len(measured_failures))
+    accounting=dict(measured_attempts=measured_rounds,warmup_attempts=warmup_rounds,successful_tls_observations=len(good),failed_tls_observations=len(measured_failures),successful_native_pcap_pairs=len(paired),incomplete_or_unpairable_observations=len(measured_failures)+unpairable,partial_analyses=partial,unavailable_captures=unavailable,warmup_successes=len(warm),warmup_failures=len(failed)-len(measured_failures))
     if len(good)+len(measured_failures)!=measured_rounds:raise RuntimeError('Measured accounting mismatch')
     return paired,accounting
 
