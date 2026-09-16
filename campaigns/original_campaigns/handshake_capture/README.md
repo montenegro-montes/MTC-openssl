@@ -82,3 +82,62 @@ captured frame bytes; `tcp_payload_bytes` is TCP payload and is distinct from th
 existing TLS BIO byte metric. A shared server-port mapping attributes packets to
 each scenario. Experimental Compact/MTC certificate bodies may still require the
 repository's binary inspectors after TLS decryption.
+
+## PCAP connection-handshake metrics (Stage 1)
+
+`analyze.py` adds the following fields to each scenario in `summary.json` without
+changing existing fields or OpenSSL instrumentation. Analysis uses two-pass tshark
+with the existing key log. A port must identify exactly one `tcp.stream`; otherwise
+analysis fails. For an intentional multi-connection capture, specify `tcp_stream`
+on the corresponding `connections.json` item. Existing port-wide summary fields
+remain port-wide; the new fields below describe only the selected stream.
+
+- `tcp_stream`, `syn_frame`, `syn_ack_frame`, `tcp_established_frame`,
+  `client_hello_frame`, `client_finished_frame`, and each boundary's
+  `*_time_epoch` expose the calculation boundaries.
+- `tcp_connect_wall_ms`: first SYN to the client's first ACK matching both initial
+  sequence numbers plus one (modulo 2^32). This ACK may carry ClientHello.
+- `tls_from_pcap_wall_ms`: ClientHello to **client** Finished.
+- `connection_handshake_wall_ms`: first SYN to client Finished.
+- `connection_handshake_packets`: selected-flow frames within those inclusive
+  frame-number boundaries, excluding subsequent ACKs and shutdown traffic.
+- `connection_handshake_frame_bytes`: sum of `frame.len`, the original frame
+  lengths reported by the capture, not necessarily the stored snapshot lengths.
+  This campaign captures server-side container `eth0`: link headers are included
+  as exposed by the capture; physical preamble, inter-frame gaps and normally FCS
+  are absent. Virtual interfaces/offloading can change observed segmentation;
+  these counts do not claim physical-medium occupancy.
+- `connection_handshake_ip_bytes`: sum of IPv4 `ip.len`, including IP headers.
+- `connection_handshake_tcp_payload_bytes`: sum of `tcp.len`, excluding TCP/IP
+  headers but including every observed retransmitted payload.
+- `connection_handshake_retransmission_frames`: frames marked by any of tshark's
+  retransmission, fast-retransmission or spurious-retransmission diagnostics,
+  counted once per frame. This is a dissector classification, not proof of loss.
+
+The first implementation supports single-layer IPv4, ordinary TCP establishment
+and one ClientHello/client Finished per selected stream. Missing SYN/ACKs,
+ambiguous handshakes (including retries), IPv6, TCP Fast Open, invalid lengths or
+non-monotonic timestamps fail explicitly. Multiple handshake types in one frame
+are parsed individually, and server Finished is never used as the endpoint.
+TLS reassembly assigns message completion to a frame: timing uses that frame's
+capture timestamp. The whole endpoint frame is counted, including any coalesced
+payload. Without a decryptable client Finished, no new metrics are produced.
+
+`handshake_wall_ms` remains the primary OpenSSL TLS timing and excludes TCP
+establishment. `transport_total_bytes`, `transport_read_bytes` and
+`transport_written_bytes` keep their BIO definitions. BIO bytes, observed TCP
+payload, IP bytes and captured frame bytes are distinct accounting layers; do not
+expect equality. PCAP timing is secondary and capture can perturb performance.
+Historical results are not estimated or rewritten using these fields.
+
+Offline tests (no Docker or new experiment):
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+  -s campaigns/original_campaigns/handshake_capture -p test_analyze.py
+```
+
+Stage 1 validation uses deterministic frame tables, including zero retransmissions,
+retransmission de-duplication, multiple streams and unavailable Finished. No existing
+PCAP was available under `artifacts/captures` during implementation; live tshark
+and PCAP/OpenSSL cross-checks remain pending. Stages 2–4 are not integrated.
