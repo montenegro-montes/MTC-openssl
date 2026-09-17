@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import time
+import summary_outputs
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
@@ -546,9 +547,20 @@ def execute_full(root,preflight_root):
         for condition in CONDITIONS:
             directory=root/f"full-{condition}"/f"native-pcap-{condition}-full"
             pairs.extend(json.loads(line) for line in (directory/"paired-observations.jsonl").read_text().splitlines())
+
         with (root/"paired-observations.jsonl").open("x") as handle:
-            for row in pairs:handle.write(json.dumps(row)+"\n")
-        status["passed"]=True
+            for row in pairs:
+                handle.write(json.dumps(row) + "\n")
+
+        summary_csv, summary_json = summary_outputs.generate_validation_summary(root)
+
+        status["summary_outputs"] = {
+            "validation_summary_csv": str(summary_csv.relative_to(root)),
+            "validation_summary_csv_sha256": summary_outputs.sha256(summary_csv),
+            "validation_summary_json": str(summary_json.relative_to(root)),
+            "validation_summary_json_sha256": summary_outputs.sha256(summary_json),
+        }
+        status["passed"] = True
     except BaseException as error:
         status["passed"] = False
         status["error"]=repr(error)

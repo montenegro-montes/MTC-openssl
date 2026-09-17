@@ -219,9 +219,10 @@ Produce at least:
 
     metadata.json
     preflight-status.json
-    paired-observations.csv
+    paired-observations.jsonl
     validation-summary.csv
     validation-summary.json
+    full-status.json
     report.md
 
 Preserve raw per-condition evidence including:
