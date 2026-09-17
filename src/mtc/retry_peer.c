@@ -9,6 +9,13 @@
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
+#include <time.h>
+
+static double tick_ms(void) {
+    struct timespec t;
+    if(clock_gettime(CLOCK_MONOTONIC,&t))return -1.0;
+    return t.tv_sec*1000.0+t.tv_nsec/1e6;
+}
 
 static int transport(const char *host,const char *port,int server) {
     struct addrinfo hints={0},*addresses=NULL,*a;int fd=-1,one=1;
@@ -27,6 +34,14 @@ static void deadline(int fd) {
     struct timeval t={5,0};
     setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&t,sizeof(t));
     setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&t,sizeof(t));
+}
+static void timing(SSL *ssl,double tcp_ms,double tls_ms,double attempt_ms) {
+    unsigned char random[32];size_t n=SSL_get_client_random(ssl,random,sizeof(random));
+    fprintf(stdout,"MTC_RETRY_TIMING {\"connection_id\":\"");
+    retry_hex(stdout,random,n);
+    fprintf(stdout,"\",\"retry_tcp_connect_wall_ms_native\":%.6f,\"retry_tls_attempt_wall_ms\":%.6f,\"retry_attempt_wall_ms_native\":%.6f}\n",
+            tcp_ms,tls_ms,attempt_ms);
+    fflush(stdout);
 }
 static void result(SSL *ssl,int ok) {
     unsigned char random[32];size_t n=SSL_get_client_random(ssl,random,sizeof(random));
@@ -72,17 +87,22 @@ int main(int argc,char **argv) {
         puts("MTC_RETRY_READY");fflush(stdout);
     }else if(!retry_configure(ctx,argv[4],landmark,argv[6],NULL,NULL))goto end;
     for(int i=0;i<count;i++){
+        double attempt_start=-1.0,tcp_done=-1.0,tls_start=-1.0,tls_done=-1.0;
         if(server){struct pollfd ready={listener,POLLIN,0};if(poll(&ready,1,10000)<=0)goto end;fd=accept(listener,NULL,NULL);}
-        else fd=transport(argv[2],argv[3],0);
+        else {attempt_start=tick_ms();fd=transport(argv[2],argv[3],0);tcp_done=tick_ms();}
         if(fd<0)goto end;
         deadline(fd);
         ssl=SSL_new(ctx); /* new SSL object for this accepted/connected socket */
         if(!ssl||!SSL_set_fd(ssl,fd))goto end;
         if(!server&&(!SSL_set_tlsext_host_name(ssl,argv[7])||!SSL_set1_host(ssl,argv[7])))goto end;
+        if(!server)tls_start=tick_ms();
         ok=(server?SSL_accept(ssl):SSL_connect(ssl))==1; /* native handshake / ClientHello */
+        if(!server)tls_done=tick_ms();
         if(ok&&(SSL_session_reused(ssl)||SSL_version(ssl)!=TLS1_3_VERSION
                ||(!server&&SSL_get_verify_result(ssl)!=X509_V_OK)))ok=0;
         result(ssl,ok);
+        if(!server&&attempt_start>=0.0&&tcp_done>=attempt_start&&tls_start>=0.0&&tls_done>=tls_start)
+            timing(ssl,tcp_done-attempt_start,tls_done-tls_start,tls_done-attempt_start);
         if(!ok)ERR_print_errors_fp(stderr);
         SSL_free(ssl);ssl=NULL;close(fd);fd=-1; /* attempt ends before another starts */
         exit_code=ok?0:1;

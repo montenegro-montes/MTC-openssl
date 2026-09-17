@@ -14,6 +14,13 @@ def completed(requested, supported=B, reason='trust_anchor_mismatch', ok=False, 
     native = dict(result='PASS' if ok else 'FAIL', connection_id=f'{number:064x}',
                   session_reused=False, tls_version='TLSv1.3', cipher='TLS_AES_256_GCM_SHA384', negotiated_group=1034)
     stdout = 'MTC_RETRY_RESULT ' + json.dumps(native) + '\n'
+    timing = dict(
+        connection_id=f'{number:064x}',
+        retry_tcp_connect_wall_ms_native=0.1,
+        retry_tls_attempt_wall_ms=0.9,
+        retry_attempt_wall_ms_native=1.1,
+    )
+    stdout += 'MTC_RETRY_TIMING ' + json.dumps(timing) + '\n'
     stderr = 'MTC_RETRY_CH ' + json.dumps(dict(requested_id_hex=retry.encode_id(requested).hex())) + '\n'
     stderr += 'MTC_RETRY_EE ' + json.dumps(dict(available_list_hex=raw or wire.hex(), reason=reason)) + '\n'
     if ok:
@@ -47,6 +54,9 @@ class RetryTests(unittest.TestCase):
         self.assertEqual((r['final_result'], r['retry_count'], requests), ('PASS', 1, [A, B]))
         self.assertEqual(r['retry_selected_id'], B)
         self.assertNotEqual(r['attempt_1_connection_id'], r['attempt_2_connection_id'])
+        self.assertAlmostEqual(r['retry_total_tcp_connect_wall_ms_native'], 0.2)
+        self.assertAlmostEqual(r['retry_total_tls_attempt_wall_ms'], 1.8)
+        self.assertAlmostEqual(r['retry_total_attempt_wall_ms_native'], 2.2)
 
     def test_C_no_local_common(self):
         r, requests = self.execute(A, [completed(A, supported=C)])

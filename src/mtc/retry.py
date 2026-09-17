@@ -5,6 +5,7 @@ Server indications are untrusted discovery input, never new trust material.
 """
 import argparse
 import json
+import math
 from pathlib import Path
 import subprocess
 import tempfile
@@ -79,14 +80,29 @@ def classify_attempt(completed, requested):
         offered = events(log, 'MTC_RETRY_EE ')
         ch = events(log, 'MTC_RETRY_CH ')
         errors = events(log, 'MTC_RETRY_ERROR ')
-        if len(results) != 1 or len(ch) != 1 or errors:
+        timing = events(log, 'MTC_RETRY_TIMING ')
+        if len(results) != 1 or len(ch) != 1 or len(timing) != 1 or errors:
             raise ValueError('missing/ambiguous native evidence')
         native = results[0]
+        measured = timing[0]
         if decode_id(bytes.fromhex(ch[0]['requested_id_hex'])) != requested:
             raise ValueError('ClientHello does not advertise requested ID')
         connection = native['connection_id']
         if not isinstance(connection, str) or len(connection) != 64 or len(bytes.fromhex(connection)) != 32:
             raise ValueError('invalid connection ID')
+        if measured.get('connection_id') != connection:
+            raise ValueError('timing connection ID mismatch')
+        metric_names = (
+            'retry_tcp_connect_wall_ms_native',
+            'retry_tls_attempt_wall_ms',
+            'retry_attempt_wall_ms_native',
+        )
+        for name in metric_names:
+            value = measured.get(name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError('invalid timing value')
+            if not math.isfinite(value) or value < 0:
+                raise ValueError('invalid timing value')
         if len(offered) != 1:
             raise ValueError('missing/ambiguous available list')
         ids = available_ids(offered[0]['available_list_hex'])
@@ -99,8 +115,10 @@ def classify_attempt(completed, requested):
                     and offered[0]['reason'] == 'trust_anchor_mismatch')
         return dict(result='PASS' if success else 'FAIL',
                     reason='authenticated' if success else ('trust_anchor_mismatch' if mismatch else 'authentication_failure'),
-                    server_supported_ids=ids, **{k: native[k] for k in
-                    ('connection_id', 'session_reused', 'tls_version', 'cipher', 'negotiated_group')})
+                    server_supported_ids=ids,
+                    **{k: native[k] for k in
+                       ('connection_id', 'session_reused', 'tls_version', 'cipher', 'negotiated_group')},
+                    **{k: measured[k] for k in metric_names})
     except (ValueError, KeyError, TypeError):
         return dict(result='FAIL', reason='invalid_or_missing_native_evidence',
                     server_supported_ids=[], connection_id=None)
@@ -146,6 +164,22 @@ def transaction(initial_id, trusted_id, attempt):
             break
         requested = trusted_id
         report['retry_selected_id'] = trusted_id
+
+    totals = (
+        ('retry_tcp_connect_wall_ms_native',
+         'retry_total_tcp_connect_wall_ms_native'),
+        ('retry_tls_attempt_wall_ms',
+         'retry_total_tls_attempt_wall_ms'),
+        ('retry_attempt_wall_ms_native',
+         'retry_total_attempt_wall_ms_native'),
+    )
+    for source, target in totals:
+        values = [record.get(source) for record in report['attempts']]
+        if values and all(isinstance(value, (int, float))
+                          and not isinstance(value, bool)
+                          for value in values):
+            report[target] = sum(values)
+
     return report
 
 
