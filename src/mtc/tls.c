@@ -1,7 +1,13 @@
 #include "mtc.c"
-#define CONTEXT (SSL_EXT_TLS_ONLY|SSL_EXT_TLS1_3_ONLY|SSL_EXT_CLIENT_HELLO|SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS|SSL_EXT_TLS1_3_CERTIFICATE)
+#define CONTEXT (SSL_EXT_TLS_ONLY|SSL_EXT_TLS1_3_ONLY|SSL_EXT_CLIENT_HELLO|SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS|SSL_EXT_TLS1_3_CERTIFICATE|SSL_EXT_TLS1_3_CERTIFICATE_REQUEST)
 typedef int (*SecurityCallback)(const SSL *,const SSL_CTX *,int,int,int,void *,void *);
-typedef struct {SecurityCallback previous_security;MTCConfig *trust;unsigned char id[80],group[80],list[83];size_t n;int server,has_group;} TLSConfig;
+enum {
+    MTC_ROLE_CLIENT_VERIFY_SERVER = 1,
+    MTC_ROLE_SERVER_PRESENT,
+    MTC_ROLE_SERVER_VERIFY_CLIENT,
+    MTC_ROLE_CLIENT_PRESENT
+};
+typedef struct {SecurityCallback previous_security;MTCConfig *trust;unsigned char id[80],group[80],list[83];size_t n;int role,has_group,purpose;} TLSConfig;
 typedef struct {int matched,available,confirmed;} TLSState;
 static int ci=-1,si=-1;
 /* Restricted initial single-log group. id_encode supplies canonical components;
@@ -16,28 +22,96 @@ static TLSState *state(SSL *ssl){TLSState *s=SSL_get_ex_data(ssl,si);if(!s){s=OP
 static int add(SSL *ssl,unsigned type,unsigned context,const unsigned char **out,size_t *len,X509 *x,size_t chainidx,int *alert,void *arg){
     TLSConfig *c=arg;TLSState *s=state(ssl);(void)type;(void)x;
     if(!s){*alert=SSL_AD_INTERNAL_ERROR;return -1;}
-    if(context==SSL_EXT_CLIENT_HELLO){*out=c->list;*len=c->n+3;return 1;}
-    if(!s->matched){*alert=SSL_AD_HANDSHAKE_FAILURE;return -1;}
-    if(context==SSL_EXT_TLS1_3_CERTIFICATE){if(chainidx)return 0;*out=(const unsigned char *)"";*len=0;return 1;}
-    *out=c->list;*len=c->n+3;return 1;
+
+    if(context==SSL_EXT_CLIENT_HELLO){
+        if(c->role!=MTC_ROLE_CLIENT_VERIFY_SERVER
+            && c->role!=MTC_ROLE_CLIENT_PRESENT)return 0;
+        *out=c->list;*len=c->n+3;return 1;
+    }
+
+    if(c->role==MTC_ROLE_CLIENT_PRESENT){
+        if(!s->available){*alert=SSL_AD_HANDSHAKE_FAILURE;return -1;}
+    }else{
+        if(!s->matched){*alert=SSL_AD_HANDSHAKE_FAILURE;return -1;}
+    }
+
+    if(context==SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS){
+        if(c->role!=MTC_ROLE_SERVER_PRESENT)return 0;
+        *out=c->list;*len=c->n+3;return 1;
+    }
+
+    if(context==SSL_EXT_TLS1_3_CERTIFICATE_REQUEST){
+        if(c->role!=MTC_ROLE_SERVER_VERIFY_CLIENT)return 0;
+        *out=c->list;
+        *len=c->n+3;
+        s->available=1;
+        return 1;
+    }
+
+    if(context==SSL_EXT_TLS1_3_CERTIFICATE){
+        if(chainidx)return 0;
+        if(c->role!=MTC_ROLE_SERVER_PRESENT
+            && c->role!=MTC_ROLE_CLIENT_VERIFY_SERVER
+            && c->role!=MTC_ROLE_CLIENT_PRESENT)return 0;
+        *out=(const unsigned char *)"";*len=0;return 1;
+    }
+
+    return 0;
 }
+
 static int parse(SSL *ssl,unsigned type,unsigned context,const unsigned char *in,size_t n,X509 *x,size_t chainidx,int *alert,void *arg){
     TLSConfig *c=arg;TLSState *s=state(ssl);Slice p={in,n},list,id;int match=0;(void)type;(void)x;
     if(!s)goto bad;
-    if(context==SSL_EXT_TLS1_3_CERTIFICATE){if(n||chainidx||!s->available)goto bad;s->confirmed=1;return 1;}
+
+    if(context==SSL_EXT_TLS1_3_CERTIFICATE){
+        if(c->role!=MTC_ROLE_CLIENT_VERIFY_SERVER
+            && c->role!=MTC_ROLE_SERVER_VERIFY_CLIENT)goto bad;
+        if(n||chainidx||!s->available)goto bad;
+        s->confirmed=1;return 1;
+    }
+
+    if(context==SSL_EXT_CLIENT_HELLO){
+        if(c->role!=MTC_ROLE_SERVER_PRESENT
+            && c->role!=MTC_ROLE_SERVER_VERIFY_CLIENT)goto bad;
+    }else if(context==SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS){
+        if(c->role!=MTC_ROLE_CLIENT_VERIFY_SERVER)goto bad;
+    }else if(context==SSL_EXT_TLS1_3_CERTIFICATE_REQUEST){
+        if(c->role!=MTC_ROLE_CLIENT_VERIFY_SERVER
+            && c->role!=MTC_ROLE_CLIENT_PRESENT)goto bad;
+    }else{
+        goto bad;
+    }
+
     if(!vector(&p,2,&list)||p.n||!list.n)goto bad;
-    while(list.n){if(!vector(&list,1,&id)||!id.n)goto bad;if(id.n==c->n&&(!memcmp(id.p,c->id,id.n)||(context==SSL_EXT_CLIENT_HELLO&&c->server&&c->has_group&&!memcmp(id.p,c->group,id.n))))match=1;}
+    while(list.n){
+        if(!vector(&list,1,&id)||!id.n)goto bad;
+        if(id.n==c->n
+            && (!memcmp(id.p,c->id,id.n)
+                || (context==SSL_EXT_CLIENT_HELLO
+                    && (c->role==MTC_ROLE_SERVER_PRESENT
+                        || c->role==MTC_ROLE_SERVER_VERIFY_CLIENT)
+                    && c->has_group
+                    && !memcmp(id.p,c->group,id.n))))
+            match=1;
+    }
     if(!match)goto bad;
-    if(context==SSL_EXT_CLIENT_HELLO)s->matched=1;else s->available=1;
+
+    if(context==SSL_EXT_CLIENT_HELLO)s->matched=1;
+    else s->available=1;
+
     return 1;
-bad:*alert=SSL_AD_HANDSHAKE_FAILURE;return 0;
+
+bad:
+    *alert=SSL_AD_HANDSHAKE_FAILURE;
+    return 0;
 }
+
 static int verify(X509_STORE_CTX *store,void *arg){
     TLSConfig *c=arg;SSL *ssl=X509_STORE_CTX_get_ex_data(store,SSL_get_ex_data_X509_STORE_CTX_idx());
     TLSState *s=ssl?state(ssl):NULL;X509 *x=X509_STORE_CTX_get0_cert(store);int ok=0;
     X509_STORE *trust=NULL;X509_STORE_CTX *check=NULL;double begin=tick();
     if(!s||!s->confirmed||!x||!mtc_verify(x,c->trust))goto end;
-    if(X509_check_purpose(x,X509_PURPOSE_SSL_SERVER,0)!=1||X509_cmp_current_time(X509_get0_notBefore(x))>=0||X509_cmp_current_time(X509_get0_notAfter(x))<=0)goto end;
+    if(X509_check_purpose(x,c->purpose,0)!=1||X509_cmp_current_time(X509_get0_notBefore(x))>=0||X509_cmp_current_time(X509_get0_notAfter(x))<=0)goto end;
     /* Restricted direct-CA profile: MTC authenticates this leaf, then native
        X509 validates its applicable leaf constraints with it locally trusted.
        This is NOT a general MTC PKIX chain-building implementation. */
@@ -62,7 +136,8 @@ static int proof_algorithm(const X509_ALGOR *alg){
 static int mtc_security(const SSL *ssl,const SSL_CTX *ctx,int op,int bits,int nid,void *other,void *ex){
     const SSL_CTX *active=ctx?ctx:(ssl?SSL_get_SSL_CTX(ssl):NULL);
     TLSConfig *c=ci>=0 && active?SSL_CTX_get_ex_data(active,ci):NULL;
-    if(c && c->server && op==SSL_SECOP_CA_MD && other){
+    if(c && (c->role==MTC_ROLE_SERVER_PRESENT || c->role==MTC_ROLE_CLIENT_PRESENT)
+        && op==SSL_SECOP_CA_MD && other){
         const X509_ALGOR *alg=NULL;X509 *cert=other;
         X509_get0_signature(NULL,&alg,cert);
         if(proof_algorithm(alg) && proof_algorithm(X509_get0_tbs_sigalg(cert)))return 1;
@@ -73,21 +148,58 @@ static int install(SSL_CTX *ctx,TLSConfig *c){
     if(ci<0)ci=SSL_CTX_get_ex_new_index(0,NULL,NULL,NULL,config_free);
     if(si<0)si=SSL_get_ex_new_index(0,NULL,NULL,NULL,state_free);
     if(ci<0||si<0||!SSL_CTX_set_ex_data(ctx,ci,c))return 0;
-    put(c->list,c->n+1,2);c->list[2]=(unsigned char)c->n;memcpy(c->list+3,!c->server&&c->has_group?c->group:c->id,c->n);
+    put(c->list,c->n+1,2);c->list[2]=(unsigned char)c->n;memcpy(c->list+3,
+        (c->role==MTC_ROLE_CLIENT_VERIFY_SERVER || c->role==MTC_ROLE_CLIENT_PRESENT)
+            && c->has_group ? c->group : c->id,
+        c->n);
     if(!SSL_CTX_add_custom_ext(ctx,MTC_EXT,CONTEXT,add,NULL,c,parse,c))return 0;
-    if(!c->server)SSL_CTX_set_cert_verify_callback(ctx,verify,c);
-    else {c->previous_security=SSL_CTX_get_security_callback(ctx);SSL_CTX_set_security_callback(ctx,mtc_security);}
+    if(c->role==MTC_ROLE_CLIENT_VERIFY_SERVER || c->role==MTC_ROLE_SERVER_VERIFY_CLIENT)
+        SSL_CTX_set_cert_verify_callback(ctx,verify,c);
+    else {
+        c->previous_security=SSL_CTX_get_security_callback(ctx);
+        SSL_CTX_set_security_callback(ctx,mtc_security);
+    }
     return 1;
 }
 int mtc_client(SSL_CTX *ctx,const char *path,int landmark){
     TLSConfig *c=OPENSSL_zalloc(sizeof(*c));if(!c)return 0;
-    c->trust=mtc_load(path,landmark);if(!c->trust){OPENSSL_free(c);return 0;}
+    c->trust=mtc_load(path,landmark);if(!c->trust){OPENSSL_free(c);return 0;}c->role=MTC_ROLE_CLIENT_VERIFY_SERVER;c->purpose=X509_PURPOSE_SSL_SERVER;
     SSL_CTX_set_verify(ctx,SSL_VERIFY_PEER,NULL);
     c->n=c->trust->signal_len;memcpy(c->id,c->trust->signal,c->n);
     if(landmark){c->has_group=initial_group(c);if(!c->has_group){mtc_free(c->trust);OPENSSL_free(c);return 0;}}
     return install(ctx,c);
 }
 int mtc_server(SSL_CTX *ctx,const char *id){
-    TLSConfig *c=OPENSSL_zalloc(sizeof(*c));if(!c)return 0;c->server=1;
+    TLSConfig *c=OPENSSL_zalloc(sizeof(*c));if(!c)return 0;c->role=MTC_ROLE_SERVER_PRESENT;
     if(!id_encode(id,c->id,&c->n)){OPENSSL_free(c);return 0;}c->has_group=initial_group(c);return install(ctx,c);
+}
+int mtc_server_verify_client(SSL_CTX *ctx,const char *path,int landmark){
+    TLSConfig *c=OPENSSL_zalloc(sizeof(*c));if(!c)return 0;
+    c->trust=mtc_load(path,landmark);if(!c->trust){OPENSSL_free(c);return 0;}
+    c->role=MTC_ROLE_SERVER_VERIFY_CLIENT;c->purpose=X509_PURPOSE_SSL_CLIENT;
+    SSL_CTX_set_verify(ctx,SSL_VERIFY_PEER|SSL_VERIFY_FAIL_IF_NO_PEER_CERT,NULL);
+    c->n=c->trust->signal_len;memcpy(c->id,c->trust->signal,c->n);
+    if(landmark){
+        c->has_group=initial_group(c);
+        if(!c->has_group){mtc_free(c->trust);OPENSSL_free(c);return 0;}
+    }
+    return install(ctx,c);
+}
+
+int mtc_client_present(SSL_CTX *ctx,const char *id,int landmark){
+    TLSConfig *c=OPENSSL_zalloc(sizeof(*c));
+    if(!c)return 0;
+    c->role=MTC_ROLE_CLIENT_PRESENT;
+    if(!id_encode(id,c->id,&c->n)){
+        OPENSSL_free(c);
+        return 0;
+    }
+    if(landmark){
+        c->has_group=initial_group(c);
+        if(!c->has_group){
+            OPENSSL_free(c);
+            return 0;
+        }
+    }
+    return install(ctx,c);
 }
