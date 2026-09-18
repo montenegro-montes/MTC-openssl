@@ -1,0 +1,47 @@
+name: crossovernmtc
+
+x-common: &common
+  image: "${CROSSOVER_N_MTC_IMAGE:-mt-tls-mtc:local}"
+  volumes:
+    - ../..:/repo:ro
+    - "${MTC_ROOT:-/tmp/mtc-missing}:/mtc:ro"
+    - "${CROSSOVER_N_RESULTS:-/tmp/crossover-n-results-missing}:/results"
+  environment:
+    MTC_ROOT: /mtc
+    SERVER_METRICS: "/results/${CERT_CAMPAIGN:-missing-campaign}/endpoint-metrics"
+    CERT_PROFILE: "${CERT_PROFILE:-missing-profile}"
+    MTC_TREE_SIZE: "${MTC_TREE_SIZE:-missing-tree-size}"
+    PROFILE_DETAIL: "1"
+
+services:
+  server:
+    <<: *common
+    command:
+      - python3
+      - /repo/campaigns/validation/crossover_n_server_only/server_mtc_by_n.py
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import socket;s=socket.create_connection(('127.0.0.1',4433),1);s.close()"
+      interval: 1s
+      timeout: 1s
+      retries: 30
+
+  client:
+    <<: *common
+    environment:
+      MTC_ROOT: /mtc
+      SERVER_METRICS: "/results/${CERT_CAMPAIGN:-missing-campaign}/endpoint-metrics"
+      CAMPAIGN_OUTPUT: "/results/${CERT_CAMPAIGN:-missing-campaign}/data"
+      CERT_PROFILE: "${CERT_PROFILE:-missing-profile}"
+      CERT_PROFILE_NAME: "${CERT_PROFILE:-missing-profile}"
+      MTC_TREE_SIZE: "${MTC_TREE_SIZE:-missing-tree-size}"
+      PROFILE_DETAIL: "1"
+      FIXTURE_SHA256: "${FIXTURE_SHA256:-missing-fixture-sha256}"
+      SOURCE_COMMIT: "${SOURCE_COMMIT:-missing-source-commit}"
+      IMAGE_ID: "${IMAGE_ID:-missing-image-id}"
+    command:
+      - python3
+      - /repo/campaigns/validation/crossover_n_server_only/measure_mtc_by_n.py
