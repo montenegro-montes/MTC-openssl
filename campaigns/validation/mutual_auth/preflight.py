@@ -384,6 +384,7 @@ def negative_case_definitions():
                 "-no_ticket",
                 "-verify_return_error",
                 "-state",
+                "-ign_eof",
             ],
             "expect_client": [
                 "unknown ca",
@@ -423,6 +424,7 @@ def negative_case_definitions():
                 "-no_ticket",
                 "-verify_return_error",
                 "-state",
+                "-ign_eof",
             ],
             "expect_client": [
                 "handshake failure",
