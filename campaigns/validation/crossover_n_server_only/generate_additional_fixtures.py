@@ -98,7 +98,7 @@ def main():
                 originals=originals,
                 signer_keys=signer_keys,
                 metadata={
-                    "experiment": "crossover_n_refinement",
+                    "experiment": "crossover_n_server_only_additional_fixtures",
                     "source_fixture_root": str(source),
                     "source_batch16_manifest_sha256": sha256(
                         source_mtc16 / "manifest.json"
@@ -129,7 +129,7 @@ def main():
             })
 
     manifest = {
-        "experiment": "crossover_n_refinement",
+        "experiment": "crossover_n_server_only_additional_fixtures",
         "source": str(source),
         "cells": generated,
     }

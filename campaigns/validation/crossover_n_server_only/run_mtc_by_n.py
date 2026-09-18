@@ -10,7 +10,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from config import MTC_CHAIN_PROFILE, PROFILES, TLS, TREE_SIZES
+from config import MTC_CHAIN_PROFILE, PROFILES, TLS, TREE_SIZES, TREE_SIZES_BY_PROFILE
 
 REPO = Path(__file__).resolve().parents[3]
 COMPOSE = [
@@ -52,11 +52,12 @@ def main() -> None:
     mtc_root = args.mtc_root.resolve()
     output = args.output.resolve()
     profiles = args.profile or list(PROFILES)
-    tree_sizes = args.tree_size or list(TREE_SIZES)
+    requested_tree_sizes = args.tree_size
 
-    unknown = sorted(set(tree_sizes) - set(TREE_SIZES))
-    if unknown:
-        parser.error(f"Unexpected tree sizes for pilot: {unknown}")
+    if requested_tree_sizes:
+        unknown = sorted(set(requested_tree_sizes) - set(TREE_SIZES))
+        if unknown:
+            parser.error(f"Unexpected tree sizes: {unknown}")
 
     if output.exists():
         parser.error("Output exists; results are immutable")
@@ -71,7 +72,17 @@ def main() -> None:
 
     cells = []
     for profile in profiles:
-        for tree_size in tree_sizes:
+        allowed_tree_sizes = TREE_SIZES_BY_PROFILE[profile]
+
+        if requested_tree_sizes:
+            profile_tree_sizes = [
+                n for n in requested_tree_sizes
+                if n in allowed_tree_sizes
+            ]
+        else:
+            profile_tree_sizes = allowed_tree_sizes
+
+        for tree_size in profile_tree_sizes:
             mtc_dir = mtc_root / f"batch{tree_size}" / "mtc" / profile
             population_key = mtc_root / "population" / profile / "0.key"
             manifest = mtc_dir / "manifest.json"
@@ -116,7 +127,7 @@ def main() -> None:
         "auth_family": "mtc-experimental",
         "chain_profile": MTC_CHAIN_PROFILE,
         "profiles": profiles,
-        "tree_sizes": tree_sizes,
+        "tree_sizes_by_profile": TREE_SIZES_BY_PROFILE,
         "campaigns": args.campaigns,
         "runs": args.runs,
         "warmups": args.warmups,
