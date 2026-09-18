@@ -1,0 +1,60 @@
+"""Server-only chain-depth sensitivity configuration.
+
+This block is separate from mutual-auth and retry validation.
+It studies X.509 vs MTC-experimental sensitivity to server certificate
+chain depth under fixed TLS settings.
+"""
+
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src/mtc"))
+
+from crypto_profiles import PAPER1_PROFILES, LEGACY_PROFILE_MAP
+
+PROFILES = {
+    name: dict(
+        level=p["security_level"],
+        family=p["family"],
+        algorithm=p["implementation_algorithm"],
+        standard_name=p["standard_name"],
+        **({"curve": p["curve"], "digest": p["digest"]} if p["curve"] else {}),
+    )
+    for name, p in PAPER1_PROFILES.items()
+}
+
+CHAIN_PROFILES = {
+    "direct-server": {
+        "depth_including_root": 1,
+        "chain_depth": 1,
+        "transmitted_certificates": 1,
+        "description": "server certificate used directly as trust anchor; no intermediates",
+    },
+    "ca-server": {
+        "depth_including_root": 2,
+        "chain_depth": 1,
+        "transmitted_certificates": 1,
+        "description": "CA -> server; root/CA trusted locally and not transmitted",
+    },
+    "root-intermediate-server": {
+        "depth_including_root": 3,
+        "chain_depth": 2,
+        "transmitted_certificates": 2,
+        "description": "root -> intermediate -> server; server transmits server + intermediate",
+    },
+}
+
+TLS = {
+    "version": "TLSv1.3",
+    "group": "X25519",
+    "cipher": "TLS_AES_256_GCM_SHA384",
+    "tickets": False,
+    "resumption": False,
+    "zero_rtt": False,
+    "client_authentication": False,
+}
+
+TREE_SIZE = 16
+IMAGE = "mt-tls-measurement:local"
+MTC_PROFILE_MAP = {name: name for name in PAPER1_PROFILES}
+LEGACY_MTC_PROFILE_MAP = dict(LEGACY_PROFILE_MAP)
