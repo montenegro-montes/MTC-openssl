@@ -3,8 +3,13 @@
 PROFILES = [
     "ecdsa-p256",
     "ecdsa-p384",
+    "ecdsa-p521",
+    "mldsa44",
     "mldsa65",
+    "mldsa87",
     "slhdsa128s",
+    "slhdsa192s",
+    "slhdsa256s",
 ]
 
 TREE_SIZES = [1, 4, 16, 64, 256, 1024]
