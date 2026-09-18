@@ -25,24 +25,54 @@ PROFILES = {
 
 CHAIN_PROFILES = {
     "direct-server": {
+        "auth_family": "x509",
         "depth_including_root": 1,
         "chain_depth": 1,
         "transmitted_certificates": 1,
+        "tree_size": "",
+        "mtc_mode": "",
         "description": "server certificate used directly as trust anchor; no intermediates",
     },
     "ca-server": {
+        "auth_family": "x509",
         "depth_including_root": 2,
         "chain_depth": 1,
         "transmitted_certificates": 1,
+        "tree_size": "",
+        "mtc_mode": "",
         "description": "CA -> server; root/CA trusted locally and not transmitted",
     },
     "root-intermediate-server": {
+        "auth_family": "x509",
         "depth_including_root": 3,
         "chain_depth": 2,
         "transmitted_certificates": 2,
+        "tree_size": "",
+        "mtc_mode": "",
         "description": "root -> intermediate -> server; server transmits server + intermediate",
     },
+    "mtc-landmark": {
+        "auth_family": "mtc-experimental",
+        "depth_including_root": "",
+        "chain_depth": 1,
+        "transmitted_certificates": 1,
+        "tree_size": 16,
+        "mtc_mode": "landmark",
+        "description": "MTC experimental landmark certificate with pre-distributed trust.bin",
+    },
 }
+
+
+X509_CHAIN_PROFILES = {
+    name: data for name, data in CHAIN_PROFILES.items()
+    if data["auth_family"] == "x509"
+}
+
+MTC_CHAIN_PROFILES = {
+    name: data for name, data in CHAIN_PROFILES.items()
+    if data["auth_family"] == "mtc-experimental"
+}
+
 
 TLS = {
     "version": "TLSv1.3",

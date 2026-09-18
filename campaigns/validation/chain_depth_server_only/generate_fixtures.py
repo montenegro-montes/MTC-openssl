@@ -6,7 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from config import CHAIN_PROFILES, IMAGE, PROFILES
+from config import IMAGE, PROFILES, X509_CHAIN_PROFILES
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -15,7 +15,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--profile", action="append", choices=PROFILES)
-    parser.add_argument("--chain-profile", action="append", choices=CHAIN_PROFILES)
+    parser.add_argument("--chain-profile", action="append", choices=X509_CHAIN_PROFILES)
     parser.add_argument("--image", default=IMAGE)
     parser.add_argument("--plan", action="store_true")
     args = parser.parse_args()
@@ -25,7 +25,7 @@ def main():
         parser.error("Output exists; choose a new immutable fixture root")
 
     profiles = args.profile or list(PROFILES)
-    chain_profiles = args.chain_profile or list(CHAIN_PROFILES)
+    chain_profiles = args.chain_profile or list(X509_CHAIN_PROFILES)
 
     commands = []
     for profile in profiles:

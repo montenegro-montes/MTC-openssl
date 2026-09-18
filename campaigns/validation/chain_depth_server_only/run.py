@@ -8,7 +8,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from config import CHAIN_PROFILES, IMAGE, PROFILES, TLS
+from config import CHAIN_PROFILES, IMAGE, PROFILES, TLS, X509_CHAIN_PROFILES
 
 REPO = Path(__file__).resolve().parents[3]
 COMPOSE = [
@@ -36,7 +36,7 @@ def main():
     parser.add_argument("--fixtures", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--profile", action="append", choices=PROFILES)
-    parser.add_argument("--chain-profile", action="append", choices=CHAIN_PROFILES)
+    parser.add_argument("--chain-profile", action="append", choices=X509_CHAIN_PROFILES)
     parser.add_argument("--campaigns", type=int, default=1)
     parser.add_argument("--runs", type=int, default=30)
     parser.add_argument("--warmups", type=int, default=5)
@@ -54,7 +54,7 @@ def main():
         parser.error("campaigns >= 1, runs >= 1, warmups >= 0")
 
     profiles = args.profile or list(PROFILES)
-    chain_profiles = args.chain_profile or list(CHAIN_PROFILES)
+    chain_profiles = args.chain_profile or list(X509_CHAIN_PROFILES)
 
     image_id = json.loads(
         subprocess.check_output(["docker", "image", "inspect", args.image], text=True)
@@ -123,7 +123,7 @@ def main():
         profile = cell["profile"]
         chain_profile = cell["chain_profile"]
         campaign_id = cell["cell"]
-        seed = args.seed + cell["campaign"] + list(PROFILES).index(profile) * 1000 + list(CHAIN_PROFILES).index(chain_profile) * 100
+        seed = args.seed + cell["campaign"] + list(PROFILES).index(profile) * 1000 + list(X509_CHAIN_PROFILES).index(chain_profile) * 100
 
         env = os.environ.copy()
         env.update(

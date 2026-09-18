@@ -64,14 +64,26 @@ def validate_cell(cell_dir: Path, expected_runs: int, expected_warmups: int):
                     errors.append(f"{filename}: unsuccessful row")
                 if int(row["is_warmup"]) != expected_warm:
                     errors.append(f"{filename}: warmup flag mismatch")
-                if row["auth_family"] != "x509":
+                if row["auth_family"] != expected_chain["auth_family"]:
                     errors.append(f"{filename}: auth_family mismatch")
-                if int(row["depth_including_root"]) != expected_chain["depth_including_root"]:
+
+                expected_depth = expected_chain["depth_including_root"]
+                if expected_depth == "":
+                    if row["depth_including_root"] not in ("", "NA", "N/A", "none", "None"):
+                        errors.append(f"{filename}: depth_including_root mismatch")
+                elif int(row["depth_including_root"]) != int(expected_depth):
                     errors.append(f"{filename}: depth_including_root mismatch")
-                if int(row["chain_depth"]) != expected_chain["chain_depth"]:
+
+                if int(row["chain_depth"]) != int(expected_chain["chain_depth"]):
                     errors.append(f"{filename}: chain_depth mismatch")
-                if int(row["transmitted_certificates"]) != expected_chain["transmitted_certificates"]:
+                if int(row["transmitted_certificates"]) != int(expected_chain["transmitted_certificates"]):
                     errors.append(f"{filename}: transmitted_certificates mismatch")
+
+                if expected_chain["auth_family"] == "mtc-experimental":
+                    if row.get("tree_size") != str(expected_chain["tree_size"]):
+                        errors.append(f"{filename}: tree_size mismatch")
+                    if row.get("mtc_mode") != expected_chain["mtc_mode"]:
+                        errors.append(f"{filename}: mtc_mode mismatch")
 
                 client_random = row["client_random"]
                 if (
