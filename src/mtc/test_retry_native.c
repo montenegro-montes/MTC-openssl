@@ -11,28 +11,28 @@ int main(int argc,char **argv) {
     server=SSL_CTX_new(TLS_server_method());client=SSL_CTX_new(TLS_client_method());assert(server&&client);
     assert(retry_configure(server,argv[1],1,NULL,cert,key));
     assert(retry_configure(client,argv[1],1,"32473.9.1.1.1",NULL,NULL));
-    RetryConfig *r=(RetryConfig *)SSL_CTX_get_ex_data(server,ci),*c=(RetryConfig *)SSL_CTX_get_ex_data(client,ci);
+    RetryConfig *r=(RetryConfig *)SSL_CTX_get_ex_data(server,retry_ci),*c=(RetryConfig *)SSL_CTX_get_ex_data(client,retry_ci);
     s=SSL_new(server);cl=SSL_new(client);assert(s&&cl);
     /* CASE B first attempt: valid incompatible CH, credential-backed EE,
        no confirmation on fallback, explicit client mismatch rejection. */
     assert(retry_parse(s,MTC_EXT,SSL_EXT_CLIENT_HELLO,c->request_list,c->requested_len+3,NULL,0,&alert,r));
-    assert(!state(s)->matched);
+    assert(!retry_state(s)->matched);
     assert(retry_add(s,MTC_EXT,SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,&out,&out_n,NULL,0,&alert,r)==1);
     assert(out_n==r->base.n+3&&!memcmp(out+3,r->base.trust->signal,r->base.n));
     assert(retry_add(s,MTC_EXT,SSL_EXT_TLS1_3_CERTIFICATE,&out,&out_n,NULL,0,&alert,r)==0);
     assert(!retry_parse(cl,MTC_EXT,SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,r->base.list,r->base.n+3,NULL,0,&alert,c));
-    assert(alert==SSL_AD_UNKNOWN_CA&&!state(cl)->available);
+    assert(alert==SSL_AD_UNKNOWN_CA&&!retry_state(cl)->available);
     SSL_free(cl);SSL_CTX_free(client);SSL_free(s);
     /* CASE A / B second: fresh contexts and SSL state; exact individual B. */
     client=SSL_CTX_new(TLS_client_method());assert(client);
     assert(retry_configure(client,argv[1],1,"32473.101.1.1.1",NULL,NULL));
-    c=(RetryConfig *)SSL_CTX_get_ex_data(client,ci);s=SSL_new(server);cl=SSL_new(client);assert(s&&cl);
-    assert(!state(s)->matched&&!state(cl)->available&&!state(cl)->confirmed);
+    c=(RetryConfig *)SSL_CTX_get_ex_data(client,retry_ci);s=SSL_new(server);cl=SSL_new(client);assert(s&&cl);
+    assert(!retry_state(s)->matched&&!retry_state(cl)->available&&!retry_state(cl)->confirmed);
     assert(retry_parse(s,MTC_EXT,SSL_EXT_CLIENT_HELLO,c->request_list,c->requested_len+3,NULL,0,&alert,r));
-    assert(state(s)->matched);
+    assert(retry_state(s)->matched);
     assert(retry_parse(cl,MTC_EXT,SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,r->base.list,r->base.n+3,NULL,0,&alert,c));
     assert(retry_parse(cl,MTC_EXT,SSL_EXT_TLS1_3_CERTIFICATE,(const unsigned char *)"",0,NULL,0,&alert,c));
-    assert(state(cl)->available&&state(cl)->confirmed);
+    assert(retry_state(cl)->available&&retry_state(cl)->confirmed);
     /* Invoke the unchanged authentication callback with real leaf constraints. */
     X509_STORE *store=X509_STORE_new();X509_STORE_CTX *check=X509_STORE_CTX_new();
     assert(store&&check&&X509_STORE_CTX_init(check,store,cert,NULL));
