@@ -295,7 +295,7 @@ def parse_s_client(text):
     }
 
 
-def parse_mtc_timings(text):
+def parse_mtc_timings(text, prefix):
     setup_ms = []
     verify_ms = []
 
@@ -306,8 +306,23 @@ def parse_mtc_timings(text):
         verify_ms.append(float(m.group(1)))
 
     return {
-        "mtc_setup_ms": sum(setup_ms) if setup_ms else None,
-        "mtc_verify_ms": sum(verify_ms) if verify_ms else None,
+        f"{prefix}_mtc_setup_ms": sum(setup_ms) if setup_ms else None,
+        f"{prefix}_mtc_verify_ms": sum(verify_ms) if verify_ms else None,
+    }
+
+
+def add_mtc_totals(client_mtc, server_mtc):
+    client_setup = client_mtc["client_mtc_setup_ms"]
+    client_verify = client_mtc["client_mtc_verify_ms"]
+    server_setup = server_mtc["server_mtc_setup_ms"]
+    server_verify = server_mtc["server_mtc_verify_ms"]
+
+    setup_values = [v for v in [client_setup, server_setup] if v is not None]
+    verify_values = [v for v in [client_verify, server_verify] if v is not None]
+
+    return {
+        "mtc_setup_ms": sum(setup_values) if setup_values else None,
+        "mtc_verify_ms": sum(verify_values) if verify_values else None,
     }
 
 
@@ -354,7 +369,9 @@ def measure_case(case, round_index):
             raise AssertionError(f"{case['name']} missing server client-certificate evidence")
 
         parsed = parse_s_client(client.stdout)
-        mtc = parse_mtc_timings(client.stdout + "\\n" + server_log)
+        client_mtc = parse_mtc_timings(client.stdout, "client")
+        server_mtc = parse_mtc_timings(server_log, "server")
+        mtc = add_mtc_totals(client_mtc, server_mtc)
 
         return {
             "client_stdout": client.stdout,
@@ -369,6 +386,10 @@ def measure_case(case, round_index):
             "cipher": parsed["cipher"],
             "server_auth_mode": case["server_auth_mode"],
             "client_auth_mode": case["client_auth_mode"],
+            "client_mtc_setup_ms": client_mtc["client_mtc_setup_ms"],
+            "client_mtc_verify_ms": client_mtc["client_mtc_verify_ms"],
+            "server_mtc_setup_ms": server_mtc["server_mtc_setup_ms"],
+            "server_mtc_verify_ms": server_mtc["server_mtc_verify_ms"],
             "mtc_setup_ms": mtc["mtc_setup_ms"],
             "mtc_verify_ms": mtc["mtc_verify_ms"],
         }
@@ -401,6 +422,10 @@ def write_outputs(root, observations, args):
         "cipher",
         "server_auth_mode",
         "client_auth_mode",
+        "client_mtc_setup_ms",
+        "client_mtc_verify_ms",
+        "server_mtc_setup_ms",
+        "server_mtc_verify_ms",
         "mtc_setup_ms",
         "mtc_verify_ms",
     ]

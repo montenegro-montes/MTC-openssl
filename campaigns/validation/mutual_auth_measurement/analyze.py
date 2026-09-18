@@ -40,8 +40,12 @@ def summarize(rows):
         wall = [as_float(r["handshake_wall_ms"]) for r in case_rows]
         read = [as_float(r["bytes_read"]) for r in case_rows]
         written = [as_float(r["bytes_written"]) for r in case_rows]
-        mtc_setup = [as_float(r["mtc_setup_ms"]) for r in case_rows]
-        mtc_verify = [as_float(r["mtc_verify_ms"]) for r in case_rows]
+        client_mtc_setup = [as_float(r.get("client_mtc_setup_ms")) for r in case_rows]
+        client_mtc_verify = [as_float(r.get("client_mtc_verify_ms")) for r in case_rows]
+        server_mtc_setup = [as_float(r.get("server_mtc_setup_ms")) for r in case_rows]
+        server_mtc_verify = [as_float(r.get("server_mtc_verify_ms")) for r in case_rows]
+        mtc_setup = [as_float(r.get("mtc_setup_ms")) for r in case_rows]
+        mtc_verify = [as_float(r.get("mtc_verify_ms")) for r in case_rows]
 
         summary[case] = {
             "count": len(case_rows),
@@ -54,6 +58,10 @@ def summarize(rows):
                 if median(read) is not None and median(written) is not None
                 else None
             ),
+            "client_mtc_setup_ms_median": median(client_mtc_setup),
+            "client_mtc_verify_ms_median": median(client_mtc_verify),
+            "server_mtc_setup_ms_median": median(server_mtc_setup),
+            "server_mtc_verify_ms_median": median(server_mtc_verify),
             "mtc_setup_ms_median": median(mtc_setup),
             "mtc_verify_ms_median": median(mtc_verify),
         }
@@ -115,6 +123,10 @@ def write_csv(path, summary):
         "delta_vs_baseline_bytes_written_median",
         "delta_vs_baseline_bytes_total_median",
         "ratio_vs_baseline_bytes_total_median",
+        "client_mtc_setup_ms_median",
+        "client_mtc_verify_ms_median",
+        "server_mtc_setup_ms_median",
+        "server_mtc_verify_ms_median",
         "mtc_setup_ms_median",
         "mtc_verify_ms_median",
     ]
