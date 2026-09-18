@@ -4,21 +4,75 @@ import csv
 from pathlib import Path
 
 
-def fmt_float(value, digits=2):
-    if value in ("", None):
+def fmt(value):
+    if value is None or value == "":
         return ""
-    return f"{float(value):.{digits}f}"
+    try:
+        return f"{float(value):.3f}"
+    except ValueError:
+        return str(value)
 
 
-def fmt_ratio(value):
-    if value in ("", None):
-        return ""
-    return f"{float(value):.2f}x"
-
-
-def load_rows(path):
+def read_rows(path):
     with path.open(newline="") as f:
         return list(csv.DictReader(f))
+
+
+def build_report(root, rows):
+    lines = []
+    lines.append("# Mutual authentication measurement report")
+    lines.append("")
+    lines.append(f"Result root: `{root}`")
+    lines.append("")
+    lines.append("## Summary")
+    lines.append("")
+    lines.append(
+        "| Case | Count | Median wall ms | Δ wall ms | Median total bytes | Δ bytes | Byte ratio | "
+        "Client MTC setup ms | Client MTC verify ms | Server MTC setup ms | Server MTC verify ms | "
+        "Total MTC setup ms | Total MTC verify ms |"
+    )
+    lines.append(
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+    )
+
+    for row in rows:
+        lines.append(
+            "| {case} | {count} | {wall} | {delta_wall} | {bytes_total} | {delta_bytes} | {ratio} | "
+            "{client_setup} | {client_verify} | {server_setup} | {server_verify} | {mtc_setup} | {mtc_verify} |".format(
+                case=row["case_name"],
+                count=row["count"],
+                wall=fmt(row["handshake_wall_ms_median"]),
+                delta_wall=fmt(row["delta_vs_baseline_wall_ms_median"]),
+                bytes_total=fmt(row["bytes_total_median"]),
+                delta_bytes=fmt(row["delta_vs_baseline_bytes_total_median"]),
+                ratio=fmt(row["ratio_vs_baseline_bytes_total_median"]),
+                client_setup=fmt(row.get("client_mtc_setup_ms_median")),
+                client_verify=fmt(row.get("client_mtc_verify_ms_median")),
+                server_setup=fmt(row.get("server_mtc_setup_ms_median")),
+                server_verify=fmt(row.get("server_mtc_verify_ms_median")),
+                mtc_setup=fmt(row.get("mtc_setup_ms_median")),
+                mtc_verify=fmt(row.get("mtc_verify_ms_median")),
+            )
+        )
+
+    lines.append("")
+    lines.append("## Interpretation")
+    lines.append("")
+    lines.append(
+        "The strongest signal in this campaign is the handshake byte footprint. "
+        "The host-side wall-clock measurements are useful as auxiliary validation, "
+        "but they include process, Docker and client/server orchestration overhead."
+    )
+    lines.append("")
+    lines.append(
+        "The MTC timing columns are extracted from the experimental MTC instrumentation. "
+        "Client-side and server-side MTC timings are reported separately. "
+        "The total MTC setup and verification columns aggregate the available endpoint "
+        "observations for each handshake."
+    )
+    lines.append("")
+
+    return "\n".join(lines)
 
 
 def main():
@@ -27,72 +81,15 @@ def main():
     args = parser.parse_args()
 
     root = args.root
-    analysis = root / "analysis-summary.csv"
-    if not analysis.exists():
-        raise SystemExit(f"missing analysis-summary.csv: {analysis}")
+    summary_csv = root / "analysis-summary.csv"
+    if not summary_csv.exists():
+        raise SystemExit(f"ABORT: missing {summary_csv}")
 
-    rows = load_rows(analysis)
-
-    lines = []
-    lines.append("# Mutual Authentication Measurement Report")
-    lines.append("")
-    lines.append("## Scope")
-    lines.append("")
-    lines.append("This report summarizes the positive TLS 1.3 mutual-authentication measurement campaign.")
-    lines.append("")
-    lines.append("The baseline is `x509_server_x509_client`.")
-    lines.append("")
-    lines.append("## Summary")
-    lines.append("")
-    lines.append("| Case | Count | Median wall ms | Δ wall ms | Median total bytes | Δ bytes | Byte ratio | MTC setup ms | MTC verify ms |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
-
-    for row in rows:
-        lines.append(
-            "| "
-            + row["case_name"]
-            + " | "
-            + row["count"]
-            + " | "
-            + fmt_float(row["handshake_wall_ms_median"])
-            + " | "
-            + fmt_float(row["delta_vs_baseline_wall_ms_median"])
-            + " | "
-            + fmt_float(row["bytes_total_median"], 0)
-            + " | "
-            + fmt_float(row["delta_vs_baseline_bytes_total_median"], 0)
-            + " | "
-            + fmt_ratio(row["ratio_vs_baseline_bytes_total_median"])
-            + " | "
-            + fmt_float(row["mtc_setup_ms_median"], 4)
-            + " | "
-            + fmt_float(row["mtc_verify_ms_median"], 4)
-            + " |"
-        )
-
-    lines.append("")
-    lines.append("## Interpretation")
-    lines.append("")
-    lines.append("The strongest signal in this validation campaign is the handshake byte footprint, not the host-side wall-clock time.")
-    lines.append("")
-    lines.append("The wall-clock measurement is taken around the `s_client` command execution from the host side. It is useful for controlled relative validation, but it includes Docker/process overhead and should not replace the native timing methodology used in the main performance campaigns.")
-    lines.append("")
-    lines.append("PQ X.509 mutual authentication shows a substantially larger byte footprint than the classical X.509 baseline.")
-    lines.append("")
-    lines.append("The MTC-experimental mutual-authentication cases remain close to the classical X.509 byte footprint in this campaign.")
-    lines.append("")
-    lines.append("The MTC timing columns report aggregate setup and verification timings extracted from `MTC_SETUP` and `MTC_VERIFY` lines across the observed client and server logs. When both endpoints use MTC, the reported values aggregate both endpoints.")
-    lines.append("")
-    lines.append("## Files")
-    lines.append("")
-    lines.append("- `observations.csv`: per-observation measurements")
-    lines.append("- `summary.json`: campaign summary generated by the runner")
-    lines.append("- `analysis-summary.csv`: derived comparison against the baseline")
-    lines.append("- `analysis-summary.json`: machine-readable analysis summary")
-    lines.append("- `raw/*.client.log` and `raw/*.server.log`: raw OpenSSL logs")
+    rows = read_rows(summary_csv)
+    report = build_report(root, rows)
 
     out = root / "report.md"
-    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    out.write_text(report, encoding="utf-8")
     print(f"PASS wrote {out}")
 
 
