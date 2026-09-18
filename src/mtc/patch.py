@@ -62,8 +62,7 @@ for app in ['s_client','s_server']:
         # callback before set_cert_key_stuff() calls SSL_CTX_use_certificate().
         cert_anchor='    if (!set_cert_key_stuff(ctx, cert, key, chain, build_chain))'
         cert_code='''    if (mtc_client_id) {
-        if (mtc_file
-            || mt_file || compact_a || compact_b || compact_mode || mt_incompatible || enable_server_rpk
+        if (mt_file || compact_a || compact_b || compact_mode || mt_incompatible || enable_server_rpk
             || !mtc_client_present(ctx,mtc_client_id,mtc_landmark_mode)) {
             BIO_printf(bio_err,"MTC-experimental configuration rejected\\n"); goto end;
         }
@@ -92,8 +91,7 @@ for app in ['s_client','s_server']:
 
         anchor='    if (!set_cert_key_stuff(ctx, s_cert, s_key, s_chain, build_chain))'
         code='''    if (mtc_file || mtc_client_trust || mtc_landmark_mode) {
-        if ((mtc_file && mtc_client_trust)
-            || (!mtc_file && !mtc_client_trust)
+        if ((!mtc_file && !mtc_client_trust)
             || mt_file || compact_a || compact_b || mt_incompatible || enable_server_rpk || ctx2
             || (mtc_file && !mtc_server(ctx,mtc_file))
             || (mtc_client_trust && !mtc_server_verify_client(ctx,mtc_client_trust,mtc_landmark_mode))) {
