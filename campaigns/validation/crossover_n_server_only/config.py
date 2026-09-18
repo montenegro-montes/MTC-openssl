@@ -7,7 +7,7 @@ PROFILES = [
     "slhdsa128s",
 ]
 
-TREE_SIZES = [2, 4, 8, 16, 32, 64]
+TREE_SIZES = [1, 4, 16, 64, 256, 1024]
 
 X509_CHAIN_PROFILES = [
     "direct-server",
