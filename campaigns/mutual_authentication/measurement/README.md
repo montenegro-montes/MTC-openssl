@@ -2,7 +2,7 @@
 
 This campaign measures successful TLS 1.3 mutual-authentication handshakes across classical X.509, post-quantum X.509, and MTC-experimental credentials.
 
-It is a measurement campaign, not a negative-case validation. Failed authentication paths are covered by `campaigns/validation/mutual_auth/preflight.py`.
+It is a measurement campaign, not a negative-case validation. Failed authentication paths are covered by `campaigns/mutual_authentication/preflight/preflight.py`.
 
 ## Scope
 
@@ -58,7 +58,7 @@ From the repository root:
 ```bash
 ROOT="artifacts/results/mutual-auth-measurement-smoke-$(date -u +%Y%m%dT%H%M%SZ)"
 
-python3 campaigns/validation/mutual_auth_measurement/run.py \
+python3 campaigns/mutual_authentication/measurement/run.py \
   --root "$ROOT" \
   --preflight
 ```
@@ -72,7 +72,7 @@ Example:
 ```bash
 ROOT="artifacts/results/mutual-auth-measurement-$(date -u +%Y%m%dT%H%M%SZ)"
 
-python3 campaigns/validation/mutual_auth_measurement/run.py \
+python3 campaigns/mutual_authentication/measurement/run.py \
   --root "$ROOT" \
   --rounds 30
 ```

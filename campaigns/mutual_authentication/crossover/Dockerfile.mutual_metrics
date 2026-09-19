@@ -1,7 +1,7 @@
 FROM mt-tls-mtc:local
 
 COPY \
-  campaigns/validation/mutual_auth_crossover/patch_mutual_metrics.py \
+  campaigns/mutual_authentication/crossover/patch_mutual_metrics.py \
   /opt/mutual-auth/patch_mutual_metrics.py
 
 RUN python3 \

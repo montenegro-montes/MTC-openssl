@@ -91,7 +91,7 @@ This should be described conservatively as rejection by the configured MTC trust
 From the repository root:
 
 ```bash
-python3 campaigns/validation/mutual_auth/preflight.py --json
+python3 campaigns/mutual_authentication/preflight/preflight.py --json
 ```
 
 Expected result:
