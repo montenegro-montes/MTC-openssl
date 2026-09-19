@@ -40,7 +40,7 @@ def main():
         save(root/'tests-status.json',{'passed':True,'exit_code':0,'image_id':image['Id'],'base_image_id':base['Id'],'base_image_ref':BASE,'base_layers_verified':True})
     else:
         if not load(root/'campaign-status.json')['passed'] or not load(root/'analysis-status.json')['passed']:raise SystemExit('Experiment incomplete')
-        counts=verify(root);snapshot=root/'source';snapshot.mkdir();shutil.copytree(REPO/'campaigns/original_campaigns/network_bandwidth',snapshot/'campaigns/original_campaigns/network_bandwidth',ignore=shutil.ignore_patterns('__pycache__'));(snapshot/'docker').mkdir();shutil.copyfile(REPO/'docker/original_campaigns/compose.network-bandwidth.yaml',snapshot/'docker/original_campaigns/compose.network-bandwidth.yaml')
+        counts=verify(root);snapshot=root/'source';snapshot.mkdir();shutil.copytree(REPO/'campaigns/original_campaigns/network_bandwidth',snapshot/'campaigns/original_campaigns/network_bandwidth',ignore=shutil.ignore_patterns('__pycache__'));(snapshot/'docker/original_campaigns').mkdir(parents=True);shutil.copyfile(REPO/'docker/original_campaigns/compose.network-bandwidth.yaml',snapshot/'docker/original_campaigns/compose.network-bandwidth.yaml')
         save(root/'source-sha256.json',{str(f.relative_to(snapshot)):sha(f) for f in snapshot.rglob('*') if f.is_file()})
         active=subprocess.check_output(['docker','ps','--filter','label=com.docker.compose.project=mtbandwidth','--format','{{.ID}}'],text=True).strip()
         if active:raise RuntimeError('Bandwidth containers remain active')
