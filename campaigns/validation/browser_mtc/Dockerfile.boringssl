@@ -1,0 +1,30 @@
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG BORINGSSL_COMMIT=f8625c50f6d57cb0bab55b44552ad367a98eb540
+
+RUN apt-get update && apt-get install -y \
+    git \
+    cmake \
+    ninja-build \
+    build-essential \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt
+
+RUN git clone https://boringssl.googlesource.com/boringssl \
+    && cd boringssl \
+    && git checkout "${BORINGSSL_COMMIT}" \
+    && git rev-parse HEAD > /opt/boringssl-commit.txt
+
+WORKDIR /opt/boringssl
+
+RUN cmake -GNinja \
+    -B build \
+    -DCMAKE_BUILD_TYPE=Release \
+    && ninja -C build bssl
+
+ENV PATH="/opt/boringssl/build/tool:${PATH}"
+
+CMD ["/bin/bash"]
