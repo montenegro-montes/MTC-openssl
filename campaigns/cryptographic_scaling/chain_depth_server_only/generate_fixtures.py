@@ -41,7 +41,7 @@ def main():
                     f"{output.parent}:/output",
                     args.image,
                     "python3",
-                    "/repo/campaigns/validation/chain_depth_server_only/fixture_builder.py",
+                    "/repo/campaigns/cryptographic_scaling/chain_depth_server_only/fixture_builder.py",
                     "--output",
                     f"/output/{output.name}/{profile}/{chain_profile}",
                     "--profile",

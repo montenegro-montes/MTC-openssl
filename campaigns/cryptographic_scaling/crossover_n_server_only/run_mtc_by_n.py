@@ -177,7 +177,7 @@ def main() -> None:
                     "--rm",
                     "client",
                     "python3",
-                    "/repo/campaigns/validation/crossover_n_server_only/measure_mtc_by_n.py",
+                    "/repo/campaigns/cryptographic_scaling/crossover_n_server_only/measure_mtc_by_n.py",
                     "--runs",
                     str(args.runs),
                     "--warmups",

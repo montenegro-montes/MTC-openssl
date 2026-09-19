@@ -14,7 +14,7 @@ x-common: &common
 services:
   server:
     <<: *common
-    command: ["python3", "/repo/campaigns/validation/chain_depth_server_only/server.py"]
+    command: ["python3", "/repo/campaigns/cryptographic_scaling/chain_depth_server_only/server.py"]
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket;s=socket.create_connection(('127.0.0.1',4433),1);s.close()"]
       interval: 1s
@@ -33,4 +33,4 @@ services:
       IMAGE_ID: ${IMAGE_ID:?Set IMAGE_ID}
       CERT_PROFILE_NAME: ${CERT_PROFILE}
       CHAIN_PROFILE: ${CHAIN_PROFILE}
-    command: ["python3", "/repo/campaigns/validation/chain_depth_server_only/measure.py"]
+    command: ["python3", "/repo/campaigns/cryptographic_scaling/chain_depth_server_only/measure.py"]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run server-only chain-depth sensitivity measurements for X.509 fixtures."""
+"""Run MTC-experimental landmark measurements for chain-depth comparison."""
 
 import argparse
 import hashlib
@@ -8,15 +8,18 @@ import os
 import subprocess
 from pathlib import Path
 
-from config import CHAIN_PROFILES, IMAGE, PROFILES, TLS, X509_CHAIN_PROFILES
+from config import IMAGE, MTC_CHAIN_PROFILES, PROFILES, TLS
 
 REPO = Path(__file__).resolve().parents[3]
 COMPOSE = [
     "docker",
     "compose",
     "-f",
-    str(REPO / "docker/validation/compose.chain-depth-server-only.yaml"),
+    str(REPO / "docker/validation/compose.chain-depth-mtc.yaml"),
 ]
+
+MTC_IMAGE = "mt-tls-mtc:local"
+CHAIN_PROFILE = "mtc-landmark"
 
 
 def digest(path: Path) -> str:
@@ -27,34 +30,35 @@ def write_json(path: Path, data) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
-def cell_name(profile: str, chain_profile: str, campaign: int) -> str:
-    return f"{profile}-{chain_profile}-c{campaign}"
+def cell_name(profile: str, campaign: int) -> str:
+    return f"{profile}-{CHAIN_PROFILE}-c{campaign}"
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--fixtures", type=Path, required=True)
+    parser.add_argument("--mtc-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--profile", action="append", choices=PROFILES)
-    parser.add_argument("--chain-profile", action="append", choices=X509_CHAIN_PROFILES)
     parser.add_argument("--campaigns", type=int, default=1)
     parser.add_argument("--runs", type=int, default=30)
     parser.add_argument("--warmups", type=int, default=5)
-    parser.add_argument("--seed", type=int, default=62000)
-    parser.add_argument("--image", default=IMAGE)
+    parser.add_argument("--seed", type=int, default=63000)
+    parser.add_argument("--image", default=MTC_IMAGE)
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
 
-    fixtures = args.fixtures.resolve()
+    mtc_root = args.mtc_root.resolve()
     output = args.output.resolve()
 
     if output.exists():
         parser.error("Output exists; results are immutable")
     if args.campaigns < 1 or args.runs < 1 or args.warmups < 0:
         parser.error("campaigns >= 1, runs >= 1, warmups >= 0")
+    if CHAIN_PROFILE not in MTC_CHAIN_PROFILES:
+        parser.error("mtc-landmark missing from MTC_CHAIN_PROFILES")
 
     profiles = args.profile or list(PROFILES)
-    chain_profiles = args.chain_profile or list(X509_CHAIN_PROFILES)
+    chain = MTC_CHAIN_PROFILES[CHAIN_PROFILE]
 
     image_id = json.loads(
         subprocess.check_output(["docker", "image", "inspect", args.image], text=True)
@@ -64,41 +68,50 @@ def main():
 
     cells = []
     for profile in profiles:
-        for chain_profile in chain_profiles:
-            fixture = fixtures / profile / chain_profile
-            manifest = fixture / "manifest.json"
-            if not manifest.is_file():
-                raise SystemExit(f"Missing fixture manifest: {manifest}")
-            fixture_meta = json.loads(manifest.read_text())
-            expected = CHAIN_PROFILES[chain_profile]
-            if fixture_meta["profile"] != profile or fixture_meta["chain_profile"] != chain_profile:
-                raise SystemExit(f"Fixture identity mismatch: {manifest}")
-            for key in ("depth_including_root", "chain_depth", "transmitted_certificates"):
-                if int(fixture_meta[key]) != int(expected[key]):
-                    raise SystemExit(f"Fixture {key} mismatch: {manifest}")
-            fixture_hash = digest(manifest)
+        mtc_dir = mtc_root / "batch16" / "mtc" / profile
+        population_key = mtc_root / "population" / profile / "0.key"
+        manifest = mtc_dir / "manifest.json"
 
-            for campaign in range(1, args.campaigns + 1):
-                cells.append(
-                    {
-                        "profile": profile,
-                        "chain_profile": chain_profile,
-                        "campaign": campaign,
-                        "cell": cell_name(profile, chain_profile, campaign),
-                        "fixture_hash": fixture_hash,
-                        "fixture_manifest": str(manifest),
-                        "depth_including_root": expected["depth_including_root"],
-                        "chain_depth": expected["chain_depth"],
-                        "transmitted_certificates": expected["transmitted_certificates"],
-                    }
-                )
+        for required in [manifest, mtc_dir / "landmark-0000.pem", mtc_dir / "trust.bin", population_key]:
+            if not required.is_file():
+                raise SystemExit(f"Missing MTC fixture file: {required}")
+
+        fixture_meta = json.loads(manifest.read_text())
+        if fixture_meta["profile"] != profile:
+            raise SystemExit(f"MTC fixture profile mismatch: {manifest}")
+        if fixture_meta["status"] != "MTC-experimental":
+            raise SystemExit(f"MTC fixture status mismatch: {manifest}")
+        if int(fixture_meta["tree_size"]) != int(chain["tree_size"]):
+            raise SystemExit(f"MTC tree_size mismatch: {manifest}")
+        if "landmark" not in fixture_meta.get("mtc_modes", []):
+            raise SystemExit(f"MTC landmark mode missing: {manifest}")
+
+        fixture_hash = digest(manifest)
+
+        for campaign in range(1, args.campaigns + 1):
+            cells.append(
+                {
+                    "profile": profile,
+                    "chain_profile": CHAIN_PROFILE,
+                    "campaign": campaign,
+                    "cell": cell_name(profile, campaign),
+                    "fixture_hash": fixture_hash,
+                    "fixture_manifest": str(manifest),
+                    "auth_family": chain["auth_family"],
+                    "depth_including_root": chain["depth_including_root"],
+                    "chain_depth": chain["chain_depth"],
+                    "transmitted_certificates": chain["transmitted_certificates"],
+                    "tree_size": chain["tree_size"],
+                    "mtc_mode": chain["mtc_mode"],
+                }
+            )
 
     plan = {
         "schema": 1,
         "experiment": "chain_depth_server_only",
-        "auth_family": "x509",
+        "auth_family": "mtc-experimental",
+        "chain_profile": CHAIN_PROFILE,
         "profiles": profiles,
-        "chain_profiles": chain_profiles,
         "campaigns": args.campaigns,
         "runs": args.runs,
         "warmups": args.warmups,
@@ -107,7 +120,7 @@ def main():
         "image_id": image_id,
         "git_commit": commit,
         "git_status": git_status,
-        "fixtures": str(fixtures),
+        "mtc_root": str(mtc_root),
         "output": str(output),
         "cells": cells,
     }
@@ -121,17 +134,15 @@ def main():
 
     for cell in cells:
         profile = cell["profile"]
-        chain_profile = cell["chain_profile"]
         campaign_id = cell["cell"]
-        seed = args.seed + cell["campaign"] + list(PROFILES).index(profile) * 1000 + list(X509_CHAIN_PROFILES).index(chain_profile) * 100
+        seed = args.seed + cell["campaign"] + list(PROFILES).index(profile) * 1000
 
         env = os.environ.copy()
         env.update(
-            CHAIN_DEPTH_IMAGE=image_id,
-            CHAIN_DEPTH_FIXTURES=str(fixtures),
+            CHAIN_DEPTH_MTC_IMAGE=image_id,
+            MTC_ROOT=str(mtc_root),
             CHAIN_DEPTH_RESULTS=str(output),
             CERT_PROFILE=profile,
-            CHAIN_PROFILE=chain_profile,
             CERT_CAMPAIGN=campaign_id,
             FIXTURE_SHA256=cell["fixture_hash"],
             SOURCE_COMMIT=commit,
@@ -147,13 +158,13 @@ def main():
                     "--rm",
                     "client",
                     "python3",
-                    "/repo/campaigns/validation/chain_depth_server_only/measure.py",
+                    "/repo/campaigns/cryptographic_scaling/chain_depth_server_only/measure_mtc.py",
                     "--runs",
                     str(args.runs),
                     "--warmups",
                     str(args.warmups),
                     "--scenario",
-                    f"{profile}-{chain_profile}",
+                    f"{profile}-{CHAIN_PROFILE}",
                     "--campaign",
                     campaign_id,
                     "--seed",
@@ -168,7 +179,7 @@ def main():
     subprocess.run(
         [
             "python3",
-            str(REPO / "campaigns/validation/chain_depth_server_only/validate.py"),
+            str(REPO / "campaigns/cryptographic_scaling/chain_depth_server_only/validate.py"),
             str(output),
         ],
         check=True,
