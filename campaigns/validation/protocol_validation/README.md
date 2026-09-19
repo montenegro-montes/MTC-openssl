@@ -111,7 +111,7 @@ protocol_tool() {
     -v "$PWD:/repo:ro" \
     -v "$PWD/artifacts/protocol-validation:/repo/artifacts/protocol-validation" \
     -w /repo --entrypoint python3 "$image" \
-    "campaigns/protocol_validation/$script" "$@"
+    "campaigns/validation/protocol_validation/$script" "$@"
 }
 ```
 
@@ -160,7 +160,7 @@ interfaces, health-check connections or unrelated traffic are captured. It write
 real tcpdump **PCAP** (`handshake.pcap`), not a PCAP renamed to `.pcapng`.
 
 ```sh
-bash campaigns/protocol_validation/capture_handshake.sh \
+bash campaigns/validation/protocol_validation/capture_handshake.sh \
   --mode landmark --profile pq --fixture-dir "$FIX" --server-key "$KEY" \
   --output "$CAP/landmark" --execute
 ```
@@ -193,7 +193,7 @@ protocol_tool mt-tls-measurement:local report.py --capture "$CAP/landmark" \
 **8. Repeat once for standalone**, only after the landmark report passes:
 
 ```sh
-bash campaigns/protocol_validation/capture_handshake.sh \
+bash campaigns/validation/protocol_validation/capture_handshake.sh \
   --mode standalone --profile pq --fixture-dir "$FIX" --server-key "$KEY" \
   --output "$CAP/standalone" --execute
 
@@ -432,10 +432,10 @@ mkdir -p "$REVIEW"
 
 # Host-side exact-byte/Finished verification; CV remains NOT_EXECUTED unless
 # --openssl points to an existing provider-enabled executable.
-PYTHONDONTWRITEBYTECODE=1 python3 campaigns/protocol_validation/verify_tls_transcript.py   "$CAPTURE" --output "$REVIEW/independent.json"   --tshark /Applications/Wireshark.app/Contents/MacOS/tshark
+PYTHONDONTWRITEBYTECODE=1 python3 campaigns/validation/protocol_validation/verify_tls_transcript.py   "$CAPTURE" --output "$REVIEW/independent.json"   --tshark /Applications/Wireshark.app/Contents/MacOS/tshark
 
 # Optional join of old object evidence and new independent evidence.
-PYTHONDONTWRITEBYTECODE=1 python3 campaigns/protocol_validation/report.py   --capture "$CAPTURE" --extraction "$CAPTURE/extracted"   --object-report "$CAPTURE/object-validation.json"   --independent-report "$REVIEW/independent.json"   --output "$REVIEW/protocol-report.json"
+PYTHONDONTWRITEBYTECODE=1 python3 campaigns/validation/protocol_validation/report.py   --capture "$CAPTURE" --extraction "$CAPTURE/extracted"   --object-report "$CAPTURE/object-validation.json"   --independent-report "$REVIEW/independent.json"   --output "$REVIEW/protocol-report.json"
 ```
 
 For an independent PQ CertificateVerify check in the already-built capture image
@@ -447,7 +447,7 @@ cannot expose exact bytes, preserve the NOT_READY result; do not rebuild here.
 
 ```sh
 CAPTURE_IMAGE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["capture_image_id"])' "$CAPTURE/metadata.json")
-docker run --rm --network none   -e PYTHONDONTWRITEBYTECODE=1   -v "$PWD:/repo:ro" -v "$PWD/$REVIEW:/review" -w /repo   --entrypoint python3 "$CAPTURE_IMAGE"   campaigns/protocol_validation/verify_tls_transcript.py "$CAPTURE"   --openssl /opt/mtc/openssl.sh --output /review/independent-pq.json
+docker run --rm --network none   -e PYTHONDONTWRITEBYTECODE=1   -v "$PWD:/repo:ro" -v "$PWD/$REVIEW:/review" -w /repo   --entrypoint python3 "$CAPTURE_IMAGE"   campaigns/validation/protocol_validation/verify_tls_transcript.py "$CAPTURE"   --openssl /opt/mtc/openssl.sh --output /review/independent-pq.json
 ```
 
 No full final protocol workflow is needed to join this evidence. Rechecking object
@@ -457,8 +457,12 @@ original trust inputs/provider, not changing the historical object report.
 Lightweight regression command:
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover   -s campaigns/protocol_validation -p 'test_offline_semantics.py' -v
+PYTHONPATH="$PWD/campaigns/validation/protocol_validation:$PWD/src/mtc" \
+PYTHONDONTWRITEBYTECODE=1 \
+python3 -m unittest discover \
+  -s campaigns/validation/protocol_validation \
+  -p 'test_offline_semantics.py' -v
 ```
 
 The tests use tiny synthetic byte strings and mocked cryptographic subprocesses;
-20 passing unit tests are **not** 20 new TLS/cryptographic experiment results.
+25 passing unit tests are **not** 25 new TLS/cryptographic experiment results.

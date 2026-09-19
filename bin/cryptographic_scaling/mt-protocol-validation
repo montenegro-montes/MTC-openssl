@@ -97,7 +97,7 @@ plan() {
   40.*|80.*)
    mode=landmark; [[ "$STEP" != 80.* ]] || mode=standalone
    OUT="$CAP/$mode"
-   CMD=(bash campaigns/protocol_validation/capture_handshake.sh --mode "$mode" --profile "$PROFILE" --leaf "$LEAF" --fixture-dir "$FIX" --server-key "$KEY" --output "$OUT" --execute)
+   CMD=(bash campaigns/validation/protocol_validation/capture_handshake.sh --mode "$mode" --profile "$PROFILE" --leaf "$LEAF" --fixture-dir "$FIX" --server-key "$KEY" --output "$OUT" --execute)
    return;;
   50.*|90.*)
    mode=landmark; [[ "$STEP" != 90.* ]] || mode=standalone
@@ -113,7 +113,7 @@ print(json.load(open(sys.argv[1]))['capture_image_id'])
 PY
 )
    fi
-   CMD=(docker run --rm --network none -e PYTHONDONTWRITEBYTECODE=1 -v "$REPO:/repo:ro" -v "$REPO/$REVIEW:/repo/$REVIEW" -w /repo --entrypoint python3 "$image" campaigns/protocol_validation/verify_tls_transcript.py "$CAP/$mode" --output "$OUT" --openssl /opt/mtc/openssl.sh)
+   CMD=(docker run --rm --network none -e PYTHONDONTWRITEBYTECODE=1 -v "$REPO:/repo:ro" -v "$REPO/$REVIEW:/repo/$REVIEW" -w /repo --entrypoint python3 "$image" campaigns/validation/protocol_validation/verify_tls_transcript.py "$CAP/$mode" --output "$OUT" --openssl /opt/mtc/openssl.sh)
    return;;
   60.*|100.*)
    mode=landmark; [[ "$STEP" != 100.* ]] || mode=standalone
@@ -125,7 +125,7 @@ PY
    args=(--capture "$CAP/$mode" --extraction "$CAP/$mode/extracted" --object-report "$CAP/$mode/object-validation.json" --independent-report "$REVIEW/$mode/independent.json" --output "$OUT");;
   120.*) OUT="$CAP/invalid-input-stress"; script=negative_cases.py; args=(--fixtures "$FIX" --profile "$PROFILE" --output "$OUT");;
  esac
- CMD=(docker run --rm --network none -v "$REPO:/repo:ro" -v "$REPO/$CAP:/repo/$CAP" -w /repo --entrypoint python3 "$image" "campaigns/protocol_validation/$script" "${args[@]}")
+ CMD=(docker run --rm --network none -v "$REPO:/repo:ro" -v "$REPO/$CAP:/repo/$CAP" -w /repo --entrypoint python3 "$image" "campaigns/validation/protocol_validation/$script" "${args[@]}")
 }
 show() { printf '%q ' "${CMD[@]}"; printf '\n'; }
 status() {
@@ -183,7 +183,7 @@ PY
   *) mt_images_required mt-tls-measurement:local || return 1;;
  esac
  [[ ! -e "$OUT" ]] || fail "Output exists: $OUT. It is preserved; use a new CAP for another attempt."
- [[ -f "$FIX/manifest.json" && -f "$KEY" ]] || fail 'Fixtures or server key are missing. Run bin/cryptographic_scaling/mt-protocol-validation status and configure FIX and KEY using set or the menu. Initialization does not generate fixtures. See campaigns/protocol_validation/README.md (Before the first run).'
+ [[ -f "$FIX/manifest.json" && -f "$KEY" ]] || fail 'Fixtures or server key are missing. Run bin/cryptographic_scaling/mt-protocol-validation status and configure FIX and KEY using set or the menu. Initialization does not generate fixtures. See campaigns/validation/protocol_validation/README.md (Before the first run).'
  local leaf4 leaf6
  printf -v leaf4 '%04d' "$LEAF"
  printf -v leaf6 '%06d' "$LEAF"
@@ -572,7 +572,7 @@ for profile in profiles:
 
 git_commit = command_output(['git', 'rev-parse', 'HEAD'])
 git_status = command_output(['git', 'status', '--porcelain'])
-verifier_path = Path('campaigns/protocol_validation/verify_tls_transcript.py')
+verifier_path = Path('campaigns/validation/protocol_validation/verify_tls_transcript.py')
 provenance = {
     'git_commit': git_commit,
     'git_dirty': bool(git_status),
