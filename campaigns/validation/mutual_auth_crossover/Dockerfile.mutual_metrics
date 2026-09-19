@@ -1,0 +1,18 @@
+FROM mt-tls-mtc:local
+
+COPY \
+  campaigns/validation/mutual_auth_crossover/patch_mutual_metrics.py \
+  /opt/mutual-auth/patch_mutual_metrics.py
+
+RUN python3 \
+      /opt/mutual-auth/patch_mutual_metrics.py \
+      /opt/src/openssl-mtc/apps/metrics.c \
+ && cd /opt/src/openssl-mtc \
+ && make -j2 apps/openssl \
+ && cp apps/openssl /opt/openssl-mtc/bin/openssl \
+ && sha256sum \
+      /opt/src/openssl-mtc/apps/metrics.c \
+      /opt/openssl-mtc/bin/openssl \
+      > /opt/openssl-mtc/MUTUAL_METRICS_SHA256
+
+WORKDIR /work
