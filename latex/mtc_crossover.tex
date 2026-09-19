@@ -1,3 +1,8 @@
+% Network update 2026-09-19: retained completed campaigns only.
+% Source: artifacts/results/network-bandwidth-20260919-073535/bootstrap-comparisons.csv SHA256 a03750c356ec5fd76203d9c379d279e6342f355e32cb73922a66e44e0d47030e
+% Source: artifacts/results/network-loss-20260919-095528/bootstrap-comparisons.csv SHA256 ec8f39d6b8bdb7fe26b98e1788b0a3ffd1b1a6f2def7c1ee7898b3fecdbd3a67
+% Source: artifacts/results/network-bandwidth-20260919-073535/analysis-status.json SHA256 979640ac3b3dbde9d02a64ce95bf1ed7596152da54a1fd94bdfa224640aae8fb
+% Source: artifacts/results/network-loss-20260919-095528/analysis-status.json SHA256 f84d9183b6077a343c7a2d0514786fd2ffb057ebe7c31343cfc6cae9f9a5dd2d
 \documentclass[journal]{IEEEtran}
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
@@ -57,7 +62,7 @@ A thresholded sensitivity analysis further shows why a raw byte crossover can be
 
 
 
-Complementary experiments show that these representation savings should not be interpreted as an unconditional latency advantage.
+Complementary experiments show that these representation savings should not be interpreted as an unconditional latency advantage. A completed 13,500-handshake bandwidth campaign finds an approximately 27--28~ms paired MTC-landmark advantage over PQ X.509 at 1~Mbit/s across the three tested RTTs, whereas a separate 5,400-attempt packet-loss campaign shows no consistent landmark latency advantage.
 
 A fixed-$N=16$ mutual-authentication campaign also shows that bidirectional PQ X.509 authentication increases median transport volume from 2,029 to 18,767 bytes ($9.249\times$), whereas the evaluated MTC combinations remain within 35 bytes of the classical X.509/X.509 baseline.
 
@@ -756,7 +761,7 @@ The per-connection comparison therefore measures TLS authentication traffic, not
 
 Finally, \texttt{CertificateVerify} size, total handshake bytes, CPU cost, packet loss, and bandwidth constraints are outside the primary server-only \texttt{Certificate}-message crossover metric.
 
-Latency, connection-establishment timing, bounded Retry, and mutual authentication are evaluated separately as complementary systems experiments.
+Latency, controlled bandwidth, packet loss, connection-establishment timing, bounded Retry, and mutual authentication are evaluated separately as complementary systems experiments.
 
 The mutual-authentication crossover extends the same certificate-representation idea bidirectionally by summing the server and client TLS \texttt{Certificate} messages. It covers ECDSA P-256, P-384, and P-521 against direct and CA X.509 baselines, but it does not yet include post-quantum mutual-authentication crossover curves or a root-intermediate mutual-authentication baseline. Comparisons with the server-only intervals are therefore descriptive sensitivity results across authentication regimes rather than evidence that the two measurement settings are interchangeable.
 
@@ -913,6 +918,68 @@ dominates the handshake and can mask differences of several kilobytes in
 authentication material.
 
 
+
+\subsection{Controlled bandwidth and packet loss}
+\label{sec:bandwidth-loss}
+
+Two completed network campaigns extend the latency-only evidence while preserving the distinction between certificate-size crossover and connection performance. Both evaluate six server-only PQ scenarios: X.509, RPK, Compact warm and cold, and MTC landmark and standalone. TLS~1.3, X25519, and \texttt{TLS\_AES\_256\_GCM\_SHA384} are fixed, with no session resumption. These experiments do not repeat the nine-profile population sweep and therefore do not locate a new certificate-size crossover.
+
+The bandwidth campaign comprises five campaign repetitions at each of 15 combinations of configured RTT (10, 50, and 100~ms) and symmetric per-direction rate (100, 20, 10, 5, and 1~Mbit/s). Each campaign contains five warmup and 30 measured paired rounds across six scenarios: 13,500 measured handshakes and 2,250 warmups in total. A TBF limiter and deterministic per-direction delay implement each condition; no packet loss or jitter is configured. Before acceptance, receiver goodput in both directions must lie between 80\% and 105\% of the configured rate after four omitted preconditioning seconds and four measured seconds. Accepted probes have no retransmissions or qdisc drops. The configured rate defines the condition; measured goodput is retained separately.
+
+Table~\ref{tab:bandwidth-mtc-effects} reports the median campaign-level paired MTC-landmark minus PQ-X.509 handshake-time difference. The intervals use 10,000 bootstrap resamples of five campaign effects, not independent resampling of individual handshakes. All diagnostic outliers remain included. At 1~Mbit/s, the landmark advantage is approximately 27--28~ms across the three RTT settings; at 5~Mbit/s it is approximately 3--5~ms. At every tested rate of 10~Mbit/s or greater, the corresponding interval includes zero. Thus the data support a latency advantage on the evaluated constrained-rate paths, but do not establish an exact rate threshold or a universal monotonic break-even point.
+
+\begin{table}[t]
+\caption{Paired MTC-landmark minus PQ-X.509 native handshake time under bandwidth limitation. Negative values favor MTC. Intervals are campaign-bootstrap 95\% intervals; units are milliseconds.}
+\label{tab:bandwidth-mtc-effects}
+\centering
+\footnotesize
+\begin{tabular}{rrrr}
+\toprule
+RTT (ms) & Rate (Mbit/s) & Paired effect & 95\% interval \\
+\midrule
+10 & 100 & 0.103 & $[-0.404, 0.211]$ \\
+10 & 20 & -0.123 & $[-0.285, 0.113]$ \\
+10 & 10 & 0.021 & $[-0.243, 0.112]$ \\
+10 & 5 & -5.198 & $[-5.413, -5.033]$ \\
+10 & 1 & -27.002 & $[-27.629, -26.533]$ \\
+50 & 100 & 0.153 & $[-0.884, 1.261]$ \\
+50 & 20 & 0.341 & $[-0.662, 2.092]$ \\
+50 & 10 & 0.240 & $[-1.341, 0.889]$ \\
+50 & 5 & -3.275 & $[-5.689, -3.128]$ \\
+50 & 1 & -27.026 & $[-29.285, -26.552]$ \\
+100 & 100 & 0.289 & $[-0.338, 1.669]$ \\
+100 & 20 & 0.333 & $[-0.948, 0.654]$ \\
+100 & 10 & -0.413 & $[-4.926, 1.105]$ \\
+100 & 5 & -3.356 & $[-5.244, -2.890]$ \\
+100 & 1 & -28.401 & $[-28.750, -27.959]$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The packet-loss campaign fixes the additional RTT at 50~ms, imposes no bandwidth limit, and tests independent per-egress loss settings of 0, 0.1, 0.5, 1, 2, and 5\%. Five campaigns per setting yield 5,400 measured attempts and 900 warmups. The configured probability applies separately to each endpoint's egress and is not an end-to-end connection failure probability. All measured attempts succeeded within the configured 30-second timeout; this finite observation does not imply zero failure probability outside the sample.
+
+\begin{table}[t]
+\caption{Paired MTC-landmark minus PQ-X.509 native handshake time under independently configured per-egress packet loss at 50~ms additional RTT. All 5,400 measured attempts across the six scenarios succeeded. Effects and intervals are in milliseconds.}
+\label{tab:loss-mtc-effects}
+\centering
+\footnotesize
+\begin{tabular}{rrr}
+\toprule
+Loss (\%) & Paired effect & 95\% interval \\
+\midrule
+0 & -0.924 & $[-1.528, 0.761]$ \\
+0.1 & -0.849 & $[-2.090, 0.899]$ \\
+0.5 & 0.579 & $[-1.380, 1.472]$ \\
+1 & -1.780 & $[-4.950, 4.667]$ \\
+2 & 1.697 & $[0.801, 3.410]$ \\
+5 & -1.308 & $[-3.605, 0.234]$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The loss experiment does not show a consistent landmark latency advantage (Table~\ref{tab:loss-mtc-effects}). Five of the six intervals include zero; at 2\% configured per-egress loss, the observed paired effect favors X.509 by 1.697~ms, with an interval of [0.801, 3.410]~ms. These comparisons are descriptive and do not establish inherent packet-loss resilience for either credential format. TCP counters are campaign/container-namespace deltas rather than per-handshake attributions, and TLS BIO byte totals exclude retransmitted wire traffic. Random loss events, TCP behavior, local processing, and credential representation cannot be separated causally by these summaries alone.
+
+Both campaigns use one Docker host and only five campaign repetitions per condition. The results complement the certificate-size study; they do not change its tested population intervals or account for the external cost of distributing landmark trust state. Combined-path results are excluded here pending a completed analysis and audit.
 
 \subsection{Independent validation of connection timing}
 
@@ -1562,6 +1629,15 @@ Across the ECDSA direct baselines, the mutual-authentication raw intervals are $
 
 The comparison with server-only authentication is deliberately descriptive: the mutual metric sums separately issued client and server \texttt{Certificate} messages, so the resulting interval shifts should not be interpreted as a universal multiplier or as evidence that server-only and mutual-authentication crossovers are interchangeable.
 
+\subsection{Evidence provenance and offline consistency review}
+\label{sec:evidence-review}
+
+The final server-only population sweep contains 59 MTC cells, and the final mutual-authentication sweep contains 23 cases and 690 measured handshakes. An offline review reproduced all four server-only summary CSVs and all five mutual-authentication summary CSVs byte for byte. It also matched the 13,500 bandwidth and 5,400 packet-loss aggregate observations to their per-campaign source rows, and reran the fixed-$N$ chain-depth validators successfully for 27 X.509 and nine MTC cells. These checks support internal consistency; they are not new TLS executions or independent repetition of the experiments.
+
+The bandwidth and packet-loss fixture inventories match all 448 recorded files in each campaign, and their archived source inventories match 12 and 22 files respectively. The current working tree differs from the initial inventories because of subsequent audit-directory fixes and document changes; current sources must therefore not be presented as byte-identical to the frozen campaign sources. Failed and empty attempts are excluded from the numerical evidence. Their later deletion is documented separately in the local review log; their raw failed-run evidence is no longer available.
+
+The mutual-authentication metadata records the image identity, binary and instrumentation hashes, and TLS controls, but does not contain a Git commit or a complete source inventory for the runner. This limits exact execution provenance even though the final numerical summaries are reproducible from the retained observations. The earlier and corrected final mutual-authentication summary directories contain identical numerical CSVs and are not independent replications.
+
 \section{Where to Go Next}
 
 
@@ -1586,9 +1662,7 @@ This would help separate the cost of PKI semantics from the cost of public-key r
 
 
 
-Finally, the latency-only and Native--PCAP validation experiments should be complemented by bandwidth-limited, packet-loss, and selected combined-path conditions.
-
-Those experiments can establish when the byte reductions measured by the crossover campaign translate into observable improvements in TLS or full connection establishment.
+The completed bandwidth and packet-loss campaigns now separate two path effects: constrained rate exposes a landmark latency advantage in the evaluated settings, whereas independently configured packet loss does not produce a consistent advantage. The next systems step is to complete and audit selected combined-path conditions, then test whether these observations persist across hosts and transport configurations.
 
 
 
@@ -1642,7 +1716,7 @@ The resulting design lesson is therefore multidimensional:
 
 credential family, transmitted trust path, Merkle population, and the minimum saving considered meaningful jointly determine whether MTC is byte-efficient.
 
-Keeping those dimensions separate from latency and deployment-state costs makes the crossover result both more reproducible and more useful.
+The completed network campaigns further show that landmark byte savings can reduce handshake time under constrained bandwidth, while packet-loss results do not justify a general resilience advantage. Keeping those dimensions separate from latency and deployment-state costs makes the crossover result both more reproducible and more useful.
 
 
 
