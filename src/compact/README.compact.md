@@ -15,12 +15,12 @@ MTC standard implementation or a replacement for every X.509 PKI function.
 
 ```sh
 # Preserved base image and original fixtures:
-docker compose -f docker/original_campaigns/compose.yaml build
-docker compose -f docker/original_campaigns/compose.yaml run --rm setup
+docker compose -f docker/historical_campaigns/compose.yaml build
+docker compose -f docker/historical_campaigns/compose.yaml run --rm setup
 
 # Independent Compact image and a new N=16 batch:
-docker compose -f docker/original_campaigns/compose.compact.yaml build
-docker compose -f docker/original_campaigns/compose.compact.yaml run --rm setup
+docker compose -f docker/historical_campaigns/compose.compact.yaml build
+docker compose -f docker/historical_campaigns/compose.compact.yaml run --rm setup
 ```
 
 The final command creates `artifacts/compact/batch16/` with 16 valid
@@ -31,7 +31,7 @@ trees use the same population. Original two-leaf trees remain unchanged.
 Create a different size in a new directory:
 
 ```sh
-docker compose -f docker/original_campaigns/compose.compact.yaml run --rm setup \
+docker compose -f docker/historical_campaigns/compose.compact.yaml run --rm setup \
   python3 /opt/compact/prepare.py --both --leaves 64 \
   --output /work/compact/batch64
 ```
@@ -42,9 +42,9 @@ Supported sizes range from 1 to 1024 leaves. Private keys remain under ignored
 ## Run the comparison
 
 ```sh
-docker compose -f docker/original_campaigns/compose.compact.yaml up -d --wait server
-docker compose -f docker/original_campaigns/compose.compact.yaml run --rm client
-docker compose -f docker/original_campaigns/compose.compact.yaml down
+docker compose -f docker/historical_campaigns/compose.compact.yaml up -d --wait server
+docker compose -f docker/historical_campaigns/compose.compact.yaml run --rm client
+docker compose -f docker/historical_campaigns/compose.compact.yaml down
 ```
 
 The server launches eight `s_server` processes. After three warmups, the client
@@ -66,11 +66,11 @@ Select another batch consistently on both endpoints:
 
 ```sh
 COMPACT_BATCH=/work/compact/batch64 \
-  docker compose -f docker/original_campaigns/compose.compact.yaml up -d --force-recreate --wait server
+  docker compose -f docker/historical_campaigns/compose.compact.yaml up -d --force-recreate --wait server
 COMPACT_BATCH=/work/compact/batch64 \
-  docker compose -f docker/original_campaigns/compose.compact.yaml run --rm client \
+  docker compose -f docker/historical_campaigns/compose.compact.yaml run --rm client \
   python3 /opt/compact/benchmark.py --runs 60 --warmup 5 --seed 123
-docker compose -f docker/original_campaigns/compose.compact.yaml down
+docker compose -f docker/historical_campaigns/compose.compact.yaml down
 ```
 
 Each run creates a new `artifacts/results/compact-<timestamp>/` directory with
@@ -81,11 +81,11 @@ valid logs and samples remain available for diagnosis.
 ## Tests
 
 ```sh
-docker compose -f docker/original_campaigns/compose.compact.yaml run --rm client \
+docker compose -f docker/historical_campaigns/compose.compact.yaml run --rm client \
   /opt/compact/test_parser /work/compact/batch16/pq/bundle-0000.bin
-docker compose -f docker/original_campaigns/compose.compact.yaml run --rm client \
+docker compose -f docker/historical_campaigns/compose.compact.yaml run --rm client \
   python3 /opt/compact/test_tls.py
-docker compose -f docker/original_campaigns/compose.compact.yaml run --rm client \
+docker compose -f docker/historical_campaigns/compose.compact.yaml run --rm client \
   python3 /opt/mt/tests/test_tls.py
 ```
 

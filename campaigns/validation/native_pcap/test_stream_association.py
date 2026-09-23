@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 REPO=Path(__file__).resolve().parents[3]
-sys.path.insert(0,str(REPO/'campaigns/original_campaigns/handshake_capture'))
+sys.path.insert(0,str(REPO/'campaigns/historical_campaigns/handshake_capture'))
 from analyze import client_random_stream
 import analyze
 from test_analyze import fixture

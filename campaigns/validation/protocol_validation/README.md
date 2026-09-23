@@ -23,7 +23,7 @@ Open from the certification menu with option **6 — MTC protocol**, or directly
 ```sh
 bin/cryptographic_scaling/mt-cert-scaling protocol
 # Equivalent:
-bin/cryptographic_scaling/mt-protocol-validation menu
+bin/base/mt-protocol-validation menu
 ```
 
 New configurations select **Paper-1 mldsa65 N=16** from the MTC16 path saved by
@@ -34,13 +34,13 @@ pq meaning. No historical campaign is required for the new path.
 
 ```sh
 # Prepare image dependencies independently; no original campaign is invoked.
-bin/cryptographic_scaling/mt-prepare run ALL
+bin/base/mt-prepare run ALL
 
 # First use only. Generate and validate N=16 if it does not already exist.
 
 # First use only; imports the MTC16 path, not previous results.
-bin/cryptographic_scaling/mt-protocol-validation status
-bin/cryptographic_scaling/mt-protocol-validation run 10
+bin/base/mt-protocol-validation status
+bin/base/mt-protocol-validation run 10
 ```
 
 If state or fixtures already exist, inspect `status` and continue from the next
@@ -87,7 +87,7 @@ whose issuer IDs differ. The server private key must match leaf0's SPKI.
 The default historical locations below follow the existing Compose configuration;
 if your fixtures are elsewhere, change FIX/KEY to their actual existing paths.
 
-Use the existing `mt-tls-measurement:local` and `mt-tls-capture:local` images.
+Use the existing `mt-tls-mtc:local` and `mt-tls-capture:local` images.
 The first must have the patched MTC OpenSSL; the second must already contain
 Python3, tcpdump and tshark. **No script builds images or installs tools.**
 Missing tools or a missing provider are blocking errors, not skipped PASS checks.
@@ -128,7 +128,7 @@ signatures authenticate the computed root, but there is no independent expected
 root; the report correctly uses null for expected_root/root_match.
 
 ```sh
-protocol_tool mt-tls-measurement:local validate_mtc.py \
+protocol_tool mt-tls-mtc:local validate_mtc.py \
   "$FIX/standalone-0000.der" --trust "$FIX/authority.bin" \
   --profile pq --mode standalone --output "$CAP/offline-existing.json"
 ```
@@ -137,7 +137,7 @@ protocol_tool mt-tls-measurement:local validate_mtc.py \
 additional independent byte comparison for the reconstructed entry/SPKI binding.
 
 ```sh
-protocol_tool mt-tls-measurement:local validate_mtc.py \
+protocol_tool mt-tls-mtc:local validate_mtc.py \
   "$FIX/landmark-0000.der" --trust "$FIX/trust.bin" \
   --entry "$FIX/log/000000.entry" --profile pq --mode landmark \
   --output "$CAP/offline-landmark.json"
@@ -147,7 +147,7 @@ protocol_tool mt-tls-measurement:local validate_mtc.py \
 and its expected subtree root:
 
 ```sh
-protocol_tool mt-tls-measurement:local validate_mtc.py \
+protocol_tool mt-tls-mtc:local validate_mtc.py \
   "$FIX/standalone-0000.der" --trust "$FIX/trust.bin" \
   --entry "$FIX/log/000000.entry" --profile pq --mode standalone \
   --output "$CAP/offline-standalone.json"
@@ -175,7 +175,7 @@ protocol_tool mt-tls-capture:local extract_pcap.py "$CAP/landmark" \
 **6. Validate the extracted object.** The input here is from PCAP, not FIX:
 
 ```sh
-protocol_tool mt-tls-measurement:local validate_mtc.py \
+protocol_tool mt-tls-mtc:local validate_mtc.py \
   "$CAP/landmark/extracted/mtc-wire.bin" --trust "$FIX/trust.bin" \
   --entry "$FIX/log/000000.entry" --sender "$FIX/landmark-0000.der" \
   --profile pq --mode landmark --output "$CAP/landmark/object-validation.json"
@@ -184,7 +184,7 @@ protocol_tool mt-tls-measurement:local validate_mtc.py \
 **7. Join sender/wire/receiver comparison and protocol checks:**
 
 ```sh
-protocol_tool mt-tls-measurement:local report.py --capture "$CAP/landmark" \
+protocol_tool mt-tls-mtc:local report.py --capture "$CAP/landmark" \
   --extraction "$CAP/landmark/extracted" \
   --object-report "$CAP/landmark/object-validation.json" \
   --output "$CAP/landmark/protocol-report.json"
@@ -200,12 +200,12 @@ bash campaigns/validation/protocol_validation/capture_handshake.sh \
 protocol_tool mt-tls-capture:local extract_pcap.py "$CAP/standalone" \
   --sender "$FIX/standalone-0000.der" --output "$CAP/standalone/extracted"
 
-protocol_tool mt-tls-measurement:local validate_mtc.py \
+protocol_tool mt-tls-mtc:local validate_mtc.py \
   "$CAP/standalone/extracted/mtc-wire.bin" --trust "$FIX/trust.bin" \
   --entry "$FIX/log/000000.entry" --sender "$FIX/standalone-0000.der" \
   --profile pq --mode standalone --output "$CAP/standalone/object-validation.json"
 
-protocol_tool mt-tls-measurement:local report.py --capture "$CAP/standalone" \
+protocol_tool mt-tls-mtc:local report.py --capture "$CAP/standalone" \
   --extraction "$CAP/standalone/extracted" \
   --object-report "$CAP/standalone/object-validation.json" \
   --output "$CAP/standalone/protocol-report.json"
@@ -224,7 +224,7 @@ Paper-1 algorithms plus legacy classic/pq. No full matrix is prepared or launche
 Optional **invalid-input stress checks** (deterministic malformed objects, not load testing or randomized fuzzing), **not executed during preparation**:
 
 ```sh
-protocol_tool mt-tls-measurement:local negative_cases.py \
+protocol_tool mt-tls-mtc:local negative_cases.py \
   --fixtures "$FIX" --profile pq --output "$CAP/invalid-input-stress"
 ```
 
@@ -310,7 +310,7 @@ Do not run a separate launcher `init` afterward; inspect `status` instead.
 If images were prepared before this change, configure the missing paths only:
 
 ```sh
-bin/cryptographic_scaling/mt-prepare init
+bin/base/mt-prepare init
 ```
 
 This command does not need Docker and does not generate fixtures. Run `mt-prepare run ALL` to also generate and validate N=16 fixtures automatically.
@@ -335,7 +335,7 @@ functional TLS validation, but no performance matrix or protocol capture.
 ## Run all protocol stages
 
 ```sh
-bin/cryptographic_scaling/mt-protocol-validation run ALL
+bin/base/mt-protocol-validation run ALL
 ```
 
 Runs stages 10–120 in order, including both TLS captures, extraction, offline
@@ -466,3 +466,48 @@ python3 -m unittest discover \
 
 The tests use tiny synthetic byte strings and mocked cryptographic subprocesses;
 25 passing unit tests are **not** 25 new TLS/cryptographic experiment results.
+
+## Trust Anchor Retry validation
+
+The [mtc_retry subdirectory](mtc_retry/README.md) validates direct authentication
+and a bounded Trust Anchor ID retry using native connection evidence. Its
+runner and paired timing summaries remain independent of the single-connection
+PCAP/transcript workflow described above.
+
+## Mutual authentication functional validation
+
+The [mutual_authentication preflight](mutual_authentication/README.md) checks
+five positive and three negative mutual-authentication cases using handshake
+outcomes and endpoint logs. It is an independent functional validation workflow;
+the existing PCAP/transcript verifier does not support client authentication.
+Timing measurements and crossover studies remain under
+`campaigns/performance/mutual_authentication/` and
+`campaigns/scaling/mutual_authentication_crossover/`.
+## Base launcher extensions and long-run progress
+
+The base launcher exposes mutual authentication and Trust Anchor Retry without
+embedding historical MTC fixture paths:
+
+```sh
+bin/base/mt-protocol-validation mutual-auth --json
+bin/base/mt-protocol-validation retry preflight artifacts/results/mtc-retry-preflight-NAME
+```
+
+`mutual-auth` derives the current MTC N=16 root from certification state; use
+`--manual-root` to select the X.509/client fixture root. Retry derives its trust,
+certificate and key from the configured protocol profile and runs the bundled
+native peer inside `mt-tls-mtc:local`. Both commands prepare missing images,
+validated MTC fixtures and mutual-authentication fixtures automatically.
+
+The all-profile matrix prints the global identity position, profile position,
+elapsed wall time and an ETA based on completed identities. At exit, including
+failure or interruption, it records host/platform and elapsed-time metadata in
+`matrix-summary.json` and renders an offline HTML report under
+`artifacts/reports/`.
+
+Before object and TLS validation, `05.draft-core-vectors` executes the pinned
+MTC draft C.1, C.2 and C.4 vectors from `src/mtc/test_core.py`, including 12,807
+inclusion evaluations. The JSON and HTML reports identify this as core-vector
+agreement rather than complete draft conformance. A single-profile run stores
+the evidence inside its protocol-validation directory; the complete matrix
+executes it once and includes it in the matrix result.

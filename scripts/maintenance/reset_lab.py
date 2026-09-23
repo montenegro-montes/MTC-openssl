@@ -62,7 +62,7 @@ def main():
             path.unlink()
         elif path.exists():
             shutil.rmtree(path)
-    print('Reset complete. No backup created. Run mt-campaigns init, then next.')
+    print('Reset complete. No backup created. Run bin/base/mt-prepare init before preparing the laboratory again.')
 
 
 if __name__ == '__main__':

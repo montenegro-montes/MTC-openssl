@@ -6,12 +6,13 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 SPECS = {
-    'lab': ('mt-tls-lab:local', 'docker/original_campaigns/Dockerfile', None),
-    'compact': ('mt-tls-compact:local', 'docker/original_campaigns/Dockerfile.compact', 'lab'),
-    'profile': ('mt-tls-profile:local', 'docker/original_campaigns/Dockerfile.profile', 'compact'),
-    'mtc': ('mt-tls-mtc:local', 'docker/original_campaigns/Dockerfile.mtc', 'profile'),
-    'measurement': ('mt-tls-measurement:local', 'docker/original_campaigns/Dockerfile.measurement', 'mtc'),
-    'network': ('mt-tls-network:latency', 'docker/original_campaigns/Dockerfile.network', 'measurement'),
+    'lab': ('mt-tls-lab:local', 'docker/base/Dockerfile', None),
+    'compact': ('mt-tls-compact:local', 'docker/historical_campaigns/Dockerfile.compact', 'lab'),
+    'profile': ('mt-tls-profile:local', 'docker/historical_campaigns/Dockerfile.profile', 'compact'),
+    'mtc': ('mt-tls-mtc:local', 'docker/historical_campaigns/Dockerfile.mtc', 'profile'),
+    'measurement': ('mt-tls-measurement:local', 'docker/historical_campaigns/Dockerfile.measurement', 'mtc'),
+    'network-measurement': ('mt-tls-network-measurement:local', 'docker/network/Dockerfile.measurement', 'mtc'),
+    'network': ('mt-tls-network:local', 'docker/network/Dockerfile.network', 'network-measurement'),
 }
 
 def inspect(reference):

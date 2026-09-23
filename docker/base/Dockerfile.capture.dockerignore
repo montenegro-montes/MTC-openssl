@@ -1,0 +1,4 @@
+**
+!docker/
+!docker/base/
+!docker/base/Dockerfile.capture

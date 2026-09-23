@@ -12,7 +12,7 @@ x-common: &common
 services:
   server:
     <<: *common
-    command: ["python3", "/repo/campaigns/cryptographic_scaling/cert_chain_scaling/server.py"]
+    command: ["python3", "/repo/campaigns/scaling/cert_chain_scaling/server.py"]
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket;s=socket.create_connection(('127.0.0.1',4433),1);s.close()"]
       interval: 1s
@@ -30,4 +30,4 @@ services:
       IMAGE_ID: ${IMAGE_ID:?Set IMAGE_ID}
       CERT_PROFILE_NAME: ${CERT_PROFILE}
       CERT_DEPTH_VALUE: ${CERT_DEPTH}
-    command: ["python3", "/repo/campaigns/cryptographic_scaling/cert_chain_scaling/measure.py"]
+    command: ["python3", "/repo/campaigns/scaling/cert_chain_scaling/measure.py"]

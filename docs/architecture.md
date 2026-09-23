@@ -7,7 +7,7 @@ operation, `src/` for implementation, and `campaigns/` for experimental protocol
 
 | Directory | Responsibility |
 |---|---|
-| `bin/original_campaigns/` | Public commands: `mt-containers`, `mt-campaigns`, `mt-archive`, `mt-check-publication` |
+| `bin/historical_campaigns/` | Public commands: `mt-containers`, `mt-campaigns`, `mt-archive`, `mt-check-publication` |
 | `src/integration/` | Initial Merkle wire encoding, bundle generation and OpenSSL TLS integration |
 | `src/compact/` | Compact credentials, verification, OpenSSL patches and component runtime |
 | `src/mtc/` | Experimental MTC encoder/verifier, TLS adapter, fixture builders and component runtime |
@@ -40,7 +40,7 @@ unit tests. Campaign-specific tests stay with their campaign.
 The `benchmark.py`, `serve.py` and `scenarios.py` files in components are runtime
 adapters used by the Docker image chain. They are not interchangeable campaign
 entrypoints. `src/mtc/prepare_scaling.py` is a shared fixture builder; its former
-host runner is now `campaigns/original_campaigns/mtc_exploratory_scaling/run.py`.
+host runner is now `campaigns/historical_campaigns/mtc_exploratory_scaling/run.py`.
 PCMA Stage B native code stays under that campaign because its driver, cache
 protocol and TLS callbacks implement the Stage B experiment.
 
@@ -62,14 +62,14 @@ for the original four scenarios; use a campaign runner for controlled studies.
 |---|---|
 | `compact/`, `integration/`, `mtc/`, `profiling/` | Matching directories under `src/` |
 | `scripts/manage-containers.sh` | `bin/containers/mt-containers` |
-| `scripts/manage-campaigns.sh` | `bin/original_campaigns/mt-campaigns` |
+| `scripts/manage-campaigns.sh` | `bin/historical_campaigns/mt-campaigns` |
 | `scripts/archive-results.py` | `bin/artifacts/mt-archive` |
 | `scripts/check-published-artifacts.py` | `bin/artifacts/mt-check-publication` |
 | `scripts/generate-*.sh` | `scripts/fixtures/` |
 | `scripts/client.sh`, `scripts/server.sh` | `scripts/runtime/` |
 | `scripts/benchmark.py` | `scripts/runtime/benchmark-initial.py` |
 | `scripts/scenario.sh` | `scripts/lib/scenario.sh` |
-| `mtc/run_scaling.py` | `campaigns/original_campaigns/mtc_exploratory_scaling/run.py` |
+| `mtc/run_scaling.py` | `campaigns/historical_campaigns/mtc_exploratory_scaling/run.py` |
 
 Update personal commands to the current paths; old host entrypoints are not
 retained as duplicate scripts. Local `.mt-state/` progress remains in place.

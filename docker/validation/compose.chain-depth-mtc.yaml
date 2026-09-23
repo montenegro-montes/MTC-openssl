@@ -15,7 +15,7 @@ x-common: &common
 services:
   server:
     <<: *common
-    command: ["python3", "/repo/campaigns/cryptographic_scaling/chain_depth_server_only/server_mtc.py"]
+    command: ["python3", "/repo/campaigns/scaling/chain_depth_server_only/server_mtc.py"]
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket;s=socket.create_connection(('127.0.0.1',4433),1);s.close()"]
       interval: 1s
@@ -34,4 +34,4 @@ services:
       FIXTURE_SHA256: ${FIXTURE_SHA256:-missing-fixture-sha256}
       SOURCE_COMMIT: ${SOURCE_COMMIT:-missing-source-commit}
       IMAGE_ID: ${IMAGE_ID:-missing-image-id}
-    command: ["python3", "/repo/campaigns/cryptographic_scaling/chain_depth_server_only/measure_mtc.py"]
+    command: ["python3", "/repo/campaigns/scaling/chain_depth_server_only/measure_mtc.py"]

@@ -1,0 +1,1025 @@
+#!/usr/bin/env bash
+set -euo pipefail
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+SELF="$REPO/bin/base/mt-protocol-validation"
+cd "$REPO"
+source "$REPO/bin/lib/docker-preflight.sh"
+STATE_ROOT="$REPO/.mt-state/protocol-validation"
+STATE="${MT_PROTOCOL_STATE:-$STATE_ROOT}"
+CONFIG="$STATE/paths.env"
+MATRIX_STATE_ROOT="$REPO/.mt-state/protocol-validation-matrix"
+STEPS=(05.draft-core-vectors 10.offline-existing 20.offline-landmark 30.offline-standalone 40.capture-landmark 50.extract-landmark 55.verify-transcript-landmark 60.validate-wire-landmark 70.report-landmark 80.capture-standalone 90.extract-standalone 95.verify-transcript-standalone 100.validate-wire-standalone 110.report-standalone 120.invalid-input-stress)
+PROFILE_MATRIX=(ecdsa-p256 ecdsa-p384 ecdsa-p521 mldsa44 mldsa65 mldsa87 slhdsa128s slhdsa192s slhdsa256s)
+LEAF_COUNT=16
+fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+validate_profile() {
+ case "$1" in
+  ecdsa-p256|ecdsa-p384|ecdsa-p521|mldsa44|mldsa65|mldsa87|slhdsa128s|slhdsa192s|slhdsa256s) return 0;;
+  *) fail "Unsupported Paper-1 profile: $1";;
+ esac
+}
+paper1_root() {
+ local cert_config="$REPO/.mt-state/cert-scaling/paths.env" root
+ [[ -f "$cert_config" ]] || fail 'Run bin/base/mt-prepare init to initialize missing launcher paths, or mt-prepare run ALL to also prepare images. Use init-legacy only for historical pq fixtures.'
+ root=$( (source "$cert_config"; printf '%s' "$MTC16") )
+ case "$root" in artifacts/*) ;; *) fail 'MTC16 must be a relative path under artifacts/.';; esac
+ printf '%s\n' "$root"
+}
+validate_leaf() {
+ local leaf=$1
+ [[ "$leaf" =~ ^[0-9]+$ ]] || fail "Leaf must be an integer in 0..$((LEAF_COUNT-1))."
+ (( leaf >= 0 && leaf < LEAF_COUNT )) || fail "Leaf must be in 0..$((LEAF_COUNT-1))."
+}
+configure_paper1_profile() {
+ local profile=$1 leaf=${2:-${LEAF:-0}} root
+ validate_profile "$profile"
+ validate_leaf "$leaf"
+ root=$(paper1_root)
+ PROFILE=$profile
+ LEAF=$leaf
+ FIX="$root/batch16/mtc/$PROFILE"
+ KEY="$root/population/$PROFILE/$LEAF.key"
+}
+load() { [[ -f "$CONFIG" ]] || fail 'Run init first.'; unset PROFILE REVIEW LEAF; source "$CONFIG"; PROFILE=${PROFILE:-pq}; LEAF=${LEAF:-0}; REVIEW=${REVIEW:-artifacts/protocol-review/$STAMP}; }
+save() {
+ local key
+ (umask 077
+ for key in STAMP FIX KEY CAP PROFILE REVIEW LEAF; do printf '%s=%q\n' "$key" "${!key}"; done > "$CONFIG.tmp"
+ mv "$CONFIG.tmp" "$CONFIG")
+}
+init() {
+ [[ ! -e "$CONFIG" ]] || fail 'State already exists; use status and set.'
+ STAMP=${1:-$(date -u +%Y%m%dT%H%M%SZ)}
+ [[ "$STAMP" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid name.'
+ if [[ "${2:-paper1}" == legacy ]]; then
+  PROFILE=pq; LEAF=0; FIX=artifacts/mtc/batch16-v2/pq; KEY=artifacts/certs/pq/server.key
+ else
+  configure_paper1_profile mldsa65 0
+ fi
+ CAP="artifacts/protocol-validation/$STAMP"
+ REVIEW="artifacts/protocol-review/$STAMP"
+ mkdir -p "$STATE"; save
+ printf 'Configuration saved. Profile: %s, leaf: %s, N=16. Check FIX and KEY with status.\n' "$PROFILE" "$LEAF"
+}
+init_profile() {
+ [[ "$#" -ge 2 && "$#" -le 3 ]] || fail 'Usage: init-profile NAME PROFILE [LEAF]'
+ [[ ! -e "$CONFIG" ]] || fail 'State already exists for this profile/leaf.'
+ STAMP=$1
+ [[ "$STAMP" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid name.'
+ configure_paper1_profile "$2" "${3:-0}"
+ local leaf4
+ printf -v leaf4 '%04d' "$LEAF"
+ CAP="artifacts/protocol-validation/$STAMP/$PROFILE/leaf-$leaf4"
+ REVIEW="artifacts/protocol-review/$STAMP/$PROFILE/leaf-$leaf4"
+ [[ ! -e "$CAP" ]] || fail "Profile/leaf campaign output already exists: $CAP"
+ [[ ! -e "$REVIEW" ]] || fail "Profile/leaf review output already exists: $REVIEW"
+ mkdir -p "$STATE"; save
+ printf 'Profile configuration saved. Campaign: %s, profile: %s, leaf/key: %s, N=16.\n' "$STAMP" "$PROFILE" "$LEAF"
+}
+
+plan() {
+ [[ "$1" != 120.negative ]] || set -- 120.invalid-input-stress
+ local item found=0 mode script
+ for item in "${STEPS[@]}"; do
+  if [[ "$1" == "$item" || "$1" == "${item%%.*}" ]]; then STEP=$item; found=1; break; fi
+ done
+ [[ "$found" == 1 ]] || fail 'Unknown stage.'
+ local args=() image=mt-tls-mtc:local leaf4 leaf6
+ printf -v leaf4 '%04d' "$LEAF"
+ printf -v leaf6 '%06d' "$LEAF"
+ case "$STEP" in
+  05.*) OUT="$CAP/05.draft-core-vectors.json"; CMD=(python3 campaigns/validation/protocol_validation/draft_core_audit.py --output "$OUT"); return;;
+  10.*|20.*|30.*)
+   mode=standalone; [[ "$STEP" != 20.* ]] || mode=landmark
+   OUT="$CAP/$STEP.json"; script=validate_mtc.py
+   args=("$FIX/$mode-$leaf4.der" --trust "$FIX/trust.bin" --profile "$PROFILE" --mode "$mode" --output "$OUT")
+   if [[ "$STEP" == 10.* ]]; then args=("$FIX/standalone-$leaf4.der" --trust "$FIX/authority.bin" --profile "$PROFILE" --mode standalone --output "$OUT");
+   else args+=(--entry "$FIX/log/$leaf6.entry"); fi;;
+  40.*|80.*)
+   mode=landmark; [[ "$STEP" != 80.* ]] || mode=standalone
+   OUT="$CAP/$mode"
+   CMD=(bash campaigns/validation/protocol_validation/capture_handshake.sh --mode "$mode" --profile "$PROFILE" --leaf "$LEAF" --fixture-dir "$FIX" --server-key "$KEY" --output "$OUT" --execute)
+   return;;
+  50.*|90.*)
+   mode=landmark; [[ "$STEP" != 90.* ]] || mode=standalone
+   OUT="$CAP/$mode/extracted"; script=extract_pcap.py; image=mt-tls-capture:local
+   args=("$CAP/$mode" --sender "$FIX/$mode-$leaf4.der" --output "$OUT");;
+  55.*|95.*)
+   mode=landmark; [[ "$STEP" != 95.* ]] || mode=standalone
+   OUT="$REVIEW/$mode/independent.json"; image=mt-tls-capture:local
+   if [[ -f "$CAP/$mode/metadata.json" ]]; then
+    image=$(python3 - "$CAP/$mode/metadata.json" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1]))['capture_image_id'])
+PY
+)
+   fi
+   CMD=(docker run --rm --network none -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/repo/src/mtc -v "$REPO:/repo:ro" -v "$REPO/$REVIEW:/repo/$REVIEW" -w /repo --entrypoint python3 "$image" campaigns/validation/protocol_validation/verify_tls_transcript.py "$CAP/$mode" --output "$OUT" --openssl /opt/mtc/openssl.sh)
+   return;;
+  60.*|100.*)
+   mode=landmark; [[ "$STEP" != 100.* ]] || mode=standalone
+   OUT="$CAP/$mode/object-validation.json"; script=validate_mtc.py
+   args=("$CAP/$mode/extracted/mtc-wire.bin" --trust "$FIX/trust.bin" --entry "$FIX/log/$leaf6.entry" --sender "$FIX/$mode-$leaf4.der" --profile "$PROFILE" --mode "$mode" --output "$OUT");;
+  70.*|110.*)
+   mode=landmark; [[ "$STEP" != 110.* ]] || mode=standalone
+   OUT="$CAP/$mode/protocol-report.json"; script=report.py
+   args=(--capture "$CAP/$mode" --extraction "$CAP/$mode/extracted" --object-report "$CAP/$mode/object-validation.json" --independent-report "$REVIEW/$mode/independent.json" --output "$OUT");;
+  120.*) OUT="$CAP/invalid-input-stress"; script=negative_cases.py; args=(--fixtures "$FIX" --profile "$PROFILE" --output "$OUT");;
+ esac
+ CMD=(docker run --rm --network none -e PYTHONPATH=/repo/src/mtc -v "$REPO:/repo:ro" -v "$REPO/$CAP:/repo/$CAP" -w /repo --entrypoint python3 "$image" "campaigns/validation/protocol_validation/$script" "${args[@]}")
+}
+show() { printf '%q ' "${CMD[@]}"; printf '\n'; }
+status() {
+ load
+ printf 'FIX=%s\nKEY=%s\nCAP=%s\nREVIEW=%s\nProfile: %s, leaf: %s, N=16. Images: mt-tls-mtc:local and mt-tls-capture:local.\n' "$FIX" "$KEY" "$CAP" "$REVIEW" "$PROFILE" "$LEAF"
+ local step state
+ for step in "${STEPS[@]}"; do
+  plan "$step"; printf '%-36s ' "$STEP"
+  if [[ -f "$STATE/$STEP.status" ]]; then
+   state=$(<"$STATE/$STEP.status"); printf '%s\n' "${state%%; log=*}"
+  else printf 'pending/not executed by this launcher\n'; fi
+ done
+ [[ ! -d "$STATE/lock" ]] || printf 'An execution lock exists; another stage may still be active.\n'
+}
+passed() {
+ python3 - "$1" <<'PY'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1])
+if not p.is_file():raise SystemExit('Missing prerequisite validation: '+str(p))
+d=json.loads(p.read_text())
+if d.get('overall')!='PASS':raise SystemExit('Prerequisite validation did not pass: '+str(p))
+PY
+}
+not_failed() {
+ python3 - "$1" <<'PY'
+import json,sys
+from pathlib import Path
+p=Path(sys.argv[1])
+if not p.is_file():raise SystemExit('Missing prerequisite evidence: '+str(p))
+d=json.loads(p.read_text())
+if d.get('overall')=='FAIL':raise SystemExit('Prerequisite evidence failed: '+str(p))
+PY
+}
+preflight() {
+ local captured_image
+ case "$STEP" in
+  40.*|80.*) mt_compose_ready && mt_image_required mt-tls-mtc:local && mt_image_required mt-tls-capture:local || return 1;;
+  50.*|90.*) mt_images_required mt-tls-capture:local || return 1;;
+  55.*)
+   [[ -f "$CAP/landmark/metadata.json" ]] || fail 'Landmark capture metadata is missing.'
+   captured_image=$(python3 - "$CAP/landmark/metadata.json" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1]))['capture_image_id'])
+PY
+)
+   mt_images_required "$captured_image" || return 1;;
+  95.*)
+   [[ -f "$CAP/standalone/metadata.json" ]] || fail 'Standalone capture metadata is missing.'
+   captured_image=$(python3 - "$CAP/standalone/metadata.json" <<'PY'
+import json,sys
+print(json.load(open(sys.argv[1]))['capture_image_id'])
+PY
+)
+   mt_images_required "$captured_image" || return 1;;
+  *) mt_images_required mt-tls-mtc:local || return 1;;
+ esac
+ [[ ! -e "$OUT" ]] || fail "Output exists: $OUT. It is preserved; use a new CAP for another attempt."
+ [[ -f "$FIX/manifest.json" && -f "$KEY" ]] || fail 'Fixtures or server key are missing. Run bin/base/mt-protocol-validation status and configure FIX and KEY using set or the menu. Initialization does not generate fixtures. See campaigns/validation/protocol_validation/README.md (Before the first run).'
+ local leaf4 leaf6
+ printf -v leaf4 '%04d' "$LEAF"
+ printf -v leaf6 '%06d' "$LEAF"
+ [[ -f "$FIX/landmark-$leaf4.der" && -f "$FIX/landmark-$leaf4.pem" && -f "$FIX/standalone-$leaf4.der" && -f "$FIX/standalone-$leaf4.pem" && -f "$FIX/log/$leaf6.entry" ]] || fail "Missing selected leaf fixtures for profile=$PROFILE leaf=$LEAF."
+ python3 - "$FIX/manifest.json" "$PROFILE" <<'PY'
+import json,sys
+sys.path.insert(0,'src/mtc')
+from crypto_profiles import crypto_profile
+m=json.load(open(sys.argv[1]));p=crypto_profile(sys.argv[2])
+if m.get('tree_size')!=16 or m.get('profile',m.get('crypto_family'))!=sys.argv[2] or m.get('ca_id')!=p['ca_id'] or m.get('cosigner_ids')!=list(p['cosigner_ids']):
+    raise SystemExit('N=16 fixture identity does not match the configured profile.')
+PY
+ case "$STEP" in
+  10.*) passed "$CAP/05.draft-core-vectors.json";;
+  20.*) passed "$CAP/10.offline-existing.json";;
+  30.*) passed "$CAP/20.offline-landmark.json";;
+  40.*) passed "$CAP/20.offline-landmark.json"; passed "$CAP/30.offline-standalone.json";;
+  50.*) [[ -f "$CAP/landmark/metadata.json" ]] || fail 'Landmark capture is missing.';;
+  55.*) passed "$CAP/landmark/extracted/extraction.json";;
+  60.*) passed "$CAP/landmark/extracted/extraction.json";;
+  70.*) passed "$CAP/landmark/object-validation.json"; not_failed "$REVIEW/landmark/independent.json";;
+  80.*) passed "$CAP/landmark/protocol-report.json";;
+  90.*) [[ -f "$CAP/standalone/metadata.json" ]] || fail 'Standalone capture is missing.';;
+  95.*) passed "$CAP/standalone/extracted/extraction.json";;
+  100.*) passed "$CAP/standalone/extracted/extraction.json";;
+  110.*) passed "$CAP/standalone/object-validation.json"; not_failed "$REVIEW/standalone/independent.json";;
+  120.*) passed "$CAP/30.offline-standalone.json";;
+ esac
+}
+run_all() (
+ load
+ local started_epoch report
+ started_epoch=$(date +%s)
+ report="artifacts/reports/protocol-validation-$STAMP/report.html"
+ finalize_single_report() {
+  local rc=$?
+  trap - EXIT INT TERM
+  rmdir "$STATE/batch.lock" 2>/dev/null || true
+  if [[ -d "$CAP" ]]; then
+   python3 - "$CAP/execution.json" "$started_epoch" "$rc" "$PROFILE" "$LEAF" "$FIX" "$KEY" <<'PYEXEC'
+import json,os,platform,sys,time
+from pathlib import Path
+p=Path(sys.argv[1]); finished=int(time.time())
+p.write_text(json.dumps({'status':'PASS' if int(sys.argv[3])==0 else 'NO PASS','configuration':{'profile':sys.argv[4],'leaf':int(sys.argv[5]),'tree_size':16,'fixture_directory':sys.argv[6],'server_key':sys.argv[7],'modes':['landmark','standalone']},'started_unix':int(sys.argv[2]),'finished_unix':finished,'elapsed_seconds':finished-int(sys.argv[2]),'host':{'hostname':platform.node(),'system':platform.system(),'release':platform.release(),'machine':platform.machine(),'processor':platform.processor(),'cpu_count':os.cpu_count(),'python':platform.python_version()}},indent=2)+'\n')
+PYEXEC
+   render_validation_html protocol "$CAP" "$report" || [[ "$rc" != 0 ]] || rc=$?
+  fi
+  exit "$rc"
+ }
+ trap finalize_single_report EXIT
+ trap 'exit 130' INT TERM
+ mkdir "$STATE/batch.lock" 2>/dev/null || fail 'A batch is active or a lock needs inspection.'
+ [[ ! -d "$STATE/lock" ]] || fail 'A stage is active or a lock needs inspection.'
+ local step state count=0
+ for step in "${STEPS[@]}"; do
+  state=''
+  [[ ! -f "$STATE/$step.status" ]] || state=$(cat "$STATE/$step.status")
+  case "$state" in running*) fail "Stage marked running: $step. Inspect its process and log before continuing.";; esac
+ done
+ for step in "${STEPS[@]}"; do
+  state=''
+  [[ ! -f "$STATE/$step.status" ]] || state=$(cat "$STATE/$step.status")
+  case "$state" in completed*) printf 'SKIP completed: %s\n' "$step"; continue;; esac
+  printf 'Batch stage: %s\n' "$step"
+  run_step "$step" batch || exit "$?"
+  count=$((count+1))
+ done
+ printf 'Batch completed: %s stages.\n' "$count"
+)
+run_step() (
+ [[ "${2:-}" == batch || ! -d "$STATE/batch.lock" ]] || fail 'A batch is active or a lock needs inspection.'
+ load || exit "$?"
+ plan "$1" || exit "$?"
+ mkdir "$STATE/lock" 2>/dev/null || fail 'Another stage is active or a lock remains after interruption.'
+ trap 'rmdir "$STATE/lock" 2>/dev/null || true' EXIT
+ preflight || exit "$?"
+ mkdir -p "$CAP" || exit "$?"
+ case "$STEP" in 55.*|95.*) mkdir -p "$(dirname "$OUT")" || exit "$?";; esac
+ local log rc
+ log="$STATE/$STEP-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
+ printf 'running; log=%s\n' "$log" > "$STATE/$STEP.status"
+ trap 'printf "interrupted; log=%s\n" "$log" > "$STATE/$STEP.status"; exit 130' INT TERM
+ printf 'Stage %s\nLog %s\n' "$STEP" "$log"; show
+ set +e
+ PYTHONUNBUFFERED=1 "${CMD[@]}" 2>&1 | tee "$log"
+ rc=${PIPESTATUS[0]}
+ set -e
+ if [[ "$rc" == 0 ]]; then printf 'completed; log=%s\n' "$log" > "$STATE/$STEP.status";
+ else printf 'failed (exit %s); log=%s\n' "$rc" "$log" > "$STATE/$STEP.status"; fi
+ cat "$STATE/$STEP.status"; exit "$rc"
+)
+set_path() {
+ load
+ [[ ! -d "$STATE/lock" && ! -d "$STATE/batch.lock" ]] || fail 'Do not change paths while a stage or batch is running.'
+ case "$1" in FIX|KEY|CAP|PROFILE|LEAF) ;; *) fail 'Variables: FIX KEY CAP PROFILE LEAF';; esac
+ [[ ! -d "$CAP" ]] || fail 'Evidence already exists: use new for another campaign; previous state is preserved.'
+ if [[ "$1" == PROFILE ]]; then
+  case "$2" in
+   pq|classic) PROFILE=$2; LEAF=0;;
+   *) configure_paper1_profile "$2" "${LEAF:-0}";;
+  esac
+  save; return
+ fi
+ if [[ "$1" == LEAF ]]; then
+  case "$PROFILE" in
+   pq|classic) fail 'LEAF selection is supported only for Paper-1 profiles.';;
+   *) configure_paper1_profile "$PROFILE" "$2";;
+  esac
+  save; return
+ fi
+ # Relative artifact paths keep container and host references identical.
+ case "$2" in artifacts/*) ;; *) fail 'Use a relative path under artifacts/.';; esac
+ case "/$2/" in */../*|*/./*|*//*|*$'\n'*) fail 'Path is not normalized.';; esac
+ if [[ "$1" == CAP ]]; then
+  case "$2" in artifacts/protocol-validation/*) ;; *) fail 'CAP must be under artifacts/protocol-validation/.';; esac
+  REVIEW="${2/artifacts\/protocol-validation/artifacts\/protocol-review}"
+ fi
+ [[ ! -d "$CAP" ]] || fail 'Evidence already exists: use new for another campaign; previous state is preserved.'
+ printf -v "$1" '%s' "$2"; save
+}
+write_matrix_summary() {
+ local name=$1
+ local launcher_rc=${2:-0}
+ local started_epoch=${3:-$(date +%s)}
+ mkdir -p "artifacts/protocol-validation/$name" "artifacts/protocol-review/$name"
+ python3 - "$name" "$launcher_rc" "$started_epoch" "${PROFILE_MATRIX[@]}" <<'PYSUM'
+import hashlib
+import json
+import os
+import platform
+import subprocess
+import sys
+import time
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+
+name = sys.argv[1]
+launcher_rc = int(sys.argv[2])
+started_epoch = int(sys.argv[3])
+finished_epoch = int(time.time())
+profiles = sys.argv[4:]
+leaf_count = 16
+modes = ('landmark', 'standalone')
+stages = (
+    '10.offline-existing',
+    '20.offline-landmark',
+    '30.offline-standalone',
+    '40.capture-landmark',
+    '50.extract-landmark',
+    '55.verify-transcript-landmark',
+    '60.validate-wire-landmark',
+    '70.report-landmark',
+    '80.capture-standalone',
+    '90.extract-standalone',
+    '95.verify-transcript-standalone',
+    '100.validate-wire-standalone',
+    '110.report-standalone',
+    '120.invalid-input-stress',
+)
+
+cap_root = Path('artifacts/protocol-validation') / name
+review_root = Path('artifacts/protocol-review') / name
+state_root = Path('.mt-state/protocol-validation-matrix') / name
+expected_identities = len(profiles) * leaf_count
+expected_handshakes = expected_identities * len(modes)
+
+
+def load_json(path):
+    path = Path(path)
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except Exception as exc:
+        return {'overall': 'ERROR', 'error': str(exc)}
+
+
+def overall(path):
+    data = load_json(path)
+    if data is None:
+        return 'MISSING'
+    return data.get('overall', 'UNKNOWN')
+
+
+draft_core = load_json(cap_root / '05.draft-core-vectors.json') or {}
+draft_core_status = draft_core.get('overall', 'MISSING')
+
+
+def status_bucket():
+    return {
+        'PASS': 0,
+        'FAIL': 0,
+        'PARTIAL': 0,
+        'NOT_EXECUTED': 0,
+        'MISSING': 0,
+        'OTHER': 0,
+    }
+
+
+def add_status(bucket, value):
+    if value in bucket:
+        bucket[value] += 1
+    else:
+        bucket['OTHER'] += 1
+
+
+def stage_status(path):
+    path = Path(path)
+    if not path.is_file():
+        return 'MISSING', None
+    text = path.read_text().strip()
+    if text.startswith('completed'):
+        state = 'COMPLETED'
+    elif text.startswith('failed'):
+        state = 'FAILED'
+    elif text.startswith('running'):
+        state = 'RUNNING'
+    elif text.startswith('interrupted'):
+        state = 'INTERRUPTED'
+    else:
+        state = 'OTHER'
+    log = None
+    if 'log=' in text:
+        log = text.split('log=', 1)[1].strip()
+    return state, log
+
+
+def command_output(args):
+    try:
+        return subprocess.check_output(
+            args,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return None
+
+
+def file_sha256(path):
+    path = Path(path)
+    if not path.is_file():
+        return None
+    h = hashlib.sha256()
+    with path.open('rb') as f:
+        for block in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(block)
+    return h.hexdigest()
+
+
+stage_summary = {}
+stage_failures = []
+for stage in stages:
+    if stage == '120.invalid-input-stress':
+        executions = [(profile, 0) for profile in profiles]
+    else:
+        executions = [
+            (profile, leaf)
+            for profile in profiles
+            for leaf in range(leaf_count)
+        ]
+    counts = Counter()
+    for profile, leaf in executions:
+        leaf_name = f'leaf-{leaf:04d}'
+        status_path = state_root / profile / leaf_name / f'{stage}.status'
+        state, log = stage_status(status_path)
+        counts[state] += 1
+        if state in ('FAILED', 'INTERRUPTED', 'RUNNING', 'OTHER'):
+            stage_failures.append({
+                'profile': profile,
+                'leaf': leaf,
+                'stage': stage,
+                'status': state,
+                'status_file': str(status_path),
+                'log': log,
+            })
+    stage_summary[stage] = {
+        'expected': len(executions),
+        'completed': counts['COMPLETED'],
+        'failed': counts['FAILED'],
+        'interrupted': counts['INTERRUPTED'],
+        'running': counts['RUNNING'],
+        'missing': counts['MISSING'],
+        'other': counts['OTHER'],
+    }
+
+captures_present = 0
+captures_nonempty = 0
+keylogs_present = 0
+metadata_present = 0
+object_counts = status_bucket()
+independent_counts = status_bucket()
+protocol_counts = status_bucket()
+certificate_verify_counts = status_bucket()
+server_finished_counts = status_bucket()
+client_finished_counts = status_bucket()
+capture_integrity = {
+    'metadata_missing': 0,
+    'captured_packets_zero': 0,
+    'kernel_drops_nonzero': 0,
+    'inputs_not_preserved': 0,
+    'sources_not_preserved': 0,
+}
+verifier_hashes = Counter()
+capture_image_ids = Counter()
+profile_summary = {}
+identity_pass_count = 0
+
+for profile in profiles:
+    profile_identity_pass = 0
+    profile_protocol_pass = 0
+    profile_independent_pass = 0
+    for leaf in range(leaf_count):
+        leaf_name = f'leaf-{leaf:04d}'
+        identity_ok = True
+        for mode in modes:
+            base = cap_root / profile / leaf_name / mode
+            independent_path = review_root / profile / leaf_name / mode / 'independent.json'
+
+            pcap = base / 'handshake.pcap'
+            keylog = base / 'tls.keys'
+            metadata_path = base / 'metadata.json'
+
+            if pcap.is_file():
+                captures_present += 1
+                if pcap.stat().st_size > 0:
+                    captures_nonempty += 1
+                else:
+                    identity_ok = False
+            else:
+                identity_ok = False
+
+            if keylog.is_file():
+                keylogs_present += 1
+            else:
+                identity_ok = False
+
+            metadata = load_json(metadata_path)
+            if metadata is None:
+                capture_integrity['metadata_missing'] += 1
+                identity_ok = False
+            else:
+                metadata_present += 1
+                if not metadata.get('captured_packets'):
+                    capture_integrity['captured_packets_zero'] += 1
+                    identity_ok = False
+                if metadata.get('kernel_drops') != 0:
+                    capture_integrity['kernel_drops_nonzero'] += 1
+                    identity_ok = False
+                if metadata.get('inputs_preserved') is not True:
+                    capture_integrity['inputs_not_preserved'] += 1
+                    identity_ok = False
+                if metadata.get('sources_preserved') is not True:
+                    capture_integrity['sources_not_preserved'] += 1
+                    identity_ok = False
+                capture_image_id = metadata.get('capture_image_id')
+                if capture_image_id:
+                    capture_image_ids[capture_image_id] += 1
+
+            obj_status = overall(base / 'object-validation.json')
+            add_status(object_counts, obj_status)
+            if obj_status != 'PASS':
+                identity_ok = False
+
+            independent = load_json(independent_path)
+            if independent is None:
+                independent_status = 'MISSING'
+                cv_status = 'MISSING'
+                server_finished_status = 'MISSING'
+                client_finished_status = 'MISSING'
+            else:
+                independent_status = independent.get('overall', 'UNKNOWN')
+                cv_status = independent.get(
+                    'certificate_verify_independent_verification', {}
+                ).get('status', 'UNKNOWN')
+                server_finished_status = independent.get(
+                    'server_finished_independent_verification', {}
+                ).get('status', 'UNKNOWN')
+                client_finished_status = independent.get(
+                    'client_finished_independent_verification', {}
+                ).get('status', 'UNKNOWN')
+                verifier_sha = independent.get(
+                    'verifier_source_sha256', {}
+                ).get('verify_tls_transcript.py')
+                if verifier_sha:
+                    verifier_hashes[verifier_sha] += 1
+
+            add_status(independent_counts, independent_status)
+            add_status(certificate_verify_counts, cv_status)
+            add_status(server_finished_counts, server_finished_status)
+            add_status(client_finished_counts, client_finished_status)
+            if independent_status == 'PASS':
+                profile_independent_pass += 1
+            else:
+                identity_ok = False
+
+            protocol_status = overall(base / 'protocol-report.json')
+            add_status(protocol_counts, protocol_status)
+            if protocol_status == 'PASS':
+                profile_protocol_pass += 1
+            else:
+                identity_ok = False
+
+        if identity_ok:
+            identity_pass_count += 1
+            profile_identity_pass += 1
+
+    profile_summary[profile] = {
+        'identities_expected': leaf_count,
+        'identities_pass': profile_identity_pass,
+        'protocol_reports_expected': leaf_count * 2,
+        'protocol_reports_pass': profile_protocol_pass,
+        'independent_reports_expected': leaf_count * 2,
+        'independent_reports_pass': profile_independent_pass,
+    }
+
+git_commit = command_output(['git', 'rev-parse', 'HEAD'])
+git_status = command_output(['git', 'status', '--porcelain'])
+verifier_path = Path('campaigns/validation/protocol_validation/verify_tls_transcript.py')
+provenance = {
+    'git_commit': git_commit,
+    'git_dirty': bool(git_status),
+    'verify_tls_transcript_sha256_current': file_sha256(verifier_path),
+    'capture_image_ids': dict(sorted(capture_image_ids.items())),
+}
+
+stage_expected_total = sum(item['expected'] for item in stage_summary.values())
+stage_completed_total = sum(item['completed'] for item in stage_summary.values())
+capture_integrity_failures = sum(capture_integrity.values())
+cpu_model = command_output(['sysctl', '-n', 'machdep.cpu.brand_string']) or platform.processor()
+
+all_ok = (
+    launcher_rc == 0
+    and draft_core_status == 'PASS'
+    and stage_completed_total == stage_expected_total
+    and identity_pass_count == expected_identities
+    and captures_present == expected_handshakes
+    and captures_nonempty == expected_handshakes
+    and keylogs_present == expected_handshakes
+    and metadata_present == expected_handshakes
+    and object_counts['PASS'] == expected_handshakes
+    and independent_counts['PASS'] == expected_handshakes
+    and protocol_counts['PASS'] == expected_handshakes
+    and certificate_verify_counts['PASS'] == expected_handshakes
+    and server_finished_counts['PASS'] == expected_handshakes
+    and client_finished_counts['PASS'] == expected_handshakes
+    and capture_integrity_failures == 0
+    and len(verifier_hashes) == 1
+)
+
+summary = {
+    'schema_version': 1,
+    'campaign': name,
+    'generated_at': datetime.now(timezone.utc).isoformat(),
+    'status': 'PASS' if all_ok else 'FAIL',
+    'launcher_exit_code': launcher_rc,
+    'execution': {
+        'started_unix': started_epoch,
+        'finished_unix': finished_epoch,
+        'elapsed_seconds': max(0, finished_epoch - started_epoch),
+        'host': {
+            'hostname': platform.node(),
+            'system': platform.system(),
+            'release': platform.release(),
+            'machine': platform.machine(),
+            'processor': cpu_model,
+            'cpu_count': os.cpu_count(),
+            'python': platform.python_version(),
+        },
+    },
+    'configuration': {
+        'tree_size': 16,
+        'profiles': profiles,
+        'profile_count': len(profiles),
+        'leaf_count': leaf_count,
+        'modes': list(modes),
+        'expected_identities': expected_identities,
+        'expected_handshakes': expected_handshakes,
+    },
+    'stages': stage_summary,
+    'stage_totals': {
+        'expected': stage_expected_total,
+        'completed': stage_completed_total,
+        'incomplete': stage_expected_total - stage_completed_total,
+    },
+    'results': {
+        'draft_core_vectors': draft_core,
+        'identities': {
+            'expected': expected_identities,
+            'pass': identity_pass_count,
+            'incomplete_or_failed': expected_identities - identity_pass_count,
+        },
+        'captures': {
+            'expected': expected_handshakes,
+            'present': captures_present,
+            'nonempty': captures_nonempty,
+            'missing': expected_handshakes - captures_present,
+            'zero_length': captures_present - captures_nonempty,
+        },
+        'keylogs': {
+            'expected': expected_handshakes,
+            'present': keylogs_present,
+            'missing': expected_handshakes - keylogs_present,
+        },
+        'metadata': {
+            'expected': expected_handshakes,
+            'present': metadata_present,
+            'missing': expected_handshakes - metadata_present,
+        },
+        'object_validation': object_counts,
+        'independent_validation': independent_counts,
+        'protocol_reports': protocol_counts,
+        'capture_integrity': capture_integrity,
+    },
+    'validation_layers': {
+        'certificate_verify': certificate_verify_counts,
+        'server_finished': server_finished_counts,
+        'client_finished': client_finished_counts,
+    },
+    'profiles_summary': profile_summary,
+    'verifier': {
+        'unique_versions': len(verifier_hashes),
+        'versions': dict(sorted(verifier_hashes.items())),
+    },
+    'provenance': provenance,
+    'failures': stage_failures,
+    'first_failure': stage_failures[0] if stage_failures else None,
+}
+
+out = cap_root / 'matrix-summary.json'
+out.write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+review_out = review_root / 'summary.json'
+review_out.write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+print(out)
+PYSUM
+}
+print_matrix_summary() {
+ local name=$1
+ local summary="artifacts/protocol-validation/$name/matrix-summary.json"
+ python3 - "$summary" <<'PYPRINT'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.is_file():
+    raise SystemExit(f'Matrix summary was not created: {path}')
+
+s = json.loads(path.read_text())
+cfg = s['configuration']
+res = s['results']
+layers = s['validation_layers']
+stages = s['stage_totals']
+verifier = s['verifier']
+
+print()
+print('=' * 60)
+print('MTC PROTOCOL VALIDATION MATRIX — FINAL SUMMARY')
+print('=' * 60)
+print()
+print(f"Campaign: {s['campaign']}")
+print()
+print(f"Draft core vectors:        {res['draft_core_vectors'].get('overall', 'MISSING')}")
+print(f"Inclusion evaluations:     {res['draft_core_vectors'].get('inclusion_evaluations', 0)}")
+print(f"Profiles:                  {cfg['profile_count']} / {cfg['profile_count']}")
+print(f"Leaves per profile:        {cfg['leaf_count']} / {cfg['leaf_count']}")
+print(f"Identities:                {res['identities']['pass']} / {res['identities']['expected']}")
+print(f"TLS handshakes:            {res['captures']['nonempty']} / {res['captures']['expected']}")
+print()
+print('Stages:')
+print(f"  Completed:               {stages['completed']} / {stages['expected']}")
+print()
+print('Capture integrity:')
+print(f"  PCAP present:            {res['captures']['present']} / {res['captures']['expected']}")
+print(f"  PCAP non-empty:          {res['captures']['nonempty']} / {res['captures']['expected']}")
+print(f"  Keylogs present:         {res['keylogs']['present']} / {res['keylogs']['expected']}")
+print(f"  Kernel drops failures:   {res['capture_integrity']['kernel_drops_nonzero']}")
+print(f"  Capture packet failures: {res['capture_integrity']['captured_packets_zero']}")
+print(
+    '  Preservation failures:  '
+    f"{res['capture_integrity']['inputs_not_preserved'] + res['capture_integrity']['sources_not_preserved']}"
+)
+print()
+print('Protocol validation:')
+print(f"  Object validation:       {res['object_validation']['PASS']} PASS")
+print(f"  Independent transcript:  {res['independent_validation']['PASS']} PASS")
+print(f"  CertificateVerify:       {layers['certificate_verify']['PASS']} PASS")
+print(f"  Server Finished:         {layers['server_finished']['PASS']} PASS")
+print(f"  Client Finished:         {layers['client_finished']['PASS']} PASS")
+print(f"  Final protocol report:   {res['protocol_reports']['PASS']} PASS")
+print()
+print(f"Verifier versions:         {verifier['unique_versions']}")
+print()
+print(f"OVERALL: {s['status']}")
+
+if s.get('first_failure'):
+    f = s['first_failure']
+    print()
+    print('First recorded stage failure:')
+    print(f"  profile: {f['profile']}")
+    print(f"  leaf:    {f['leaf']:04d}")
+    print(f"  stage:   {f['stage']}")
+    print(f"  status:  {f['status']}")
+    if f.get('log'):
+        print(f"  log:     {f['log']}")
+
+print()
+print(f'Summary: {path}')
+print('=' * 60)
+PYPRINT
+}
+run_leaf_pipeline() (
+ load
+ mkdir "$STATE/batch.lock" 2>/dev/null || fail 'A batch is active or a lock needs inspection.'
+ trap 'rmdir "$STATE/batch.lock" 2>/dev/null || true' EXIT
+ [[ ! -d "$STATE/lock" ]] || fail 'A stage is active or a lock needs inspection.'
+ local step state count=0
+ for step in "${STEPS[@]}"; do
+  [[ "$step" == 05.* || "$step" == 120.* ]] && continue
+  state=''
+  [[ ! -f "$STATE/$step.status" ]] || state=$(cat "$STATE/$step.status")
+  case "$state" in running*) fail "Stage marked running: $step. Inspect its process and log before continuing.";; esac
+ done
+ for step in "${STEPS[@]}"; do
+  [[ "$step" == 05.* || "$step" == 120.* ]] && continue
+  state=''
+  [[ ! -f "$STATE/$step.status" ]] || state=$(cat "$STATE/$step.status")
+  case "$state" in completed*) printf 'SKIP completed: %s\n' "$step"; continue;; esac
+  printf 'Leaf batch stage: %s\n' "$step"
+  run_step "$step" batch || exit "$?"
+  count=$((count+1))
+ done
+ printf 'Leaf pipeline completed: %s stages.\n' "$count"
+)
+run_all_profiles() (
+ local name=${1:-$(date -u +%Y%m%dT%H%M%SZ)}
+ local profile leaf leaf4 leaf_state stress_state
+ local started_epoch now elapsed completed=0 total eta average profile_index=0
+ [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid matrix campaign name.'
+ [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] || fail 'Initialize mt-cert-scaling before starting the profile/leaf matrix.'
+ mkdir -p "$MATRIX_STATE_ROOT/$name"
+ started_epoch=$(date +%s)
+
+ finalize_matrix() {
+  local rc=$?
+  local summary_rc=0 overall report
+  trap - EXIT INT TERM
+  set +e
+  write_matrix_summary "$name" "$rc" "$started_epoch"
+  summary_rc=$?
+  if [[ "$summary_rc" == 0 ]]; then
+   print_matrix_summary "$name"
+   report="artifacts/reports/protocol-validation-$name/report.html"
+   python3 bin/renders/protocol-validation.py matrix \
+    "artifacts/protocol-validation/$name" --output "$report" --replace || summary_rc=$?
+   [[ "$summary_rc" == 0 ]] && printf 'HTML report: %s\n' "$report"
+   overall=$(python3 - "artifacts/protocol-validation/$name/matrix-summary.json" <<'PYOVERALL'
+import json,sys
+print(json.load(open(sys.argv[1]))['status'])
+PYOVERALL
+)
+   if [[ "$rc" == 0 && "$overall" != PASS ]]; then rc=1; fi
+   if [[ "$rc" == 0 && "$summary_rc" != 0 ]]; then rc=1; fi
+  else
+   printf 'ERROR: matrix summary generation failed for campaign %s.\n' "$name" >&2
+   if [[ "$rc" == 0 ]]; then rc=1; fi
+  fi
+  set -e
+  exit "$rc"
+ }
+
+ trap finalize_matrix EXIT
+ trap 'exit 130' INT TERM
+
+ printf 'Protocol-validation matrix: %s\n' "$name"
+ printf 'Profiles: %s\n' "${PROFILE_MATRIX[*]}"
+ printf 'Leaves per profile: 0..%s (N=16).\n' "$((LEAF_COUNT-1))"
+ printf 'TLS identities to validate: %s.\n' "$(( ${#PROFILE_MATRIX[@]} * LEAF_COUNT ))"
+ total=$(( ${#PROFILE_MATRIX[@]} * LEAF_COUNT ))
+
+ mkdir -p "artifacts/protocol-validation/$name"
+ if [[ ! -f "artifacts/protocol-validation/$name/05.draft-core-vectors.json" ]]; then
+  printf '\nDraft core-vector evaluation (once for the complete matrix)\n'
+  python3 campaigns/validation/protocol_validation/draft_core_audit.py \
+   --output "artifacts/protocol-validation/$name/05.draft-core-vectors.json"
+ fi
+
+ for profile in "${PROFILE_MATRIX[@]}"; do
+  profile_index=$((profile_index+1))
+  printf '\n############################################################\n'
+  printf 'Profile: %s\n' "$profile"
+  printf '############################################################\n'
+  for ((leaf=0; leaf<LEAF_COUNT; leaf++)); do
+   printf -v leaf4 '%04d' "$leaf"
+   leaf_state="$MATRIX_STATE_ROOT/$name/$profile/leaf-$leaf4"
+   printf '\n============================================================\n'
+   now=$(date +%s); elapsed=$((now-started_epoch))
+   if ((completed>0)); then
+    average=$((elapsed/completed)); eta=$((average*(total-completed)))
+   else
+    average=0; eta=0
+   fi
+   printf 'Profile: %s (%d/%d)  leaf/key: %d/%s\n' "$profile" "$profile_index" "${#PROFILE_MATRIX[@]}" "$leaf" "$leaf"
+   printf 'Overall identity: %d/%d  completed: %d  elapsed: %02d:%02d:%02d' "$((completed+1))" "$total" "$completed" "$((elapsed/3600))" "$(((elapsed%3600)/60))" "$((elapsed%60))"
+   if ((completed>0)); then printf '  estimated remaining: %02d:%02d:%02d\n' "$((eta/3600))" "$(((eta%3600)/60))" "$((eta%60))"; else printf '  estimated remaining: calculating\n'; fi
+   printf '============================================================\n'
+   if [[ ! -f "$leaf_state/paths.env" ]]; then
+    MT_PROTOCOL_STATE="$leaf_state" "$SELF" init-profile "$name" "$profile" "$leaf"
+   fi
+   MT_PROTOCOL_STATE="$leaf_state" "$SELF" run LEAF-ALL
+   completed=$((completed+1))
+  done
+  # Invalid-input stress is fixture/profile-wide, not leaf-specific: run it once per profile.
+  stress_state="$MATRIX_STATE_ROOT/$name/$profile/leaf-0000"
+  printf '\nProfile-wide invalid-input stress: %s (executed once, using leaf 0 state)\n' "$profile"
+  MT_PROTOCOL_STATE="$stress_state" "$SELF" run 120
+ done
+
+ printf '\nAll profile/leaf validation executions completed.\n'
+)
+
+new_campaign() {
+ local name=${1:-$(date -u +%Y%m%dT%H%M%SZ)}
+ [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid name.'
+ [[ ! -d "$STATE/lock" && ! -d "$STATE/batch.lock" ]] || fail 'A stage or batch is active or a lock needs inspection.'
+ [[ ! -e "artifacts/protocol-validation/$name" ]] || fail 'That campaign output already exists.'
+ [[ ! -e "artifacts/protocol-review/$name" ]] || fail 'That protocol-review output already exists.'
+ [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] || fail 'Initialize mt-cert-scaling before starting a new Paper-1 protocol campaign.'
+ if [[ -d "$STATE" ]]; then mv "$STATE" "$STATE.saved-$(date -u +%Y%m%dT%H%M%SZ)-$$"; fi
+ init "$name"
+}
+ensure_mtc_dependencies() {
+ local cert_config="$REPO/.mt-state/cert-scaling/paths.env"
+ [[ -f "$cert_config" ]] || "$REPO/bin/base/mt-prepare" init
+ "$REPO/bin/base/mt-prepare" run 2
+ source "$cert_config"
+ [[ -f "$MTC16/manifest.json" ]] || "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 50
+ [[ -f "$MTC_VALID/validation.json" ]] || "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 60
+}
+render_validation_html() {
+ local kind=$1 source=$2 report=${3:-"artifacts/reports/${2##*/}/report.html"}
+ python3 bin/renders/protocol-validation.py \
+  "$kind" "$source" --output "$report" --replace
+ printf 'HTML report: %s\n' "$report"
+}
+mutual_authentication() {
+ local root manual="$REPO/artifacts/validation/mutual-auth-manual" output index has_output=0
+ local extra=()
+ ensure_mtc_dependencies
+ load
+ root=$(paper1_root)
+ for ((index=1; index<=$#; index++)); do
+  if [[ "${!index}" == --manual-root ]]; then
+   index=$((index+1)); manual=${!index:?--manual-root requires a path}
+  elif [[ "${!index}" == --output ]]; then
+   index=$((index+1)); output=${!index:?--output requires a path}; has_output=1
+  fi
+ done
+ if [[ "$has_output" == 0 ]]; then
+  output="artifacts/results/mutual-auth-preflight-$(date -u +%Y%m%dT%H%M%SZ)"
+  extra=(--output "$output")
+ fi
+ if [[ ! -f "$manual/manifest.json" ]]; then
+  python3 campaigns/validation/protocol_validation/mutual_authentication/generate_fixtures.py \
+   --output "$manual" --execute
+ fi
+ python3 campaigns/validation/protocol_validation/mutual_authentication/preflight.py \
+  --mtc-root "$root" --configured-profile "$PROFILE" --configured-leaf "$LEAF" \
+  "${extra[@]}" "$@"
+ render_validation_html mutual "$output"
+}
+retry_validation() {
+ [[ "$#" -ge 1 ]] || fail 'Usage: retry preflight [OUTPUT] [additional run.py options]'
+ local mode=$1 output leaf4
+ shift
+ [[ "$mode" == preflight ]] || fail 'Protocol validation exposes retry preflight only; full timing belongs in handshake performance.'
+ if [[ "${1:-}" == artifacts/results/* ]]; then output=$1; shift
+ else output="artifacts/results/mtc-retry-preflight-$(date -u +%Y%m%dT%H%M%SZ)"
+ fi
+ [[ "$output" == artifacts/results/* ]] || fail 'Retry OUTPUT must be below artifacts/results/.'
+ ensure_mtc_dependencies
+ load
+ printf -v leaf4 '%04d' "$LEAF"
+ docker run --rm --network none -e PYTHONDONTWRITEBYTECODE=1 \
+  -v "$REPO:/repo:ro" -v "$REPO/artifacts:/repo/artifacts" -w /repo \
+  --entrypoint python3 mt-tls-mtc:local \
+  campaigns/validation/protocol_validation/mtc_retry/run.py "$mode" \
+  --root "/repo/$output" --peer /opt/mtc/retry-peer \
+  --trust "/repo/$FIX/trust.bin" --cert "/repo/$FIX/landmark-$leaf4.pem" \
+  --key "/repo/$KEY" "$@" --profile "$PROFILE" --leaf "$LEAF"
+ render_validation_html retry "$output"
+}
+menu() {
+ local choice value key
+ while true; do
+  printf '\nProtocol validation: 1 Initialize  2 Status  3 Show command\n                     4 Run stage  5 Change path  6 New campaign\n                     7 Run ALL pending stages (includes captures and stress checks)\n                     8 Run ALL PROFILES × ALL LEAVES (9 × 16 identities)\n                     9 Mutual-authentication preflight\n                    10 Trust-anchor retry preflight  0 Back\n'
+  read -r -p '> ' choice || return 0
+  case "$choice" in
+   1) read -r -p 'Date/name (empty=new): ' value; "$SELF" init "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
+   2) "$SELF" status || true;;
+   3|4) printf '%s\n' "${STEPS[@]}"; read -r -p 'Number: ' value
+     if [[ "$choice" == 3 ]]; then "$SELF" show "$value" || true; else "$SELF" run "$value" || true; fi;;
+   5) read -r -p 'Variable FIX, KEY, CAP, PROFILE or LEAF: ' key; read -r -p 'Relative path: ' value; "$SELF" set "$key" "$value" || true;;
+   6) read -r -p 'New date/name (empty=new): ' value; "$SELF" new "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
+   7) "$SELF" run ALL || true;;
+   8) read -r -p 'Matrix date/name (empty=new): ' value; "$SELF" run ALL-PROFILES "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
+   9) "$SELF" mutual-auth --json || true;;
+   10) load; printf 'Using configured profile=%s leaf=%s.\n' "$PROFILE" "$LEAF"; read -r -p 'New output below artifacts/results/ (empty=new): ' value
+     if [[ -n "$value" ]]; then "$SELF" retry preflight "$value" || true; else "$SELF" retry preflight || true; fi;;
+   0) return 0;;
+  esac
+ done
+}
+case "${1:-menu}" in
+ init) init "${2:-$(date -u +%Y%m%dT%H%M%SZ)}";;
+ init-profile) init_profile "${2:?Campaign name required}" "${3:?Profile required}" "${4:-0}";;
+ init-legacy) init "${2:-$(date -u +%Y%m%dT%H%M%SZ)}" legacy;;
+ new) new_campaign "${2:-$(date -u +%Y%m%dT%H%M%SZ)}";;
+ status) status;;
+ list) printf '%s\n' "${STEPS[@]}";;
+ profiles) printf '%s\n' "${PROFILE_MATRIX[@]}";;
+ mutual-auth) shift; mutual_authentication "$@";;
+ retry) shift; retry_validation "$@";;
+ show) load; plan "${2:?Stage required}"; show;;
+ run)
+  case "${2:-}" in
+   ALL) [[ "$#" == 2 ]] || fail 'Usage: run ALL'; run_all;;
+   LEAF-ALL) [[ "$#" == 2 ]] || fail 'Usage: run LEAF-ALL'; run_leaf_pipeline;;
+   ALL-PROFILES) [[ "$#" -le 3 ]] || fail 'Usage: run ALL-PROFILES [NAME]'; run_all_profiles "${3:-$(date -u +%Y%m%dT%H%M%SZ)}";;
+   '') fail 'Usage: run STAGE|ALL|ALL-PROFILES [NAME]';;
+   *) [[ "$#" == 2 ]] || fail 'Usage: run STAGE'; run_step "$2";;
+  esac;;
+ set) set_path "${2:?Variable required}" "${3:?Path required}";;
+ menu) menu;;
+ help|--help|-h) printf 'Usage: %s [menu|init [NAME]|init-profile NAME PROFILE [LEAF]|init-legacy [NAME]|new [NAME]|status|list|profiles|show STAGE|run STAGE|run ALL|run ALL-PROFILES [NAME]|mutual-auth [OPTIONS]|retry preflight [OUTPUT] [OPTIONS]|set FIX/KEY/CAP/PROFILE/LEAF VALUE]\nSTAGE accepts a number (05) or full name (05.draft-core-vectors).\nrun ALL executes all pending stages for the configured profile/leaf, beginning with the pinned draft core vectors.\nrun ALL-PROFILES [NAME] evaluates the draft vectors once, then validates all nine profiles across all 16 N=16 leaves (144 identities, landmark + standalone). It displays elapsed time and an ETA, then writes JSON and HTML reports with host and duration metadata.\nmutual-auth and retry automatically prepare missing images, validated MTC fixtures and mutual-authentication fixtures. Retry runs its bundled peer inside the MTC image and chooses a timestamped output when OUTPUT is omitted. Full retry timing belongs in handshake performance.\nManual workflow: init/status/show do not invoke Docker. No builds or deletion.\n' "$SELF";;
+ *) fail 'Unknown command; use help.';;
+esac

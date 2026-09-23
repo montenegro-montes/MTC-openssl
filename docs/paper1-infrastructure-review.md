@@ -2,12 +2,12 @@
 
 ## Files modified
 
-Under `campaigns/cryptographic_scaling/cert_chain_scaling/`:
+Under `campaigns/scaling/cert_chain_scaling/`:
 `inspect_environment.py`, `run.py`, `measure.py`, `analyze.py`, `plots.py`,
 `size_analysis.py`, `generate_fixtures.py`, `fixture_builder.py`, `README.md`.
 
 MTC loading: `src/mtc/tls.c`, `src/mtc/patch.py` and
-`campaigns/original_campaigns/controlled_n16_campaign/tests.sh`.
+`campaigns/historical_campaigns/controlled_n16_campaign/tests.sh`.
 
 ## Files created
 
@@ -102,5 +102,5 @@ as the reproduction command for that gate; it is not a pending action.
 A valid old-run `--resume` command cannot be provided after the run was deleted.
 
 ```sh
-bin/containers/mt-containers build mtc && bin/original_campaigns/mt-campaigns retry 07.measurement-image
+bin/containers/mt-containers build mtc && bin/historical_campaigns/mt-campaigns retry 07.measurement-image
 ```

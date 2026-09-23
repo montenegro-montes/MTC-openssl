@@ -1,0 +1,17 @@
+**
+!docker/
+!docker/base/
+!docker/base/Dockerfile.mtc
+!src/
+!src/mtc/
+!src/mtc/mtc.c
+!src/mtc/mtc.h
+!src/mtc/tls.c
+!src/mtc/patch.py
+!src/mtc/openssl.sh
+!src/mtc/retry_peer.c
+!src/mtc/retry_tls.c
+!src/profiling/
+!src/profiling/native_metrics.c
+!src/profiling/native_metrics.h
+!src/profiling/patch_native_metrics.py

@@ -35,31 +35,30 @@ mkdir -p artifacts/results
 The first build needs Internet access. Generated certificates and keys are
 written below `artifacts/`, which must remain outside Git.
 
+The active MTC/X.509 image chain lives in [`docker/base/`](base/README.md).
 Compose definitions for studies that vary algorithms, security levels, key or
 certificate sizes, chain depth, or proof length are grouped separately under
 [`docker/cryptographic_scaling/`](cryptographic_scaling/README.md). The
-established baseline and network definitions are grouped under
-[`docker/original_campaigns/`](original_campaigns/README.md).
+historical network definitions remain grouped under
+[`docker/historical_campaigns/`](historical_campaigns/README.md).
 
 ## Image dependency chain
 
 ```text
-docker/original_campaigns/Dockerfile          -> mt-tls-lab:local
-docker/original_campaigns/Dockerfile.compact  -> mt-tls-compact:local
-docker/original_campaigns/Dockerfile.profile  -> mt-tls-profile:local
-docker/original_campaigns/Dockerfile.mtc      -> mt-tls-mtc:local
-docker/original_campaigns/Dockerfile.measurement    -> mt-tls-measurement:local
-docker/original_campaigns/Dockerfile.network  -> mt-tls-network:latency
+docker/base/Dockerfile          -> mt-tls-lab:local
+docker/base/Dockerfile.mtc      -> mt-tls-mtc:local
+docker/base/Dockerfile.capture  -> mt-tls-capture:local
 ```
 
-Build in this order because every stage uses the preceding local tag as its
-`FROM` image.
+Compact, profiling, combined measurement and network recipes remain under
+`docker/historical_campaigns/` for historical reproduction and are excluded from
+the active preparation battery.
 
 ## Step 1 — build the base OpenSSL/PQ/Merkle image
 
 ```sh
-docker compose -f docker/original_campaigns/compose.yaml build
-docker compose -f docker/original_campaigns/compose.yaml run --rm setup
+docker compose -f docker/historical_campaigns/compose.yaml build
+docker compose -f docker/historical_campaigns/compose.yaml run --rm setup
 ```
 
 The setup service creates classic and ML-DSA-65 certificates plus the initial
@@ -68,10 +67,10 @@ Merkle fixtures in `artifacts/certs/` and `artifacts/merkle/`.
 ## Step 2 — test an initial TLS scenario
 
 ```sh
-SCENARIO=pq-mt docker compose -f docker/original_campaigns/compose.yaml up -d --force-recreate server
+SCENARIO=pq-mt docker compose -f docker/historical_campaigns/compose.yaml up -d --force-recreate server
 sleep 2
-SCENARIO=pq-mt docker compose -f docker/original_campaigns/compose.yaml run --rm client
-docker compose -f docker/original_campaigns/compose.yaml down
+SCENARIO=pq-mt docker compose -f docker/historical_campaigns/compose.yaml run --rm client
+docker compose -f docker/historical_campaigns/compose.yaml down
 ```
 
 Supported values are `classic`, `pq`, `classic-mt` and `pq-mt`. Always
@@ -80,10 +79,10 @@ stop the `mt` project after the check.
 ## Step 3 — build Compact and generate its N=16 fixtures
 
 ```sh
-docker compose -f docker/original_campaigns/compose.compact.yaml build
+docker compose -f docker/historical_campaigns/compose.compact.yaml build
 test -f artifacts/compact/batch16/classic/manifest.json \
   -a -f artifacts/compact/batch16/pq/manifest.json \
-  || docker compose -f docker/original_campaigns/compose.compact.yaml run --rm setup
+  || docker compose -f docker/historical_campaigns/compose.compact.yaml run --rm setup
 ```
 
 The setup command is skipped when both immutable fixture manifests already
@@ -92,11 +91,11 @@ exist. `prepare.py` intentionally refuses to overwrite that directory.
 ## Step 4 — build profiling and MTC
 
 ```sh
-docker compose -f docker/original_campaigns/compose.profile.yaml build
-docker compose -f docker/original_campaigns/compose.mtc.yaml build
+docker compose -f docker/historical_campaigns/compose.profile.yaml build
+docker compose -f docker/historical_campaigns/compose.mtc.yaml build
 test -f artifacts/mtc/batch16-v2/classic/manifest.json \
   -a -f artifacts/mtc/batch16-v2/pq/manifest.json \
-  || docker compose -f docker/original_campaigns/compose.mtc.yaml run --rm setup
+  || docker compose -f docker/historical_campaigns/compose.mtc.yaml run --rm setup
 ```
 
 The MTC setup creates `artifacts/mtc/batch16-v2/`. If both manifests are
@@ -106,7 +105,7 @@ exists, inspect it and choose a new directory instead of combining generations.
 ## Step 5 — build and test the study image
 
 ```sh
-docker build -f docker/original_campaigns/Dockerfile.measurement \
+docker build -f docker/historical_campaigns/Dockerfile.measurement \
   --build-arg BASE_IMAGE=mt-tls-mtc:local \
   -t mt-tls-measurement:local .
 
@@ -121,13 +120,15 @@ Do not use the image for measurements unless the output contains
 ## Step 6 — build and inspect the network image
 
 ```sh
-docker build -f docker/original_campaigns/Dockerfile.network -t mt-tls-network:latency .
-docker run --rm --network none mt-tls-network:latency sh -c \
+docker build -f docker/network/Dockerfile.measurement -t mt-tls-network-measurement:local .
+docker build -f docker/network/Dockerfile.network -t mt-tls-network:local .
+docker run --rm --network none mt-tls-network:local sh -c \
   'command -v tc && command -v ping && command -v nstat && command -v iperf3'
 ```
 
 The network stage only installs `iproute2`, `iputils-ping` and `iperf3`.
-It retains the OpenSSL binary from `mt-tls-measurement:local`.
+It retains the OpenSSL binary from `mt-tls-mtc:local` through the current
+`mt-tls-network-measurement:local` image.
 
 ## Compose inventory
 
@@ -142,29 +143,29 @@ regression gates run the same resolver before testing and record all image IDs.
 
 | Compose file | Project | Purpose |
 |---|---|---|
-| `original_campaigns/compose.yaml` | `mt` | Initial classic/PQ and Merkle TLS laboratory |
-| `original_campaigns/compose.compact.yaml` | `mtcompact` | Compact Merkle fixtures and benchmark |
-| `original_campaigns/compose.profile.yaml` | `mtprofile` | Detailed timing instrumentation |
-| `original_campaigns/compose.mtc.yaml` | `mtclab` | Experimental MTC implementation |
-| `original_campaigns/compose.measurement.yaml` | `controlledn16` | Controlled N=16 measurements |
-| `original_campaigns/compose.scaling.yaml` | `mtscaling` | Tree-population scaling |
-| `original_campaigns/compose.network-latency.yaml` | `mtlatency` | Latency-only campaign |
-| `original_campaigns/compose.network-bandwidth.yaml` | `mtbandwidth` | Bandwidth-limited campaign |
-| `original_campaigns/compose.network-loss.yaml` | `mtloss` | Packet-loss campaign |
-| `original_campaigns/compose.network-combined.yaml` | `mtcombined` | Combined network profiles |
+| `historical_campaigns/compose.yaml` | `mt` | Initial classic/PQ and Merkle TLS laboratory |
+| `historical_campaigns/compose.compact.yaml` | `mtcompact` | Compact Merkle fixtures and benchmark |
+| `historical_campaigns/compose.profile.yaml` | `mtprofile` | Detailed timing instrumentation |
+| `historical_campaigns/compose.mtc.yaml` | `mtclab` | Experimental MTC implementation |
+| `historical_campaigns/compose.measurement.yaml` | `controlledn16` | Controlled N=16 measurements |
+| `historical_campaigns/compose.scaling.yaml` | `mtscaling` | Tree-population scaling |
+| `network/compose.latency.yaml` | `mtlatency` | Current latency-only campaign |
+| `network/compose.bandwidth.yaml` | `mtbandwidth` | Current bandwidth-limited campaign |
+| `network/compose.loss.yaml` | `mtloss` | Current packet-loss campaign |
+| `network/compose.combined.yaml` | `mtcombined` | Current combined network profiles |
 | `cryptographic_scaling/compose.cert-chain-scaling.yaml` | `certchainscaling` | Ideal-network algorithm and certificate-chain scaling |
 
 The campaign Compose definitions are execution infrastructure. Launch them
-through their package runners under `campaigns/original_campaigns/` or
-`campaigns/cryptographic_scaling/`, because those runners record
+through their package runners under `campaigns/network/` or
+`campaigns/scaling/`, because those runners record
 metadata, validate qdiscs and protect against overwrites.
 
 ## Inspection and cleanup
 
 ```sh
-docker compose -f docker/original_campaigns/compose.yaml ps
-docker compose -f docker/original_campaigns/compose.yaml logs server
-docker compose -f docker/original_campaigns/compose.yaml down
+docker compose -f docker/historical_campaigns/compose.yaml ps
+docker compose -f docker/historical_campaigns/compose.yaml logs server
+docker compose -f docker/historical_campaigns/compose.yaml down
 docker image ls 'mt-tls-*'
 ```
 
@@ -175,4 +176,4 @@ file shown in their runner/README with `down`. Do not use
 `docker system prune` as part of the reproducibility workflow.
 
 The obsolete `archive/` directory has been removed. Maintained definitions are
-grouped under `original_campaigns/` and `cryptographic_scaling/`.
+grouped under `network/`, `historical_campaigns/` and `cryptographic_scaling/`.

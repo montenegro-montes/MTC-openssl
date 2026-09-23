@@ -13,22 +13,22 @@ Todos los resultados se crean en directorios nuevos. No repetir setup sobre un
 directorio existente: usar `--output` y `MTC_BATCH` para seleccionar otro.
 
 ```sh
-docker compose -f docker/original_campaigns/compose.mtc.yaml build
-docker compose -f docker/original_campaigns/compose.mtc.yaml run --rm setup
+docker compose -f docker/historical_campaigns/compose.mtc.yaml build
+docker compose -f docker/historical_campaigns/compose.mtc.yaml run --rm setup
 
-docker compose -f docker/original_campaigns/compose.mtc.yaml run --rm --no-deps client sh /opt/mtc/test_verifier.sh
-docker compose -f docker/original_campaigns/compose.mtc.yaml run --rm --no-deps client python3 /opt/mtc/test_tls.py
+docker compose -f docker/historical_campaigns/compose.mtc.yaml run --rm --no-deps client sh /opt/mtc/test_verifier.sh
+docker compose -f docker/historical_campaigns/compose.mtc.yaml run --rm --no-deps client python3 /opt/mtc/test_tls.py
 
-docker compose -f docker/original_campaigns/compose.mtc.yaml up -d --wait server
-docker compose -f docker/original_campaigns/compose.mtc.yaml run --rm client python3 /opt/mtc/benchmark.py --runs 3
+docker compose -f docker/historical_campaigns/compose.mtc.yaml up -d --wait server
+docker compose -f docker/historical_campaigns/compose.mtc.yaml run --rm client python3 /opt/mtc/benchmark.py --runs 3
 ```
 
 Para la campaña, obtener `docker image inspect mt-tls-mtc:local --format '{{.Id}}'`
 y pasar el valor literal como `--image-id`:
 
 ```sh
-docker compose -f docker/original_campaigns/compose.mtc.yaml run --rm client python3 /opt/mtc/benchmark.py --runs 30 --image-id sha256:VALOR
-docker compose -f docker/original_campaigns/compose.mtc.yaml down
+docker compose -f docker/historical_campaigns/compose.mtc.yaml run --rm client python3 /opt/mtc/benchmark.py --runs 30 --image-id sha256:VALOR
+docker compose -f docker/historical_campaigns/compose.mtc.yaml down
 ```
 
 `--scenarios` permite filtrar escenarios. La matriz por defecto tiene doce:
@@ -77,8 +77,8 @@ independientes ni cubren variabilidad de máquinas o redes.
 ## Escalado
 
 ```sh
-docker compose -f docker/original_campaigns/compose.mtc.yaml run --rm setup python3 /opt/mtc/prepare_scaling.py --output /work/mtc/scaling-NUEVO
-python3 campaigns/original_campaigns/mtc_exploratory_scaling/run.py --fixtures /work/mtc/scaling-NUEVO --runs 3
+docker compose -f docker/historical_campaigns/compose.mtc.yaml run --rm setup python3 /opt/mtc/prepare_scaling.py --output /work/mtc/scaling-NUEVO
+python3 campaigns/historical_campaigns/mtc_exploratory_scaling/run.py --fixtures /work/mtc/scaling-NUEVO --runs 3
 ```
 
 Genera N=1,4,16,64,256,1024. Las primeras 16 identidades conservan las claves del

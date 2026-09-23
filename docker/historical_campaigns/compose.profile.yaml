@@ -1,0 +1,31 @@
+name: mtprofile
+x-lab: &lab
+  image: mt-tls-profile:local
+  build:
+    context: ../..
+    dockerfile: docker/historical_campaigns/Dockerfile.profile
+services:
+  server:
+    <<: *lab
+    volumes:
+      - ../../artifacts:/work:ro
+      - ../../artifacts/results:/work/results
+    environment:
+      COMPACT_BATCH: ${COMPACT_BATCH:-/work/compact/batch16}
+      PROFILE_DETAIL: ${PROFILE_DETAIL:-0}
+    command: ["python3", "/opt/profiling/serve.py"]
+    healthcheck:
+      test: ["CMD", "python3", "/opt/profiling/serve.py", "--health"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+  client:
+    <<: *lab
+    volumes:
+      - ../../artifacts:/work:ro
+      - ../../artifacts/results:/work/results
+    environment:
+      COMPACT_BATCH: ${COMPACT_BATCH:-/work/compact/batch16}
+      PROFILE_DETAIL: ${PROFILE_DETAIL:-0}
+      TLS_HOST: server
+    command: ["python3", "/opt/profiling/benchmark.py", "--runs", "30"]

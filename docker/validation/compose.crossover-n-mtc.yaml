@@ -18,7 +18,7 @@ services:
     <<: *common
     command:
       - python3
-      - /repo/campaigns/cryptographic_scaling/crossover_n_server_only/server_mtc_by_n.py
+      - /repo/campaigns/scaling/crossover_n_server_only/server_mtc_by_n.py
     healthcheck:
       test:
         - CMD
@@ -44,4 +44,4 @@ services:
       IMAGE_ID: "${IMAGE_ID:-missing-image-id}"
     command:
       - python3
-      - /repo/campaigns/cryptographic_scaling/crossover_n_server_only/measure_mtc_by_n.py
+      - /repo/campaigns/scaling/crossover_n_server_only/measure_mtc_by_n.py

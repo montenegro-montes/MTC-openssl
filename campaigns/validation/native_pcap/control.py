@@ -211,7 +211,7 @@ def tests(root):
                 sys.executable,
                 str(
                     REPO
-                    / "campaigns/original_campaigns/handshake_capture/test_analyze.py"
+                    / "campaigns/historical_campaigns/handshake_capture/test_analyze.py"
                 ),
             ],
         ),
@@ -221,7 +221,7 @@ def tests(root):
                 sys.executable,
                 str(
                     REPO
-                    / "campaigns/original_campaigns/network_latency/test_pcap_adapter.py"
+                    / "campaigns/historical_campaigns/network_latency/test_pcap_adapter.py"
                 ),
             ],
         ),

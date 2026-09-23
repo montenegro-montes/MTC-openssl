@@ -6,45 +6,48 @@ cd "$REPO"
 source "$REPO/bin/lib/docker-preflight.sh"
 STATE="$REPO/.mt-state/cert-scaling"
 CONFIG="$STATE/paths.env"
-CHAIN=campaigns/cryptographic_scaling/cert_chain_scaling
-MTC=campaigns/cryptographic_scaling/mtc_profile_scaling/workflow.py
-STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 70.mtc-all 80.crossover 90.audit 100.cross-advanced 110.tls-preview 120.tls-full 130.tls-analysis 140.tls-plots 150.html-report)
-DEFAULT_STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 80.crossover 90.audit)
+CHAIN=campaigns/scaling/cert_chain_scaling
+MTC=campaigns/scaling/mtc_profile_scaling/workflow.py
+STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 80.crossover 85.crossover-html 90.audit 95.mtc-all-sizes 100.cross-advanced 102.crossover-boundary-audit 105.advanced-crossover-html 110.tls-depth-validation 120.mutual-auth-crossover 122.mutual-crossover-exact 124.mutual-boundary-audit 125.mutual-crossover-html)
+DEFAULT_STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 80.crossover 85.crossover-html 90.audit)
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 usage() {
  cat <<'HELP'
 Usage: bin/cryptographic_scaling/mt-cert-scaling [COMMAND]
   menu                      interactive menu (default)
   prepare                   open the independent prerequisites menu
-  protocol                  open the separate protocol-validation menu
   init [NAME]              save paths without running or generating fixtures
+  new [NAME]               archive current configuration and select fresh paths
   status                    paths, stages and certificate progress
-  list                      available stages (70, 100 and 110–150 are optional)
+  list                      available stages (95, 100, 102, 105, 110 and 120–125 are optional)
   show STAGE                print a command without executing it
   run STAGE                 execute one stage and save its log
-  run --count X             execute up to X pending default stages in order
-  run ALL                   execute remaining default stages; stop on failure
+  run --count X             execute the next X pending N=16 workflow stages
+  run ALL                   execute pending stages 10–60, 80 and 90; stop on failure
   set VARIABLE PATH         select an input path or a fresh output path
 
 Variables: CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID
            MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT TLS_ROOT
+           MUTUAL_SERVER_FIXTURES MUTUAL_FIXTURES MUTUAL_RESULTS MUTUAL_ANALYSIS MUTUAL_EXACT MUTUAL_BOUNDARY BOUNDARY_ROOT
 Stages accept a number (80) or full name (80.crossover).
   cross                     N=16 crossover + plots (stage 80)
-  cross-advanced            generate missing full fixtures, then crossover + plots
+  cross-advanced            crossover for N=1, 4, 16, 64 and 256 + plots
   html-report               render existing advanced crossover evidence as offline HTML
-  tls-full                  preview the full TLS matrix without executing it
-  tls-full --execute        preview, execute, analyze and plot the full TLS matrix
-Default batches skip optional stages 70, 100 and 110–150.
+  tls-depth-validation      execute D=2–5 TLS scaling, analysis, plots and HTML
+  mutual-crossover          compare simple and mutual crossover for all nine profiles
+  tls-full --execute        compatibility alias for tls-depth-validation
+The N=16 default workflow is 10, 20, 30, 40, 50, 60, 80, 85 and 90.
+It skips optional stages 95, 100, 102, 105, 110 and 120.
 run ALL does not execute the TLS performance matrix.
-Full TLS execution is manual: run 120 or tls-full --execute.
+TLS depth validation is manual: run 110 or tls-depth-validation.
 For a previous manual campaign, use init with its name and set its paths.
 HELP
 }
-load() { [[ -f "$CONFIG" ]] || fail 'Run init [NAME] first.'; source "$CONFIG"; ADVANCED_ROOT=${ADVANCED_ROOT:-${STATIC_ROOT}-advanced}; TLS_ROOT=${TLS_ROOT:-artifacts/results/cert-chain-tls-$STAMP}; }
+load() { [[ -f "$CONFIG" ]] || fail 'Run init [NAME] first.'; source "$CONFIG"; ADVANCED_ROOT=${ADVANCED_ROOT:-${STATIC_ROOT}-advanced}; TLS_ROOT=${TLS_ROOT:-artifacts/results/cert-chain-tls-$STAMP}; MUTUAL_SERVER_FIXTURES=${MUTUAL_SERVER_FIXTURES:-artifacts/scaling/mutual-auth-crossover/server-x509-$STAMP}; MUTUAL_FIXTURES=${MUTUAL_FIXTURES:-artifacts/scaling/mutual-auth-crossover/fixtures-$STAMP}; MUTUAL_RESULTS=${MUTUAL_RESULTS:-artifacts/results/mutual-auth-crossover-$STAMP}; MUTUAL_ANALYSIS=${MUTUAL_ANALYSIS:-artifacts/results/mutual-auth-crossover-analysis-$STAMP}; MUTUAL_EXACT=${MUTUAL_EXACT:-artifacts/results/mutual-auth-crossover-exact-$STAMP}; MUTUAL_BOUNDARY=${MUTUAL_BOUNDARY:-artifacts/results/mutual-auth-crossover-boundary-audit-$STAMP}; BOUNDARY_ROOT=${BOUNDARY_ROOT:-artifacts/results/mtc-crossover-boundary-audit-$STAMP}; }
 save() {
  local key
  (umask 077; : > "$CONFIG.tmp"
- for key in STAMP CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT TLS_ROOT; do
+ for key in STAMP CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT TLS_ROOT MUTUAL_SERVER_FIXTURES MUTUAL_FIXTURES MUTUAL_RESULTS MUTUAL_ANALYSIS MUTUAL_EXACT MUTUAL_BOUNDARY BOUNDARY_ROOT; do
   printf '%s=%q\n' "$key" "${!key}" >> "$CONFIG.tmp"
  done
  mv "$CONFIG.tmp" "$CONFIG")
@@ -57,22 +60,64 @@ init() {
  CHAIN_VALID="artifacts/results/cert-chain-validation-$STAMP.json"
  ENVIRONMENT="artifacts/cert-chain-scaling/environment-$STAMP.json"
  SUPPORT="artifacts/cert-chain-scaling/algorithm_support-$STAMP.csv"
- MTC16="artifacts/paper1-mtc/n16-$STAMP"
- MTC_VALID="artifacts/results/paper1-mtc-n16-$STAMP"
- MTC_ALL="artifacts/paper1-mtc/all-$STAMP"
- STATIC_ROOT="artifacts/results/paper1-crossover-n16-$STAMP"
- ADVANCED_ROOT="artifacts/results/paper1-crossover-advanced-$STAMP"
+ MTC16="artifacts/mtc/n16-$STAMP"
+ MTC_VALID="artifacts/results/mtc-n16-$STAMP"
+ MTC_ALL="artifacts/mtc/all-$STAMP"
+ STATIC_ROOT="artifacts/results/mtc-crossover-n16-$STAMP"
+ ADVANCED_ROOT="artifacts/results/mtc-crossover-advanced-$STAMP"
  TLS_ROOT="artifacts/results/cert-chain-tls-$STAMP"
- AUDIT="artifacts/results/paper1-crossover-audit-$STAMP.json"
+ AUDIT="artifacts/results/mtc-crossover-audit-$STAMP.json"
+ MUTUAL_SERVER_FIXTURES="artifacts/scaling/mutual-auth-crossover/server-x509-$STAMP"
+ MUTUAL_FIXTURES="artifacts/scaling/mutual-auth-crossover/fixtures-$STAMP"
+ MUTUAL_RESULTS="artifacts/results/mutual-auth-crossover-$STAMP"
+ MUTUAL_ANALYSIS="artifacts/results/mutual-auth-crossover-analysis-$STAMP"
+ MUTUAL_EXACT="artifacts/results/mutual-auth-crossover-exact-$STAMP"
+ MUTUAL_BOUNDARY="artifacts/results/mutual-auth-crossover-boundary-audit-$STAMP"
+ BOUNDARY_ROOT="artifacts/results/mtc-crossover-boundary-audit-$STAMP"
  mkdir -p "$STATE"; save
  printf 'Paths saved. No campaign has been executed.\n'
 }
+new_campaign() {
+ local name=${1:-$(date -u +%Y%m%dT%H%M%SZ)} archive file
+ [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid date/name.'
+ mkdir -p "$STATE"
+ archive=$(date -u +%Y%m%dT%H%M%SZ)-$$
+ [[ ! -e "$CONFIG" ]] || mv "$CONFIG" "$CONFIG.previous-$archive"
+ for file in "$STATE"/*.status; do
+  [[ ! -f "$file" ]] || mv "$file" "$file.previous-$archive"
+ done
+ init "$name"
+ printf 'Previous configuration and stage status were archived. Existing artifacts were not changed.\n'
+}
 select_step() {
  local entry
+ if [[ "$1" == 70 || "$1" == 70.mtc-all || "$1" == 95.mtc-all ]]; then set -- 95.mtc-all-sizes; fi
  for entry in "${STEPS[@]}"; do
   if [[ "$1" == "$entry" || "$1" == "${entry%%.*}" ]]; then STEP=$entry; return; fi
  done
  fail "Unknown stage: $1"
+}
+step_note() {
+ case "$1" in
+  50.*) printf '(N=16 fixture set)' ;;
+  60.*) printf '(N=16 functional validation)' ;;
+  80.*) printf '(N=16 crossover)' ;;
+  85.*) printf '(N=16 crossover tables and plots in HTML)' ;;
+  90.*) printf '(N=16 crossover audit)' ;;
+  95.*) printf '(N=1, 4, 16, 64, 256; D=2 crossover range)' ;;
+  100.*) printf '(exact analytical crossover)' ;;
+  102.*) printf '(empirical N-1/N confirmation for D=2 cuts within N≤256; includes HTML)' ;;
+  105.*) printf '(advanced crossover report)' ;;
+  110.*) printf '(X.509 D=2–5; depends on 10, 20, 30 and 80; includes HTML)' ;;
+  120.*) printf '(9-profile sampled mutual crossover)' ;;
+  122.*) printf '(exact client+server Certificate-size crossover)' ;;
+  124.*) printf '(empirical mutual N-1/N boundary confirmation)' ;;
+  125.*) printf '(combined sampled, exact and audited mutual HTML)' ;;
+ esac
+}
+print_steps() {
+ local entry
+ for entry in "${STEPS[@]}"; do printf '%-24s %s\n' "$entry" "$(step_note "$entry")"; done
 }
 plan() {
  select_step "$1"
@@ -80,12 +125,13 @@ plan() {
   10.*) OUT=$ENVIRONMENT; CMD=(python3 "$CHAIN/inspect_environment.py" --output "$ENVIRONMENT" --support-output "$SUPPORT");;
   20.*) OUT=$CHAIN_FIXTURES; CMD=(python3 "$CHAIN/generate_fixtures.py" --output "$CHAIN_FIXTURES");;
   30.*) OUT=$CHAIN_VALID; CMD=(python3 "$CHAIN/validate.py" "$CHAIN_FIXTURES" --output "$CHAIN_VALID");;
-  40.*) OUT=''; CMD=(bin/cryptographic_scaling/mt-prepare run 4);;
+  40.*) OUT=''; CMD=(bin/base/mt-prepare run 2);;
   50.*) OUT=$MTC16; CMD=(python3 "$MTC" generate --output "$MTC16" --execute);;
   60.*) OUT=$MTC_VALID; CMD=(python3 "$MTC" validate --fixtures "$MTC16" --output "$MTC_VALID" --execute);;
-  70.*) OUT=$MTC_ALL; CMD=(python3 "$MTC" generate --sizes 1 4 16 64 256 1024 --seed-fixtures "$MTC16" --validated-n16 "$MTC_VALID/validation.json" --output "$MTC_ALL" --execute);;
+  95.*) OUT=$MTC_ALL; CMD=(python3 "$MTC" generate --sizes 1 4 16 64 256 --seed-fixtures "$MTC16" --validated-n16 "$MTC_VALID/validation.json" --output "$MTC_ALL" --execute);;
   80.*) OUT=$STATIC_ROOT
    CMD=(bash -c 'python3 "$1/size_analysis.py" "$2" --mtc-fixtures "$3" --output "$4" && python3 "$1/plots.py" "$4" --output "$4/plots"' _ "$CHAIN" "$CHAIN_FIXTURES" "$MTC16" "$STATIC_ROOT");;
+  85.*) OUT="artifacts/reports/${STATIC_ROOT##*/}/report.html"; CMD=(python3 bin/renders/crossover.py "$STATIC_ROOT" --output "$OUT");;
   #100.*) OUT=$ADVANCED_ROOT
   # CMD=(bash -c 'python3 "$1/size_analysis.py" "$2" --mtc-fixtures "$3" --output "$4" && python3 "$1/plots.py" "$4" --output "$4/plots"' _ "$CHAIN" "$CHAIN_FIXTURES" "$MTC_ALL" "$ADVANCED_ROOT");;
   100.*) OUT=$ADVANCED_ROOT
@@ -96,15 +142,21 @@ plan() {
      --baseline "$STATIC_ROOT"
      --measurements "$TLS_ROOT"
      --output "$ADVANCED_ROOT");;
-  110.*|120.*)
-   OUT=''; [[ "$STEP" != 120.* ]] || OUT=$TLS_ROOT
-   CMD=(python3 "$CHAIN/run.py" --fixtures "$CHAIN_FIXTURES" --output "$TLS_ROOT" --campaigns 5 --repetitions 30 --warmups 5 --full-matrix --environment "$ENVIRONMENT")
-   if [[ "$STEP" == 110.* ]]; then CMD+=(--dry-run); else CMD+=(--execute); fi;;
-  130.*) OUT="$TLS_ROOT/summary.csv"; CMD=(python3 "$CHAIN/analyze.py" "$TLS_ROOT");;
-  140.*) OUT="$TLS_ROOT/plots"; CMD=(python3 "$CHAIN/plots.py" "$STATIC_ROOT" --measurements "$TLS_ROOT" --output "$OUT");;
-  150.*) OUT="artifacts/reports/${ADVANCED_ROOT##*/}/report.html"
-   CMD=(bin/artifacts/mt-report "$ADVANCED_ROOT" --output "$OUT");;
+  110.*) OUT=$TLS_ROOT
+   CMD=(bash -c 'set -euo pipefail
+python3 "$1/run.py" --fixtures "$2" --output "$3" --campaigns 5 --repetitions 30 --warmups 5 --full-matrix --environment "$4" --dry-run
+python3 "$1/run.py" --fixtures "$2" --output "$3" --campaigns 5 --repetitions 30 --warmups 5 --full-matrix --environment "$4" --execute
+python3 "$1/analyze.py" "$3"
+python3 "$1/plots.py" "$5" --measurements "$3" --output "$3/plots"
+"$6" "$3" --output "$7"' _ "$CHAIN" "$CHAIN_FIXTURES" "$TLS_ROOT" "$ENVIRONMENT" "$STATIC_ROOT" "$REPO/bin/artifacts/mt-report" "artifacts/reports/${TLS_ROOT##*/}/report.html");;
+  102.*) OUT=$BOUNDARY_ROOT; CMD=(python3 campaigns/scaling/crossover_n_server_only/boundary_audit.py --analysis "$ADVANCED_ROOT" --source-fixtures "$MTC_ALL" --output "$BOUNDARY_ROOT" --execute);;
+  105.*) OUT="artifacts/reports/${ADVANCED_ROOT##*/}/report.html"
+   CMD=(python3 bin/renders/crossover-advanced.py --analysis "$ADVANCED_ROOT" --audit "$BOUNDARY_ROOT" --output "$OUT");;
   90.*) OUT=$AUDIT; CMD=(python3 "$CHAIN/validate.py" "$CHAIN_FIXTURES" --analysis "$STATIC_ROOT" --output "$AUDIT");;
+  120.*) OUT=$MUTUAL_RESULTS; CMD=(python3 campaigns/scaling/mutual_authentication_crossover/workflow.py --server-fixtures "$MUTUAL_SERVER_FIXTURES" --fixtures "$MUTUAL_FIXTURES" --results "$MUTUAL_RESULTS" --analysis "$MUTUAL_ANALYSIS" --simple-crossover "$STATIC_ROOT" --report "artifacts/reports/${MUTUAL_ANALYSIS##*/}/sampled.html" --execute);;
+  122.*) OUT=$MUTUAL_EXACT; CMD=(python3 campaigns/scaling/mutual_authentication_crossover/exact_crossover.py --fixtures "$MUTUAL_FIXTURES" --analysis "$MUTUAL_ANALYSIS" --output "$MUTUAL_EXACT");;
+  124.*) OUT=$MUTUAL_BOUNDARY; CMD=(python3 campaigns/scaling/mutual_authentication_crossover/boundary_audit.py --exact "$MUTUAL_EXACT" --source-fixtures "$MUTUAL_FIXTURES" --output "$MUTUAL_BOUNDARY" --execute);;
+  125.*) OUT="artifacts/reports/${MUTUAL_ANALYSIS##*/}/report.html"; CMD=(python3 bin/renders/mutual-crossover.py --analysis "$MUTUAL_ANALYSIS" --exact "$MUTUAL_EXACT" --audit "$MUTUAL_BOUNDARY" --output "$OUT");;
  esac
 }
 show_command() { printf '%q ' "${CMD[@]}"; printf '\n'; }
@@ -121,38 +173,54 @@ progress() {
 }
 status() {
  load
- local key step state
- for key in CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT TLS_ROOT; do
+ local key step state display_state
+ for key in CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT BOUNDARY_ROOT TLS_ROOT MUTUAL_SERVER_FIXTURES MUTUAL_FIXTURES MUTUAL_RESULTS MUTUAL_ANALYSIS MUTUAL_EXACT MUTUAL_BOUNDARY; do
   printf '%-16s %s\n' "$key" "${!key}"
  done
  printf '\nStages (existing output does not imply validation):\n'
  for step in "${STEPS[@]}"; do
   plan "$step"; state='pending/not executed by this launcher'
   [[ ! -f "$STATE/$STEP.status" ]] || state=$(cat "$STATE/$STEP.status")
-  [[ -z "$OUT" || ! -e "$OUT" ]] || state="$state; output exists"
-  printf '  %-20s %s\n' "$STEP" "$state"
+  display_state=${state%%; log=*}
+  [[ -z "$OUT" || ! -e "$OUT" ]] || display_state="$display_state; output exists"
+  printf '  %-20s %-52s %s\n' "$STEP" "$(step_note "$STEP")" "$display_state"
  done
  progress "$MTC16" 16
- progress "$MTC_ALL" 1024
+ progress "$MTC_ALL" 256
  [[ ! -d "$STATE/lock" ]] || printf '\nAn execution lock exists. Inspect the process and its log before intervening.\n'
 }
 require_path() { [[ -e "$1" ]] || fail "Missing input: $1"; }
 preflight() {
  case "$STEP" in
-  10.*|20.*|30.*|90.*) mt_images_required mt-tls-measurement:local || return 1;;
+  10.*|20.*|30.*|90.*) mt_images_required mt-tls-mtc:local || return 1;;
   40.*) mt_compose_ready || return 1;;
-  120.*) mt_images_required mt-tls-measurement:local || return 1;;
-  50.*|60.*|70.*) mt_images_required mt-tls-mtc:local || return 1;;
+  102.*|110.*|120.*) mt_compose_ready && mt_image_required mt-tls-mtc:local || return 1;;
+  124.*) mt_compose_ready && mt_images_required mt-tls-mtc:local mt-tls-mtc-mutual:local || return 1;;
+  50.*|60.*|95.*) mt_images_required mt-tls-mtc:local || return 1;;
  esac
  [[ -z "$OUT" || ! -e "$OUT" ]] || fail "Output already exists: $OUT. It will not be overwritten or resumed. Check status or use set with a fresh path."
  case "$STEP" in
-  110.*|120.*)
+  102.*) require_path "$ADVANCED_ROOT/crossover_extended.csv"; require_path "$MTC_ALL/manifest.json";;
+  122.*) require_path "$MUTUAL_ANALYSIS/x509-baselines.csv"; require_path "$MUTUAL_FIXTURES/server-mtc/batch16"; require_path "$MUTUAL_FIXTURES/client-mtc/batch16";;
+  124.*) require_path "$MUTUAL_EXACT/mutual-crossover-exact.csv"; require_path "$MUTUAL_FIXTURES";;
+  125.*) require_path "$MUTUAL_ANALYSIS/crossover-n.csv"; require_path "$MUTUAL_EXACT/mutual-crossover-exact.csv"; require_path "$MUTUAL_BOUNDARY/mutual-boundary-audit.csv";;
+  120.*)
+    require_path "$STATIC_ROOT/crossover.csv"
+    require_path "campaigns/scaling/mutual_authentication_crossover/Dockerfile.mutual_metrics"
+    [[ ! -e "$MUTUAL_SERVER_FIXTURES" ]] || fail "Output already exists: $MUTUAL_SERVER_FIXTURES"
+    [[ ! -e "$MUTUAL_FIXTURES" ]] || fail "Output already exists: $MUTUAL_FIXTURES"
+    [[ ! -e "$MUTUAL_ANALYSIS" ]] || fail "Output already exists: $MUTUAL_ANALYSIS"
+    [[ ! -e "artifacts/reports/${MUTUAL_ANALYSIS##*/}/sampled.html" ]] || fail 'Mutual crossover HTML output already exists.'
+    ;;
+  85.*) require_path "$STATIC_ROOT/analysis.json"; require_path "$STATIC_ROOT/crossover.csv"; require_path "$STATIC_ROOT/plots";;
+  110.*)
     require_path "$ENVIRONMENT"; require_path "$CHAIN_FIXTURES"; require_path "$CHAIN_VALID"
+    require_path "$STATIC_ROOT/analysis.json"
+    [[ ! -e "artifacts/reports/${TLS_ROOT##*/}/report.html" ]] || fail 'TLS depth-validation HTML output already exists.'
+    python3 -c 'import matplotlib' || fail 'matplotlib is required for TLS plots.'
     python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("passed") is True else "ERROR: X.509 fixture validation did not pass.")' "$CHAIN_VALID" || return 1
     ;;
-  130.*) require_path "$TLS_ROOT/manifest.json";;
-  140.*) require_path "$TLS_ROOT/summary.csv"; require_path "$STATIC_ROOT/analysis.json";;
-  150.*)
+  105.*)
     require_path "$ADVANCED_ROOT/analysis_extended.json"
     require_path "$ADVANCED_ROOT/crossover_extended.csv"
     require_path "$ADVANCED_ROOT/x509_reference_validation.csv"
@@ -160,12 +228,12 @@ preflight() {
     require_path "$ADVANCED_ROOT/mtc_size_model.csv"
     require_path "$ADVANCED_ROOT/crossover-by-depth.png"
     require_path "$ADVANCED_ROOT/crossover-curves.png"
-    require_path "bin/artifacts/mt-report"
+    require_path "$BOUNDARY_ROOT/crossover-boundary-audit.csv"
     ;;
   10.*) [[ ! -e "$SUPPORT" ]] || fail "Output already exists: $SUPPORT";;
   30.*) require_path "$CHAIN_FIXTURES";;
   60.*) require_path "$MTC16/manifest.json";;
-  70.*) require_path "$MTC_VALID/validation.json"; require_path "$MTC16/manifest.json";;
+  95.*) require_path "$MTC_VALID/validation.json"; require_path "$MTC16/manifest.json";;
   80.*|100.*)
     python3 -c 'import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("matplotlib") else "ERROR: matplotlib is required to generate crossover plots. Install it in the Python environment used by this launcher.")' || return 1
     require_path "$CHAIN_VALID"; require_path "$MTC16/manifest.json"; require_path "$MTC_VALID/validation.json"
@@ -188,7 +256,7 @@ actual={str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest() for 
 if actual!=gate.get('fixture_hashes'):raise SystemExit('N=16 fixtures differ from the validation gate.')
 if sys.argv[4].startswith('100.'):
     m=json.loads((Path(sys.argv[5])/'manifest.json').read_text())
-    if set(m.get('sizes',[]))!={1,4,16,64,256,1024} or set(m.get('profiles',[]))!=profiles:
+    if set(m.get('sizes',[]))!={1,4,16,64,256} or set(m.get('profiles',[]))!=profiles:
         raise SystemExit('Advanced analysis requires all six populations and all nine profiles.')
     for n in m['sizes']:
         for profile in profiles:
@@ -211,7 +279,7 @@ run() (
  (
   while sleep 30; do
    printf '[%s] Still running: %s\n' "$(date +%H:%M:%S)" "$STEP"
-   case "$STEP" in 50.*) progress "$MTC16" 16;; 70.*) progress "$MTC_ALL" 1024;; esac
+   case "$STEP" in 50.*) progress "$MTC16" 16;; 95.*) progress "$MTC_ALL" 256;; esac
   done
  ) & monitor=$!
  trap 'kill "$monitor" 2>/dev/null || true; rmdir "$STATE/lock" 2>/dev/null || true' EXIT
@@ -268,32 +336,30 @@ cross_advanced() (
   require_path "$MTC_ALL/manifest.json"
   echo "Reusing existing complete fixture root: $MTC_ALL (validated before analysis)."
  else
-  "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 70 || exit "$?"
+  "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 95 || exit "$?"
  fi
- "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 100
+ "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 100 || exit "$?"
 )
 
-tls_full() (
- load
- if [[ "${1:-}" == '' ]]; then run 110; exit; fi
- [[ "$1" == --execute ]] || fail 'Usage: tls-full [--execute]'
- [[ ! -d "$STATE/lock" ]] || fail 'A stage is active.'
- mkdir "$STATE/batch.lock" 2>/dev/null || fail 'A batch is active or a lock needs inspection.'
- trap 'rmdir "$STATE/batch.lock" 2>/dev/null || true' EXIT
- [[ ! -e "$TLS_ROOT" ]] || fail "Output exists: $TLS_ROOT. Select a fresh TLS_ROOT."
- require_path "$STATIC_ROOT/analysis.json"
- python3 -c 'import matplotlib' || fail 'matplotlib is required for TLS plots.'
- echo 'WARNING: FULL TLS EXPERIMENT — manual execution requested. 5 campaigns, 30 repetitions, 5 warmups.'
- local step
- for step in 110 120 130 140; do
-  "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run "$step" || exit "$?"
- done
+boundary_audit() (
+ "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 102 || exit "$?"
+ "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 105
+)
+
+mutual_crossover() (
+ "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 120 || exit "$?"
+ "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 122
+)
+
+mutual_boundary_audit() (
+ "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 124 || exit "$?"
+ "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 125
 )
 
 set_path() {
  load
  [[ ! -d "$STATE/lock" && ! -d "$STATE/batch.lock" ]] || fail 'Do not change paths while a stage or batch is running.'
- case "$1" in CHAIN_FIXTURES|CHAIN_VALID|ENVIRONMENT|SUPPORT|MTC16|MTC_VALID|MTC_ALL|STATIC_ROOT|AUDIT|ADVANCED_ROOT|TLS_ROOT) ;;
+ case "$1" in CHAIN_FIXTURES|CHAIN_VALID|ENVIRONMENT|SUPPORT|MTC16|MTC_VALID|MTC_ALL|STATIC_ROOT|AUDIT|ADVANCED_ROOT|TLS_ROOT|MUTUAL_SERVER_FIXTURES|MUTUAL_FIXTURES|MUTUAL_RESULTS|MUTUAL_ANALYSIS|MUTUAL_EXACT|MUTUAL_BOUNDARY|BOUNDARY_ROOT) ;;
   *) fail 'Unknown path variable.';;
  esac
  [[ -n "$2" ]] || fail 'Empty path.'
@@ -305,31 +371,80 @@ set_path() {
  done
  printf 'Path saved. Previous logs preserved.\n'
 }
+suggest_path() {
+ local key=$1 stamp
+ stamp=$(date -u +%Y%m%dT%H%M%SZ)
+ case "$key" in
+  CHAIN_FIXTURES) printf 'artifacts/cert-chain-scaling/fixtures-%s' "$stamp";;
+  CHAIN_VALID) printf 'artifacts/results/cert-chain-validation-%s.json' "$stamp";;
+  ENVIRONMENT) printf 'artifacts/cert-chain-scaling/environment-%s.json' "$stamp";;
+  SUPPORT) printf 'artifacts/cert-chain-scaling/algorithm-support-%s.csv' "$stamp";;
+  MTC16) printf 'artifacts/mtc/n16-%s' "$stamp";;
+  MTC_VALID) printf 'artifacts/results/mtc-n16-%s' "$stamp";;
+  MTC_ALL) printf 'artifacts/mtc/all-%s' "$stamp";;
+  STATIC_ROOT) printf 'artifacts/results/mtc-crossover-n16-%s' "$stamp";;
+  AUDIT) printf 'artifacts/results/mtc-crossover-audit-%s.json' "$stamp";;
+  ADVANCED_ROOT) printf 'artifacts/results/mtc-crossover-advanced-%s' "$stamp";;
+  TLS_ROOT) printf 'artifacts/results/cert-chain-tls-%s' "$stamp";;
+  MUTUAL_SERVER_FIXTURES) printf 'artifacts/scaling/mutual-auth-crossover/server-x509-%s' "$stamp";;
+  MUTUAL_FIXTURES) printf 'artifacts/scaling/mutual-auth-crossover/fixtures-%s' "$stamp";;
+  MUTUAL_RESULTS) printf 'artifacts/results/mutual-auth-crossover-%s' "$stamp";;
+  MUTUAL_ANALYSIS) printf 'artifacts/results/mutual-auth-crossover-analysis-%s' "$stamp";;
+  MUTUAL_EXACT) printf 'artifacts/results/mutual-auth-crossover-exact-%s' "$stamp";;
+  MUTUAL_BOUNDARY) printf 'artifacts/results/mutual-auth-crossover-boundary-audit-%s' "$stamp";;
+  BOUNDARY_ROOT) printf 'artifacts/results/mtc-crossover-boundary-audit-%s' "$stamp";;
+  *) fail 'Unknown path variable.';;
+ esac
+}
 menu() {
- local choice value key
+ local choice value key suggested path_choice path_number index
+ local -a path_keys=(CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT BOUNDARY_ROOT TLS_ROOT MUTUAL_SERVER_FIXTURES MUTUAL_FIXTURES MUTUAL_RESULTS MUTUAL_ANALYSIS MUTUAL_EXACT MUTUAL_BOUNDARY)
  while true; do
-  printf '\nCert scaling: 1 Initialize  2 Status/progress  3 Show command\n              4 Run stage  5 Change path  6 MTC protocol\n              7 Run X default stages  8 Run ALL default stages\n              9 Advanced crossover (all sizes)\n              10 Preview full TLS matrix  11 Execute full TLS workflow  0 Exit\n'
+  printf '\nCert scaling: 1 New campaign paths  2 Status/progress  3 Show command\n              4 Run stage  5 Change one path\n              6 Run next X pending N=16 stages\n              7 Run complete N=16 workflow (10–60, 80, 85, 90)\n              8 Advanced crossover (N=1, 4, 16, 64, 256)\n              9 Audit calculated crossover boundaries (N-1/N, includes HTML)
+             10 TLS depth validation (X.509 D=2–5, includes HTML)
+             11 Mutual-auth crossover and exact calculation (9 profiles)
+             12 Audit mutual crossover boundaries (N-1/N, includes HTML)  0 Exit\n'
   read -r -p '> ' choice || return 0
   case "$choice" in
-   1) read -r -p 'Date/name (empty = new): ' value; "$0" init "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
+   1) read -r -p 'Campaign name (empty = date and time): ' value; "$0" new "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
    2) "$0" status || true;;
-   3|4) printf '%s\n' "${STEPS[@]}"; read -r -p 'Stage number: ' value
+   3|4) print_steps; read -r -p 'Stage number: ' value
     if [[ "$choice" == 3 ]]; then "$0" show "$value" || true; else "$0" run "$value" || true; fi;;
-   5) read -r -p 'Variable (see status): ' key; read -r -p 'Path: ' value; "$0" set "$key" "$value" || true;;
-   6) "$REPO/bin/cryptographic_scaling/mt-protocol-validation" menu || true;;
-   7) read -r -p 'Number of pending stages: ' value; "$0" run --count "$value" || true;;
-   8) "$0" run ALL || true;;
-   9) "$0" cross-advanced || true;;
-   10) "$0" tls-full || true;;
-   11) "$0" tls-full --execute || true;;
+   5) load
+    printf '\nSelect the path to change:\n'
+    for index in "${!path_keys[@]}"; do
+     key=${path_keys[$index]}
+     printf ' %2d  %-24s %s\n' "$((index+1))" "$key" "${!key}"
+    done
+    read -r -p 'Number (0 = cancel): ' path_choice
+    [[ "$path_choice" == 0 ]] && continue
+    if [[ ! "$path_choice" =~ ^[0-9]+$ ]]; then
+     printf 'Invalid selection.\n'; continue
+    fi
+    path_number=$((10#$path_choice))
+    if ((path_number < 1 || path_number > ${#path_keys[@]})); then
+     printf 'Invalid selection.\n'; continue
+    fi
+    key=${path_keys[$((path_number-1))]}
+    suggested=$(suggest_path "$key")
+    read -r -p "Path (empty = $suggested): " value
+    "$0" set "$key" "${value:-$suggested}" || true;;
+   6) read -r -p 'Number of pending stages: ' value; "$0" run --count "$value" || true;;
+   7) "$0" run ALL || true;;
+   8) "$0" cross-advanced || true;;
+   9) "$0" crossover-boundary-audit || true;;
+   10) "$0" tls-depth-validation || true;;
+   11) "$0" mutual-crossover || true;;
+   12) "$0" mutual-crossover-boundary-audit || true;;
    0) return 0;;
   esac
  done
 }
 case "${1:-menu}" in
  init) init "${2:-$(date -u +%Y%m%dT%H%M%SZ)}";;
+ new) new_campaign "${2:-$(date -u +%Y%m%dT%H%M%SZ)}";;
  status) status;;
- list) printf '%s\n' "${STEPS[@]}";;
+ list) print_steps;;
  show) load; plan "${2:?Stage required}"; show_command;;
  run)
   if [[ "$#" == 3 && "$2" == --count ]]; then run_batch "$3"
@@ -337,11 +452,15 @@ case "${1:-menu}" in
   elif [[ "$#" == 2 ]]; then run "$2"
   else usage; exit 2; fi;;
  set) set_path "${2:?Variable required}" "${3:?Path required}";;
- tls-full) [[ "$#" -le 2 ]] || fail "Usage: tls-full [--execute]"; tls_full "${2:-}";;
+ tls-depth-validation) [[ "$#" == 1 ]] || fail 'Usage: tls-depth-validation'; run 110;;
+ tls-full) [[ "$#" == 2 && "$2" == --execute ]] || fail 'Usage: tls-full --execute'; run 110;;
  cross) run 80;;
  cross-advanced) cross_advanced;;
- prepare) exec "$REPO/bin/cryptographic_scaling/mt-prepare" menu;;
- protocol) exec "$REPO/bin/cryptographic_scaling/mt-protocol-validation" menu;;
+ html-report) run 105;;
+ crossover-boundary-audit) [[ "$#" == 1 ]] || fail 'Usage: crossover-boundary-audit'; boundary_audit;;
+ mutual-crossover) [[ "$#" == 1 ]] || fail 'Usage: mutual-crossover'; mutual_crossover;;
+ mutual-crossover-boundary-audit) [[ "$#" == 1 ]] || fail 'Usage: mutual-crossover-boundary-audit'; mutual_boundary_audit;;
+ prepare) exec "$REPO/bin/base/mt-prepare" menu;;
  menu) menu;;
  help|--help|-h) usage;;
  *) usage; exit 2;;

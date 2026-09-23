@@ -87,7 +87,7 @@ class ResetTests(unittest.TestCase):
         self.assertTrue((outside/'keep').exists())
 
     def test_pcma_bind_mounts_resolve_to_repository(self):
-        compose = ROOT/'campaigns/original_campaigns/pcma_stage_b/compose.yaml'
+        compose = ROOT/'campaigns/historical_campaigns/pcma_stage_b/compose.yaml'
         mounts = [line.strip()[2:].split(':')[0] for line in compose.read_text().splitlines()
                   if line.strip().startswith('- ../')]
         self.assertEqual([(compose.parent/p).resolve() for p in mounts],

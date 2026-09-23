@@ -1,0 +1,8 @@
+FROM mt-tls-mtc:local
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+       tcpdump tshark \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work

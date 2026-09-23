@@ -11,8 +11,8 @@ bin/containers/mt-install run --count 3
 bin/containers/mt-install run ALL
 ```
 
-Stages: 1 base, 2 compact, 3 profiling, 4 MTC, 5 measurement, 6 network,
-7 capture. A stage number rebuilds that image; count/ALL build only missing images
+Active stages: 1 base TLS/X.509, 2 experimental MTC, 3 packet capture. A stage
+number rebuilds that image; count/ALL build only missing images
 in dependency order and stop on failure. Existing images are not proof of source
 freshness or passed scientific tests. Logs go to `.mt-state/install/`. A lock
 prevents concurrent installation/cleanup through this launcher; independently
@@ -21,10 +21,9 @@ manually removing it.
 
 Docker must already be running. Builds check their local parent images first;
 the base build may download its Debian parent. No fixtures or campaigns are run.
-Use the menu's Start services option only after the target's fixtures and required
-Compose environment variables have been prepared. It delegates to mt-containers,
-which checks image availability. Containers are runtime instances, so constructing
-images does not mean that all services should be started together.
+The menu's Start services option delegates to `mt-containers`, whose Compose
+targets are frozen historical infrastructure. It is not part of active MTC/X.509
+preparation or the current validation and performance batteries.
 
 ```sh
 # Preview and confirm deletion of lab containers and mt-tls-* images:

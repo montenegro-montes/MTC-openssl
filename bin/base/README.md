@@ -1,0 +1,538 @@
+# Base launchers
+
+The `bin/base/` launchers provide the entry points for the active MTC/TLS experimental workflow.
+
+They operate only on the current X.509 and MTC implementation. The frozen Compact implementation and historical campaigns are intentionally excluded.
+
+## `mt-prepare`
+
+`mt-prepare` prepares the shared execution environment required by the active MTC/TLS experiments.
+
+It is the prerequisite launcher for the current experimental workflow. Its main responsibility is to make sure that the required Docker images, launcher configuration and N=16 MTC fixtures are available before protocol validation or performance measurements are started.
+
+It does **not** execute the historical campaigns or the frozen Compact implementation.
+
+### Complete local reset
+
+```bash
+bin/base/mt-prepare reset-all
+```
+
+This guarded command requires typing `RESET ALL`. It removes `artifacts/`,
+`.mt-state/`, laboratory Docker containers, networks and volumes, and local
+`mt-tls-*` image tags. It does not create a backup. The implementation lives in
+`scripts/maintenance/reset_lab.py` and does not depend on the historical
+campaign directory.
+
+### Docker images
+
+The launcher manages three Docker images:
+
+```text
+Stage 1   mt-tls-lab:local       docker/base/Dockerfile
+Stage 2   mt-tls-mtc:local       docker/base/Dockerfile.mtc
+Stage 3   mt-tls-capture:local   docker/base/Dockerfile.capture
+```
+
+Their roles are:
+
+- `mt-tls-lab:local`: base TLS/X.509 experimental environment.
+- `mt-tls-mtc:local`: MTC-enabled TLS environment used to generate and validate MTC objects and perform MTC handshakes.
+- `mt-tls-capture:local`: independent environment used for packet-capture and protocol-inspection tasks.
+
+The images are prepared sequentially because later stages depend on the preceding environment being available.
+
+Existing images are reused by default.
+
+Every `init`, `run` or `rebuild` execution creates two complementary records:
+
+```text
+artifacts/results/mt-prepare-<timestamp>-<pid>/summary.json
+artifacts/reports/mt-prepare-<timestamp>-<pid>/report.html
+```
+
+The HTML report is specific to the selected action. It explains what was requested, which image stages were reused, built or failed, whether launcher configuration is ready, and—only for `ALL`—whether the N=16 fixtures and their functional TLS validation are present. It also records the computer and elapsed setup time. That duration describes preparation work and is not interpreted as handshake performance.
+
+For example:
+
+```bash
+bin/base/mt-prepare run 1
+```
+
+prepares the first image if necessary.
+
+```bash
+bin/base/mt-prepare run 3
+```
+
+ensures that the required image chain up to stage 3 is available.
+
+### Explicit rebuilds
+
+Image rebuilding is deliberately separate from normal preparation.
+
+```bash
+bin/base/mt-prepare rebuild 2
+```
+
+reuses existing prerequisite images when possible but rebuilds the selected stage.
+
+```bash
+bin/base/mt-prepare rebuild ALL
+```
+
+rebuilds all three images.
+
+This prevents an ordinary experiment launch from silently rebuilding the experimental environment.
+
+### Launcher configuration
+
+`mt-prepare` also initializes the configuration required by the active launchers.
+
+It checks the persistent configuration under `.mt-state/` for:
+
+```text
+mt-cert-scaling
+mt-protocol-validation
+```
+
+Existing configuration is preserved.
+
+If configuration is missing, the corresponding launcher is initialized automatically.
+
+Configuration can also be prepared without building Docker images:
+
+```bash
+bin/base/mt-prepare init
+```
+
+Therefore, `mt-prepare` acts as the common setup point connecting the cryptographic-scaling fixture generation and the protocol-validation workflow.
+
+### N=16 MTC fixtures
+
+Running:
+
+```bash
+bin/base/mt-prepare run ALL
+```
+
+does more than prepare Docker images.
+
+After preparing the three images, it prepares the N=16 MTC fixtures used by the active protocol experiments.
+
+The fixture preparation is delegated to:
+
+```text
+mt-cert-scaling run 50
+```
+
+when the configured N=16 fixture root does not already exist.
+
+The resulting fixture set contains the material required by the active cryptographic profiles and MTC modes.
+
+Existing fixture directories are never silently replaced. If an existing fixture root appears incomplete, the launcher stops and requires inspection or the selection of a new output path.
+
+### Functional TLS validation
+
+After fixture generation, `run ALL` also ensures that the N=16 fixture set has passed its functional TLS validation.
+
+This validation is delegated to:
+
+```text
+mt-cert-scaling run 60
+```
+
+when the corresponding validation evidence does not yet exist.
+
+Existing evidence is not trusted solely because the output file exists.
+
+Before reuse, `mt-prepare` calls the validation gate from:
+
+```text
+campaigns/scaling/mtc_profile_scaling/workflow.py
+```
+
+to check that the existing evidence remains consistent with the prepared fixture set and the current `mt-tls-mtc:local` image.
+
+If the gate fails, the existing outputs are preserved and the launcher aborts rather than overwriting them.
+
+This provides a prerequisite functional check before the more extensive protocol-validation workflow is started.
+
+### Relationship with `mt-protocol-validation`
+
+The functional validation performed by `mt-prepare` is a prerequisite check. It is **not** the full protocol-validation campaign.
+
+The intended workflow is:
+
+```text
+mt-prepare
+    |
+    +-- prepare Docker images
+    |
+    +-- initialize launcher configuration
+    |
+    +-- generate/reuse N=16 fixtures
+    |
+    +-- validate the fixture set functionally
+    |
+    v
+mt-protocol-validation
+    |
+    +-- offline object validation
+    +-- TLS handshake captures
+    +-- independent transcript verification
+    +-- on-wire MTC validation
+    +-- negative/stress tests
+    +-- full profile × leaf validation matrix
+```
+
+`mt-prepare` therefore establishes that the environment and cryptographic material are ready.
+
+`mt-protocol-validation` subsequently establishes the detailed protocol-level evidence.
+
+### Protocol-validation fixture consistency
+
+After preparing the N=16 fixtures, `mt-prepare` checks that the current `mt-protocol-validation` configuration points to the expected Paper-1 fixture set.
+
+The current prerequisite check expects the initial protocol-validation configuration to use:
+
+```text
+profile = mldsa65
+leaf    = 0
+N       = 16
+```
+
+with the corresponding fixture directory and server key from the prepared N=16 population.
+
+If the existing protocol-validation configuration points somewhere else, it is preserved and the launcher stops instead of changing it automatically.
+
+This protects existing experiment configuration from accidental modification.
+
+### Safety and reproducibility controls
+
+Several checks are performed before preparation:
+
+- Docker/Compose availability is checked through the shared Docker preflight code.
+- Python 3 must be available.
+- `matplotlib` must be installed in the active Python environment.
+- preparation uses a lock under `.mt-state/cryptographic-setup`;
+- fixture generation refuses to proceed while a certificate-scaling stage or batch lock is active;
+- existing images are reused unless rebuilding is explicitly requested;
+- existing fixture and validation outputs are preserved;
+- existing launcher configuration is preserved;
+- image builds are logged under `.mt-state/cryptographic-setup/`.
+
+These controls are intended to prevent accidental replacement of experimental artifacts or unnoticed changes to the execution environment.
+
+### Main commands
+
+```bash
+bin/base/mt-prepare list
+```
+
+Lists the three managed images and their Dockerfiles.
+
+```bash
+bin/base/mt-prepare status
+```
+
+Checks the local prerequisites and reports whether each managed image is currently available.
+
+```bash
+bin/base/mt-prepare show 2
+```
+
+Displays the Docker build command associated with a particular image stage without executing it.
+
+```bash
+bin/base/mt-prepare run 1
+bin/base/mt-prepare run 2
+bin/base/mt-prepare run 3
+```
+
+Prepare the selected image stage and its required predecessors, reusing existing images where possible.
+
+```bash
+bin/base/mt-prepare run ALL
+```
+
+Prepares all required images, initializes missing launcher configuration, prepares the N=16 fixture set and verifies its functional TLS validation evidence.
+
+```bash
+bin/base/mt-prepare rebuild 2
+```
+
+Explicitly rebuilds the selected image while retaining suitable existing prerequisites.
+
+```bash
+bin/base/mt-prepare rebuild ALL
+```
+
+Explicitly rebuilds all managed images and then performs the normal N=16 fixture preparation and validation checks.
+
+```bash
+bin/base/mt-prepare init
+```
+
+Initializes missing launcher paths without performing Docker builds.
+
+### Summary
+
+In practical terms:
+
+```text
+mt-prepare
+   =
+Docker environment
+   +
+launcher configuration
+   +
+N=16 cryptographic fixtures
+   +
+fixture functional-validation gate
+```
+
+while:
+
+```text
+mt-protocol-validation
+   =
+detailed evidence that the MTC protocol implementation
+works correctly across the selected profiles, leaves,
+MTC modes and TLS executions
+```
+
+The separation allows environment preparation, protocol correctness and performance measurement to remain distinct experimental layers.
+
+
+---
+
+## `mt-protocol-validation`
+
+`mt-protocol-validation` coordinates the functional and protocol-level validation of the active MTC implementation.
+
+Its purpose is to answer a different question from the performance campaigns:
+
+> Does the MTC implementation produce, transmit, receive and validate the expected protocol objects correctly?
+
+The validation is performed independently of handshake-performance measurements.
+
+The current validation workflow operates on MTC trees with:
+
+```text
+N = 16
+```
+
+and supports the active cryptographic profiles:
+
+```text
+ECDSA-P256
+ECDSA-P384
+ECDSA-P521
+
+ML-DSA-44
+ML-DSA-65
+ML-DSA-87
+
+SLH-DSA-128s
+SLH-DSA-192s
+SLH-DSA-256s
+```
+
+For each selected profile and leaf, the launcher can validate both MTC modes:
+
+```text
+landmark
+standalone
+```
+
+### Validation stages
+
+A complete validation includes several independent checks.
+
+First, the generated MTC objects are validated offline. This verifies their structure, cryptographic material, Merkle proof and associated trust information before any TLS connection is attempted.
+
+The workflow then performs real TLS 1.3 handshakes using the selected MTC certificate.
+
+For each handshake, the launcher records a packet capture. The captured data is subsequently processed independently from the TLS endpoint.
+
+The workflow therefore checks the protocol at several levels:
+
+```text
+Generated MTC object
+        |
+        v
+Offline validation
+        |
+        v
+TLS 1.3 handshake
+        |
+        v
+Packet capture
+        |
+        v
+Independent TLS transcript verification
+        |
+        v
+Extraction of the MTC object seen on the wire
+        |
+        v
+Independent object validation
+        |
+        v
+Protocol report
+```
+
+This separation is intentional: successful authentication by the modified TLS implementation alone is not considered sufficient evidence of protocol correctness.
+
+### Negative tests
+
+The validation also includes invalid-input stress checks.
+
+A valid object is first used as a positive control. Modified objects are then generated to ensure that malformed or cryptographically invalid inputs are rejected.
+
+The current checks include cases such as:
+
+```text
+truncated object
+trailing data
+invalid length
+modified leaf index
+modified issuer
+modified Merkle proof hash
+invalid signature
+invalid landmark identifier
+modified checkpoint root
+```
+
+The validator must accept the positive control and reject the invalid variants.
+
+### Validating one identity
+
+The normal validation mode operates on one cryptographic profile and one leaf.
+
+For example:
+
+```text
+profile = mldsa65
+leaf    = 0
+N       = 16
+```
+
+Running all pending stages validates that particular identity through the complete offline, TLS, capture and independent-verification workflow.
+
+From the interactive menu this corresponds to:
+
+```text
+7 Run ALL pending stages
+```
+
+This is useful while developing or debugging the implementation because a single profile/leaf can be validated before executing the complete matrix.
+
+### Full validation matrix
+
+The launcher can also validate every active cryptographic profile and every identity in the N=16 tree:
+
+```text
+9 profiles × 16 leaves = 144 identities
+```
+
+This is available through:
+
+```text
+8 Run ALL PROFILES × ALL LEAVES
+```
+
+For every identity, the relevant landmark and standalone protocol checks are performed.
+
+Testing all leaves is important because different leaves exercise different Merkle authentication paths. Validating only leaf 0 would demonstrate that one particular path works, but would not provide systematic evidence for all positions in the tree.
+
+The full matrix therefore provides stronger implementation evidence:
+
+```text
+                 leaf
+             0  1  2 ... 15
+             ----------------
+ECDSA-P256   ✓  ✓  ✓ ... ✓
+ECDSA-P384   ✓  ✓  ✓ ... ✓
+ECDSA-P521   ✓  ✓  ✓ ... ✓
+ML-DSA-44    ✓  ✓  ✓ ... ✓
+ML-DSA-65    ✓  ✓  ✓ ... ✓
+ML-DSA-87    ✓  ✓  ✓ ... ✓
+SLH-DSA-128s ✓  ✓  ✓ ... ✓
+SLH-DSA-192s ✓  ✓  ✓ ... ✓
+SLH-DSA-256s ✓  ✓  ✓ ... ✓
+```
+
+The invalid-input stress tests do not need to be repeated unnecessarily for every leaf and are executed at the appropriate profile level.
+
+### Results
+
+Validation artifacts are stored under:
+
+```text
+artifacts/protocol-validation/<campaign>/
+```
+
+Independent review artifacts are stored separately under:
+
+```text
+artifacts/protocol-review/<campaign>/
+```
+
+For a complete matrix run, the launcher attempts to produce the global summary:
+
+```text
+artifacts/protocol-validation/<campaign>/matrix-summary.json
+```
+
+with a compatibility summary under:
+
+```text
+artifacts/protocol-review/<campaign>/summary.json
+```
+
+These summaries provide the final overview of the profiles, leaves and validation results.
+
+### Relationship with performance experiments
+
+`mt-protocol-validation` is concerned with **correctness**, not performance.
+
+Performance measurements are handled separately by:
+
+```text
+bin/performance/mt-handshake-performance
+```
+
+The intended workflow is therefore:
+
+```text
+mt-prepare
+     |
+     v
+Prepare reproducible images
+     |
+     v
+mt-protocol-validation
+     |
+     v
+Establish protocol correctness
+     |
+     v
+mt-handshake-performance
+     |
+     v
+Measure handshake time and size
+```
+
+Keeping these responsibilities separate prevents protocol-validation evidence from being confused with performance measurements.
+
+---
+
+## Launchers overview
+
+- `mt-prepare`: prepares the active X.509, MTC and capture images.
+- `mt-protocol-validation`: validates the active MTC implementation through offline validation, TLS handshakes, packet captures, independent transcript verification, on-wire object validation and negative tests.
+- `bin/performance/mt-handshake-performance`: measures X.509/MTC handshake time and size.
+
+These launchers exclude the frozen Compact implementation and historical campaigns.

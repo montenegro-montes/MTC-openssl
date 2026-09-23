@@ -1,0 +1,618 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+SELF="$REPO/bin/performance/mt-handshake-performance"
+source "$REPO/bin/lib/docker-preflight.sh"
+IMAGE=${IMAGE:-mt-tls-mtc:local}
+CAPTURE_IMAGE=${CAPTURE_IMAGE:-mt-tls-capture:local}
+REPORTER="$REPO/bin/renders/handshake-performance.py"
+RETRY_REPORTER="$REPO/bin/renders/protocol-validation.py"
+RETRY_MATRIX_REPORTER="$REPO/bin/renders/handshake-retry-matrix.py"
+NETWORK=mt-handshake-performance
+SERVER=mt-handshake-performance-server
+DEFAULT_CONFIG="$REPO/.mt-state/handshake-performance.env"
+PROFILES=(ecdsa-p256 ecdsa-p384 ecdsa-p521 mldsa44 mldsa65 mldsa87 slhdsa128s slhdsa192s slhdsa256s)
+CASES=(x509-simple mtc-simple-landmark mtc-simple-standalone x509-mutual mtc-mutual-landmark mtc-mutual-standalone)
+SINGLE_CASES=(x509-simple mtc-simple-landmark mtc-simple-standalone)
+MUTUAL_CASES=(x509-mutual mtc-mutual-landmark mtc-mutual-standalone)
+ACTIVE_CASES=("${CASES[@]}")
+
+fail() { echo "ERROR: $*" >&2; exit 1; }
+usage() {
+  cat <<EOF
+Usage:
+  $SELF menu
+  $SELF init [CONFIG]
+  $SELF status [CONFIG]
+  $SELF plan [CONFIG] [OUTPUT]
+  $SELF run-native [CONFIG] [OUTPUT]
+  $SELF run-native-single [CONFIG] [OUTPUT]
+  $SELF run-native-mutual [CONFIG] [OUTPUT]
+  $SELF run-pcap [CONFIG] [OUTPUT]
+  $SELF run-pcap-single [CONFIG] [OUTPUT]
+  $SELF run-pcap-mutual [CONFIG] [OUTPUT]
+  $SELF run-native-pcap [CONFIG] [OUTPUT]
+  $SELF run-single [CONFIG] [OUTPUT]
+  $SELF run-mutual [CONFIG] [OUTPUT]
+  $SELF run-all [CONFIG] [OUTPUT]  # compatibility alias
+  $SELF run-retry [OUTPUT]
+
+CONFIG defaults to .mt-state/handshake-performance.env. When OUTPUT is omitted,
+a new timestamped directory is selected below artifacts/results/. Nothing is
+executed by init or plan.
+EOF
+}
+
+config_template() {
+  cat <<'EOF'
+# Paths are relative to the repository and must remain below artifacts/.
+RUNS=30
+WARMUPS=5
+PCAP_RUNS=30
+
+X509_SERVER_CERT=artifacts/REPLACE/server.pem
+X509_SERVER_KEY=artifacts/REPLACE/server.key
+X509_SERVER_CA=artifacts/REPLACE/server-ca.pem
+X509_CLIENT_CERT=artifacts/REPLACE/client.pem
+X509_CLIENT_KEY=artifacts/REPLACE/client.key
+X509_CLIENT_CA=artifacts/REPLACE/client-ca.pem
+
+MTC_SERVER_CERT=artifacts/REPLACE/server-landmark.pem
+MTC_SERVER_KEY=artifacts/REPLACE/server.key
+MTC_SERVER_TRUST=artifacts/REPLACE/server-trust.bin
+MTC_SERVER_ID=REPLACE_SERVER_TRUST_ANCHOR_ID
+
+MTC_CLIENT_CERT=artifacts/REPLACE/client-landmark.pem
+MTC_CLIENT_STANDALONE_CERT=artifacts/REPLACE/client-standalone.pem
+MTC_CLIENT_KEY=artifacts/REPLACE/client.key
+MTC_CLIENT_TRUST=artifacts/REPLACE/client-trust.bin
+MTC_CLIENT_AUTHORITY=artifacts/REPLACE/client-authority.bin
+MTC_CLIENT_ID=REPLACE_CLIENT_TRUST_ANCHOR_ID
+MTC_ROOT=artifacts/REPLACE/mtc-n16-root
+EOF
+}
+
+load_config() {
+  local file=$1 name value
+  [[ -f "$file" ]] || fail "Missing configuration: $file"
+  # The file is user-controlled shell assignments. Refuse commands and expansions.
+  while IFS='=' read -r name value; do
+    [[ -z "$name" || "$name" == \#* ]] && continue
+    [[ "$name" =~ ^[A-Z0-9_]+$ ]] || fail "Invalid configuration key: $name"
+    [[ "$value" != *'`'* && "$value" != *'$('* && "$value" != *';'* ]] || fail "Unsafe configuration value for $name"
+    printf -v "$name" '%s' "$value"
+    export "$name"
+  done < "$file"
+  : "${RUNS:?}" "${WARMUPS:?}" "${PCAP_RUNS:?}"
+  [[ "$RUNS" =~ ^[1-9][0-9]*$ && "$WARMUPS" =~ ^[0-9]+$ && "$PCAP_RUNS" =~ ^[1-9][0-9]*$ ]] || fail 'RUNS/WARMUPS/PCAP_RUNS must be integers.'
+  MTC_CLIENT_STANDALONE_CERT=${MTC_CLIENT_STANDALONE_CERT:-${MTC_CLIENT_CERT%/*}/standalone-0000.pem}
+  MTC_CLIENT_AUTHORITY=${MTC_CLIENT_AUTHORITY:-${MTC_CLIENT_TRUST%/*}/authority.bin}
+  for name in X509_CLIENT_CERT X509_CLIENT_KEY X509_CLIENT_CA MTC_CLIENT_CERT MTC_CLIENT_STANDALONE_CERT MTC_CLIENT_KEY MTC_CLIENT_TRUST MTC_CLIENT_AUTHORITY; do
+    value=${!name:-}; [[ "$value" == artifacts/* ]] || fail "$name must be below artifacts/."
+    [[ -f "$REPO/$value" ]] || fail "Missing $name: $value"
+  done
+  : "${MTC_CLIENT_ID:?Set MTC_CLIENT_ID}"
+  [[ "${MTC_ROOT:-}" == artifacts/* && -f "$REPO/$MTC_ROOT/manifest.json" ]] || fail 'MTC_ROOT must contain the active N=16 fixture root.'
+}
+
+load_plan_counts() {
+  local file=$1 name value
+
+  RUNS=
+  WARMUPS=
+  PCAP_RUNS=
+
+  while IFS='=' read -r name value; do
+    case "$name" in
+      RUNS|WARMUPS|PCAP_RUNS)
+        printf -v "$name" '%s' "$value"
+        ;;
+    esac
+  done < "$file"
+
+  : "${RUNS:?Missing RUNS in $file}"
+  : "${WARMUPS:?Missing WARMUPS in $file}"
+  : "${PCAP_RUNS:?Missing PCAP_RUNS in $file}"
+
+  [[ "$RUNS" =~ ^[1-9][0-9]*$ &&
+     "$WARMUPS" =~ ^[0-9]+$ &&
+     "$PCAP_RUNS" =~ ^[1-9][0-9]*$ ]] ||
+    fail 'RUNS/WARMUPS/PCAP_RUNS must be integers.'
+}
+
+ensure_dependencies() {
+  local manual="$REPO/artifacts/validation/mutual-auth-manual"
+  "$REPO/bin/base/mt-prepare" run ALL
+  [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] || fail 'mt-prepare did not create the certificate-scaling configuration.'
+  source "$REPO/.mt-state/cert-scaling/paths.env"
+  if [[ ! -f "$manual/manifest.json" ]]; then
+    python3 "$REPO/campaigns/validation/protocol_validation/mutual_authentication/generate_fixtures.py" \
+      --output "$manual" --execute
+  fi
+}
+
+write_automatic_config() {
+  local file=$1
+  source "$REPO/.mt-state/cert-scaling/paths.env"
+  python3 - "$REPO" "$file" "$MTC16" <<'PYCONFIG'
+import json, sys
+from pathlib import Path
+
+repo, output, mtc_root = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+manual = Path('artifacts/validation/mutual-auth-manual')
+server = mtc_root / 'batch16/mtc/mldsa65'
+client = manual / 'mtc-client-n16/ecdsa-p256'
+server_manifest = json.loads((repo / server / 'manifest.json').read_text())
+client_manifest = json.loads((repo / client / 'manifest.json').read_text())
+values = {
+    'X509_SERVER_CERT': manual / 'pq-server.pem',
+    'X509_SERVER_KEY': manual / 'pq-server.key',
+    'X509_SERVER_CA': manual / 'pq-server-ca.pem',
+    'X509_CLIENT_CERT': manual / 'client.pem',
+    'X509_CLIENT_KEY': manual / 'client.key',
+    'X509_CLIENT_CA': manual / 'client-ca.pem',
+    'MTC_SERVER_CERT': server / 'landmark-0000.pem',
+    'MTC_SERVER_KEY': mtc_root / 'population/mldsa65/0.key',
+    'MTC_SERVER_TRUST': server / 'trust.bin',
+    'MTC_CLIENT_CERT': client / 'landmark-0000.pem',
+    'MTC_CLIENT_STANDALONE_CERT': client / 'standalone-0000.pem',
+    'MTC_CLIENT_KEY': manual / 'mtc-client-source/client-0000.key',
+    'MTC_CLIENT_TRUST': client / 'trust.bin',
+    'MTC_CLIENT_AUTHORITY': client / 'authority.bin',
+}
+missing = [str(path) for path in values.values() if not (repo / path).is_file()]
+if missing:
+    raise SystemExit('ERROR: automatic handshake fixtures are incomplete: ' + ', '.join(missing))
+text = '''# Automatically derived from validated active fixtures.
+# X.509 and MTC use matching server profiles across all nine active profiles, leaf 0.
+# Mutual authentication uses ECDSA P-256 client credentials in both families.
+RUNS=30
+WARMUPS=5
+PCAP_RUNS=30
+
+'''
+text += ''.join(f'{key}={path}\n' for key, path in values.items() if key.startswith('X509_'))
+text += '\n' + ''.join(f'{key}={path}\n' for key, path in values.items() if key.startswith('MTC_SERVER_') and key != 'MTC_SERVER_ID')
+text += f"MTC_SERVER_ID={server_manifest['ca_id']}.1.1.1\n\n"
+text += ''.join(f'{key}={path}\n' for key, path in values.items() if key.startswith('MTC_CLIENT_') and key != 'MTC_CLIENT_ID')
+text += f"MTC_CLIENT_ID={client_manifest['ca_id']}.1.1.1\n"
+text += f"MTC_ROOT={mtc_root}\n"
+output.parent.mkdir(parents=True, exist_ok=True)
+temporary = output.with_name(output.name + '.tmp')
+temporary.write_text(text)
+temporary.replace(output)
+print(f'Configured {output} from active validated fixtures.')
+PYCONFIG
+}
+
+inside() { printf '/work/%s' "${1#artifacts/}"; }
+common=( -tls1_3 -groups X25519 -ciphersuites TLS_AES_256_GCM_SHA384 )
+
+case_args() {
+  local profile=$1 case_name=$2 population="$MTC_ROOT/population/$1" mtc="$MTC_ROOT/batch16/mtc/$1" ca_id
+  ca_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ca_id"])' "$REPO/$mtc/manifest.json")
+  server_args=(); client_args=()
+  case "$case_name" in
+    x509-simple)
+      server_args=(-cert "$(inside "$population/0.pem")" -key "$(inside "$population/0.key")")
+      client_args=(-CAfile "$(inside "$population/ca.pem")" -verify_hostname server)
+      ;;
+    mtc-simple-landmark)
+      server_args=(-cert "$(inside "$mtc/landmark-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id.1.1.1" -mtc_landmark)
+      client_args=(-mtc_trust "$(inside "$mtc/trust.bin")" -mtc_landmark)
+      ;;
+    mtc-simple-standalone)
+      server_args=(-cert "$(inside "$mtc/standalone-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id")
+      client_args=(-mtc_trust "$(inside "$mtc/authority.bin")")
+      ;;
+    x509-mutual)
+      server_args=(-cert "$(inside "$population/0.pem")" -key "$(inside "$population/0.key")" -CAfile "$(inside "$X509_CLIENT_CA")" -Verify 1 -verify_return_error)
+      client_args=(-CAfile "$(inside "$population/ca.pem")" -verify_hostname server -cert "$(inside "$X509_CLIENT_CERT")" -key "$(inside "$X509_CLIENT_KEY")")
+      ;;
+    mtc-mutual-landmark)
+      server_args=(-cert "$(inside "$mtc/landmark-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id.1.1.1" -mtc_client_trust "$(inside "$MTC_CLIENT_TRUST")" -mtc_landmark -Verify 1 -verify_return_error)
+      client_args=(-mtc_trust "$(inside "$mtc/trust.bin")" -mtc_landmark -cert "$(inside "$MTC_CLIENT_CERT")" -key "$(inside "$MTC_CLIENT_KEY")" -mtc_client_id "$MTC_CLIENT_ID")
+      ;;
+    mtc-mutual-standalone)
+      server_args=(-cert "$(inside "$mtc/standalone-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id" -mtc_client_trust "$(inside "$MTC_CLIENT_AUTHORITY")" -Verify 1 -verify_return_error)
+      client_args=(-mtc_trust "$(inside "$mtc/authority.bin")" -cert "$(inside "$MTC_CLIENT_STANDALONE_CERT")" -key "$(inside "$MTC_CLIENT_KEY")" -mtc_client_id "${MTC_CLIENT_ID%.1.1.1}")
+      ;;
+    *) fail "Unknown case: $case_name";;
+  esac
+}
+
+cleanup() {
+  docker rm -f "$SERVER" "${SERVER}-capture" >/dev/null 2>&1 || true
+  docker network rm "$NETWORK" >/dev/null 2>&1 || true
+}
+
+start_server() {
+  local profile=$1 case_name=$2
+  case_args "$profile" "$case_name"
+  docker rm -f "$SERVER" >/dev/null 2>&1 || true
+  docker run -d --name "$SERVER" --network "$NETWORK" -v "$REPO/artifacts:/work:ro" \
+    --entrypoint /opt/mtc/openssl.sh "$IMAGE" s_server -accept 4433 \
+    "${server_args[@]}" "${common[@]}" -num_tickets 0 -www -state >/dev/null
+  # No probe connection: only wait for the server process to remain alive.
+  sleep 1
+  docker inspect "$SERVER" --format '{{.State.Running}}' | grep -qx true || fail "$case_name server did not remain running"
+}
+
+client_command() {
+  docker run --rm -i --network "$NETWORK" -v "$REPO/artifacts:/work:ro" \
+    --entrypoint /opt/mtc/openssl.sh "$IMAGE" s_client -connect "$SERVER:4433" -servername server \
+    "${client_args[@]}" "${common[@]}" -no_ticket -verify_return_error -lab_metrics
+}
+
+prepare_run() {
+  local output=$1 help_output
+  [[ "$output" == "$REPO"/artifacts/results/* ]] || fail 'OUTPUT must be a new absolute path below artifacts/results/.'
+  [[ ! -e "$output" ]] || fail "Output exists: $output"
+  case "$command" in
+    run-native|run-native-single|run-native-mutual) mt_images_required "$IMAGE" || return;;
+    run-pcap|run-pcap-single|run-pcap-mutual|run-native-pcap|run-single|run-mutual) mt_images_required "$IMAGE" "$CAPTURE_IMAGE" || return;;
+  esac
+  if [[ "$command" == run-native || "$command" == run-native-single || "$command" == run-native-mutual || "$command" == run-native-pcap || "$command" == run-single || "$command" == run-mutual ]]; then
+    help_output=$(docker run --rm --network none --entrypoint /opt/mtc/openssl.sh "$IMAGE" \
+      s_client -help 2>&1) \
+      || fail 'Unable to inspect native TCP/TLS timing support in the active MTC image.'
+    [[ "$help_output" == *lab_metrics* ]] \
+      || fail 'The active MTC image lacks native TCP/TLS timing. Run bin/base/mt-prepare rebuild 2, then retry with a new output.'
+  fi
+  mkdir -p "$output/raw" "$output/pcap"
+  docker network create "$NETWORK" >/dev/null
+}
+
+measure_native() {
+  local output=$1 profile case_name phase count repetition log start end elapsed read written tcp_ms handshake_ms establishment_ms done_count=0 total_count started now eta
+  total_count=$(( ${#PROFILES[@]} * ${#ACTIVE_CASES[@]} * (WARMUPS + RUNS) )); started=$(date +%s)
+  printf 'profile,case,phase,repetition,tcp_connect_wall_ms_native,handshake_wall_ms,connection_establishment_wall_ms_native,process_wall_ms,tls_bytes_read,tls_bytes_written,tls_bytes_total\n' > "$output/native.csv"
+  printf '\nNATIVE MEASUREMENTS — 9 profiles × %d authentication cases\n' "${#ACTIVE_CASES[@]}"
+  for profile in "${PROFILES[@]}"; do
+   for case_name in "${ACTIVE_CASES[@]}"; do
+    printf '\n[NATIVE] profile=%s case=%s: starting server\n' "$profile" "$case_name"
+    start_server "$profile" "$case_name"
+    for phase in warmup measured; do
+      [[ "$phase" == warmup ]] && count=$WARMUPS || count=$RUNS
+      printf '[NATIVE] profile=%s case=%s phase=%s repetitions=%d\n' "$profile" "$case_name" "$phase" "$count"
+      for ((repetition=1; repetition<=count; repetition++)); do
+        log="$output/raw/native-${profile}-${case_name}-${phase}-${repetition}.log"
+        start=$(python3 -c 'import time; print(time.monotonic_ns())')
+        printf 'GET / HTTP/1.0\r\n\r\n' | client_command >"$log" 2>&1 || fail "$case_name $phase $repetition failed; inspect $log"
+        end=$(python3 -c 'import time; print(time.monotonic_ns())')
+        grep -q 'Verify return code: 0 (ok)' "$log" || fail "$case_name did not verify"
+        read=$(sed -nE 's/.*SSL handshake has read ([0-9]+) bytes and written ([0-9]+) bytes.*/\1/p' "$log" | tail -1)
+        written=$(sed -nE 's/.*SSL handshake has read ([0-9]+) bytes and written ([0-9]+) bytes.*/\2/p' "$log" | tail -1)
+        [[ -n "$read" && -n "$written" ]] || fail "$case_name byte counters missing"
+        read -r tcp_ms handshake_ms establishment_ms < <(python3 - "$log" <<'PYMETRICS'
+import json,re,sys
+text=open(sys.argv[1],errors='replace').read(); matches=re.findall(r'NATIVE_METRICS\s+(\{[^\n]+\})',text)
+valid=[]
+for match in matches:
+ try: valid.append(json.loads(match))
+ except json.JSONDecodeError: pass
+if valid:
+ d=valid[-1]
+else:
+ # Docker may interleave stderr metrics with buffered stdout from s_client.
+ broken=re.search(r'NATIVE_METRICS\s+\{\"tcp_connect_wall_ms_native\":.*?([0-9]+(?:\.[0-9]+)?),\"handshake_wall_ms\":([0-9]+(?:\.[0-9]+)?),\"connection_establishment_wall_ms_native\":([0-9]+(?:\.[0-9]+)?)\}',text,re.S)
+ if not broken: raise SystemExit('ERROR: NATIVE_METRICS record missing')
+ d=dict(zip(('tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native'),map(float,broken.groups())))
+values=[d.get(k) for k in ('tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native')]
+if any(v is None for v in values): raise SystemExit('ERROR: native TCP/TLS metric is unavailable')
+print(*values)
+PYMETRICS
+)
+        [[ -n "$tcp_ms" && -n "$handshake_ms" && -n "$establishment_ms" ]] || fail "$profile $case_name native TCP/TLS metrics missing; inspect $log"
+        elapsed=$(python3 -c "print(($end-$start)/1000000)")
+        printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$profile" "$case_name" "$phase" "$repetition" "$tcp_ms" "$handshake_ms" "$establishment_ms" "$elapsed" "$read" "$written" "$((read+written))" >> "$output/native.csv"
+        done_count=$((done_count+1)); now=$(date +%s); eta=$(( done_count ? (now-started)*(total_count-done_count)/done_count : 0 ))
+        printf '[NATIVE] %d/%d profile=%s case=%s %s=%d tcp=%sms tls=%sms complete=%sms process=%sms tls_bytes=%d elapsed=%ds eta=%ds\n' "$done_count" "$total_count" "$profile" "$case_name" "$phase" "$repetition" "$tcp_ms" "$handshake_ms" "$establishment_ms" "$elapsed" "$((read+written))" "$((now-started))" "$eta"
+      done
+    done
+   done
+  done
+}
+
+measure_pcap() {
+  local output=$1 profile case_name repetition directory pcap keylog log capture_log first last syn synack bytes packets elapsed tcp_elapsed connection_elapsed ready attempt done_count=0 total_count started now eta
+  total_count=$(( ${#PROFILES[@]} * ${#ACTIVE_CASES[@]} * PCAP_RUNS )); started=$(date +%s)
+  printf 'profile,case,repetition,tcp_syn_to_synack_ms,tls_clienthello_to_finished_ms,connection_syn_to_finished_ms,wire_bytes,packet_count\n' > "$output/pcap.csv"
+  printf '\nPCAP MEASUREMENTS — 9 profiles × %d authentication cases\n' "${#ACTIVE_CASES[@]}"
+  for profile in "${PROFILES[@]}"; do
+   for case_name in "${ACTIVE_CASES[@]}"; do
+    printf '\n[PCAP] profile=%s case=%s captures=%d\n' "$profile" "$case_name" "$PCAP_RUNS"
+    for ((repetition=1; repetition<=PCAP_RUNS; repetition++)); do
+      start_server "$profile" "$case_name"
+      directory="$output/pcap/${profile}-${case_name}-${repetition}"; mkdir "$directory"
+      pcap="$directory/handshake.pcap"; keylog="$directory/keylog.txt"; log="$directory/client.log"; capture_log="$directory/tcpdump.log"
+      docker run -d --name "${SERVER}-capture" --network "container:$SERVER" --cap-add NET_RAW --cap-add NET_ADMIN \
+        -v "$directory:/capture" --entrypoint tcpdump "$CAPTURE_IMAGE" \
+        -i eth0 -s 0 -U -w /capture/handshake.pcap 'tcp port 4433' >/dev/null
+      ready=no
+      for ((attempt=1; attempt<=100; attempt++)); do
+        docker logs "${SERVER}-capture" > "$capture_log" 2>&1 || true
+        if grep -q 'listening on eth0' "$capture_log"; then ready=yes; break; fi
+        if [[ "$(docker inspect -f '{{.State.Running}}' "${SERVER}-capture" 2>/dev/null || true)" != true ]]; then break; fi
+        sleep 0.1
+      done
+      [[ "$ready" == yes ]] || fail "$case_name PCAP capture did not become ready; inspect $capture_log"
+      client_args+=( -keylogfile /out/keylog.txt )
+      printf 'GET / HTTP/1.0\r\n\r\n' | docker run --rm -i --network "$NETWORK" -v "$REPO/artifacts:/work:ro" -v "$directory:/out" \
+        --entrypoint /opt/mtc/openssl.sh "$IMAGE" s_client -connect "$SERVER:4433" -servername server \
+        "${client_args[@]}" "${common[@]}" -no_ticket -verify_return_error >"$log" 2>&1 || fail "$case_name PCAP run failed"
+      # Let libpcap drain accepted packets, then request tcpdump's clean flush.
+      sleep 1.2
+      docker kill --signal=SIGINT "${SERVER}-capture" >/dev/null
+      docker wait "${SERVER}-capture" >/dev/null || true
+      docker logs "${SERVER}-capture" > "$capture_log" 2>&1 || true
+      docker rm "${SERVER}-capture" >/dev/null
+      [[ -s "$pcap" && "$(wc -c < "$pcap")" -gt 24 ]] || fail "$case_name PCAP contains no packet records; inspect $capture_log"
+      grep -Eq '[1-9][0-9]* packets captured' "$capture_log" || fail "$case_name tcpdump reported zero captured packets; inspect $capture_log"
+      read -r first last < <(docker run --rm --network none -v "$directory:/capture:ro" --entrypoint tshark "$CAPTURE_IMAGE" \
+        -o tls.keylog_file:/capture/keylog.txt -r /capture/handshake.pcap \
+        -Y 'tls.handshake.type == 1 || tls.handshake.type == 20' -T fields -e frame.time_epoch 2>/dev/null | \
+        awk 'NF {if(n==0) first=$1; last=$1; n++} END {print first,last}')
+      read -r syn synack < <(docker run --rm --network none -v "$directory:/capture:ro" --entrypoint tshark "$CAPTURE_IMAGE" \
+        -r /capture/handshake.pcap -Y 'tcp.flags.syn == 1' -T fields -e frame.time_epoch -e tcp.flags.ack 2>/dev/null | \
+        awk 'NF>=2 {if($2==0 && syn=="") syn=$1; if($2==1 && synack=="") synack=$1} END {print syn,synack}')
+      read -r bytes packets < <(docker run --rm --network none -v "$directory:/capture:ro" --entrypoint tshark "$CAPTURE_IMAGE" \
+        -r /capture/handshake.pcap -Y 'tcp.port==4433' -T fields -e frame.time_epoch -e frame.len 2>/dev/null | \
+        awk -v first="$first" -v last="$last" 'NF>=2 && $1>=first && $1<=last {bytes+=$2; n++} END {print bytes,n}')
+      [[ -n "$syn" && -n "$synack" && -n "$first" && -n "$last" && "$packets" -gt 0 ]] || fail "$profile $case_name PCAP handshake could not be decoded"
+      tcp_elapsed=$(python3 -c "print(($synack-$syn)*1000)")
+      elapsed=$(python3 -c "print(($last-$first)*1000)")
+      connection_elapsed=$(python3 -c "print(($last-$syn)*1000)")
+      printf '%s,%s,%s,%s,%s,%s,%s,%s\n' "$profile" "$case_name" "$repetition" "$tcp_elapsed" "$elapsed" "$connection_elapsed" "$bytes" "$packets" >> "$output/pcap.csv"
+      done_count=$((done_count+1)); now=$(date +%s); eta=$(( done_count ? (now-started)*(total_count-done_count)/done_count : 0 ))
+      printf '[PCAP] %d/%d profile=%s case=%s capture=%d tcp=%sms tls=%sms total=%sms bytes=%s packets=%s elapsed=%ds eta=%ds\n' "$done_count" "$total_count" "$profile" "$case_name" "$repetition" "$tcp_elapsed" "$elapsed" "$connection_elapsed" "$bytes" "$packets" "$((now-started))" "$eta"
+    done
+   done
+  done
+}
+
+write_summary() {
+  local output=$1
+  python3 - "$output" <<'PY'
+import csv,json,math,statistics,sys
+from pathlib import Path
+root=Path(sys.argv[1]); result={'definitions':{
+ 'process_wall_ms':'host monotonic time around one Docker client process; includes process/container overhead',
+ 'tcp_connect_wall_ms_native':'native client connection entry through successful TCP connect return',
+ 'handshake_wall_ms':'native TLS handshake start through handshake completion',
+ 'connection_establishment_wall_ms_native':'native connection entry through TLS handshake completion',
+ 'tls_bytes_total':'OpenSSL TLS handshake bytes read plus written; excludes IP/TCP headers',
+ 'tcp_syn_to_synack_ms':'PCAP time from initial TCP SYN to SYN-ACK',
+ 'tls_clienthello_to_finished_ms':'PCAP time from ClientHello to the last decrypted Finished using the per-run TLS key log',
+ 'connection_syn_to_finished_ms':'PCAP time from initial TCP SYN to the last decrypted Finished',
+ 'wire_bytes':'sum of captured frame lengths from ClientHello through the last decrypted Finished; includes link/IP/TCP overhead and ACKs in that interval'}}
+T95={1:12.706,2:4.303,3:3.182,4:2.776,5:2.571,6:2.447,7:2.365,8:2.306,9:2.262,10:2.228,11:2.201,12:2.179,13:2.160,14:2.145,15:2.131,16:2.120,17:2.110,18:2.101,19:2.093,20:2.086,21:2.080,22:2.074,23:2.069,24:2.064,25:2.060,26:2.056,27:2.052,28:2.048,29:2.045,30:2.042}
+def describe(values):
+ n=len(values); mean=statistics.fmean(values); median=statistics.median(values)
+ stdev=statistics.stdev(values) if n>1 else None
+ if stdev is None: low=high=None
+ else:
+  critical=T95.get(n-1,1.960); margin=critical*stdev/math.sqrt(n); low=mean-margin; high=mean+margin
+ return {'n':n,'mean':mean,'sample_stdev':stdev,'median':median,'mean_95_ci_low':low,'mean_95_ci_high':high}
+for source,key in [('native.csv','native'),('pcap.csv','pcap')]:
+ p=root/source
+ if not p.exists():continue
+ rows=list(csv.DictReader(p.open())); measured=[r for r in rows if r.get('phase','measured')=='measured']
+ cases={}
+ for profile in sorted({r['profile'] for r in measured}):
+  cases[profile]={}
+  for name in sorted({r['case'] for r in measured if r['profile']==profile}):
+   group=[r for r in measured if r['profile']==profile and r['case']==name]
+   fields=['tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native','process_wall_ms','tls_bytes_total'] if key=='native' else ['tcp_syn_to_synack_ms','tls_clienthello_to_finished_ms','connection_syn_to_finished_ms','wire_bytes','packet_count']
+   cases[profile][name]={f:describe([float(r[f]) for r in group]) for f in fields}
+ result[key]=cases
+(root/'summary.json').write_text(json.dumps(result,indent=2)+'\n')
+PY
+}
+
+run_retry_profile_inner() {
+  local profile=$1 requested=$2 progress_offset=${3:-0} progress_total=${4:-70}
+  local output mtc trust cert key
+  mtc="$MTC16/batch16/mtc/$profile"; trust="$mtc/trust.bin"; cert="$mtc/landmark-0000.pem"; key="$MTC16/population/$profile/0.key"
+  output=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$requested")
+  [[ ! -e "$output" ]] || fail "Output exists: $output"
+  printf '\n[RETRY] profile=%s mode=full output=%s\n' "$profile" "$requested"
+  docker run --rm --network none -e PYTHONDONTWRITEBYTECODE=1 \
+    -v "$REPO:/repo:ro" -v "$REPO/artifacts:/repo/artifacts" -w /repo \
+    --entrypoint python3 "$IMAGE" \
+    campaigns/validation/protocol_validation/mtc_retry/run.py full \
+    --root "/repo/$requested" --peer /opt/mtc/retry-peer \
+    --trust "/repo/$trust" --cert "/repo/$cert" --key "/repo/$key" --profile "$profile" \
+    --progress-offset "$progress_offset" --progress-total "$progress_total"
+}
+
+validate_retry_profile() {
+  local profile=$1 item found=no
+  for item in "${PROFILES[@]}"; do [[ "$item" != "$profile" ]] || found=yes; done
+  [[ "$found" == yes ]] || fail "Unsupported retry profile: $profile"
+}
+
+run_retry_profile() {
+  local profile=$1 requested=${2:-artifacts/results/handshake-retry-${1}-$(date -u +%Y%m%dT%H%M%SZ)-$$}
+  local output report
+  validate_retry_profile "$profile"
+  [[ "$requested" == artifacts/results/* ]] || fail 'Retry OUTPUT must be a new directory below artifacts/results/.'
+  ensure_dependencies
+  mt_images_required "$IMAGE" || return
+  source "$REPO/.mt-state/cert-scaling/paths.env"
+  run_retry_profile_inner "$profile" "$requested" 0 70
+  output=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$requested")
+  report="$REPO/artifacts/reports/$(basename "$requested")/report.html"
+  python3 "$RETRY_REPORTER" retry \
+    "$output" --output "$report" --replace
+  printf 'Completed Trust Anchor Retry performance.\nJSON report: %s\nHTML report: %s\n' "$output/summary.json" "$report"
+}
+
+run_retry_matrix() {
+  local requested=${1:-artifacts/results/handshake-retry-matrix-$(date -u +%Y%m%dT%H%M%SZ)-$$}
+  local output report report_root profile profile_output profile_report index=0
+  local started_epoch ended_epoch total_profiles=${#PROFILES[@]} total_transactions=$(( ${#PROFILES[@]} * 70 ))
+  [[ "$requested" == artifacts/results/* ]] || fail 'Retry OUTPUT must be a new directory below artifacts/results/.'
+  output=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$requested")
+  [[ ! -e "$output" ]] || fail "Output exists: $output"
+  ensure_dependencies
+  mt_images_required "$IMAGE" || return
+  source "$REPO/.mt-state/cert-scaling/paths.env"
+  mkdir -p "$output"
+  report_root="$REPO/artifacts/reports/$(basename "$requested")"
+  started_epoch=$(date +%s)
+  printf '\nMTC TRUST ANCHOR RETRY PERFORMANCE — 9 PROFILES\nMode: simple server authentication\nTransactions: %d (70 per profile)\nOutput: %s\n\n' "$total_transactions" "$requested"
+  for profile in "${PROFILES[@]}"; do
+    index=$((index + 1))
+    profile_output="$requested/$profile"
+    printf '\n[RETRY PROFILE %d/%d] %s\n' "$index" "$total_profiles" "$profile"
+    run_retry_profile_inner "$profile" "$profile_output" "$(( (index - 1) * 70 ))" "$total_transactions"
+    profile_report="$report_root/$profile/report.html"
+    python3 "$RETRY_REPORTER" retry \
+      "$output/$profile" --output "$profile_report" --replace
+  done
+  ended_epoch=$(date +%s)
+  report="$report_root/report.html"
+  python3 "$RETRY_MATRIX_REPORTER" "$output" --output "$report" \
+    --started-epoch "$started_epoch" --ended-epoch "$ended_epoch"
+  printf '\nCompleted nine-profile Trust Anchor Retry performance.\nJSON report: %s\nHTML report: %s\nProfile reports: %s\n' \
+    "$output/matrix-summary.json" "$report" "$report_root"
+}
+
+status_config() {
+  local config=${1:-$DEFAULT_CONFIG}
+  if [[ ! -f "$config" ]]; then
+    printf 'Configuration: MISSING (%s)\nRun init or select initialization from the menu.\n' "$config"
+    return 1
+  fi
+  printf 'Configuration: %s\n' "$config"
+  if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config"; then
+    echo 'Status: INCOMPLETE (the first measurement will prepare dependencies and configure it automatically).'
+  else
+    echo 'Status: CONFIGURED'
+  fi
+  sed -nE 's/^(RUNS|WARMUPS|PCAP_RUNS|MTC_ROOT)=/  \1=/p' "$config"
+  printf 'Profiles: %s\nCases: %s\n' "${PROFILES[*]}" "${CASES[*]}"
+}
+
+menu() {
+  local choice profile
+  while true; do
+    printf '\nHandshake performance\n'
+    printf ' 1 Initialize configuration\n'
+    printf ' 2 Status\n'
+    printf ' 3 Plan\n'
+    printf ' 4 Run Native — single authentication (9 profiles × 3 cases)\n'
+    printf ' 5 Run Native — mutual authentication (9 profiles × 3 cases)\n'
+    printf ' 6 Run PCAP — single authentication (9 profiles × 3 cases)\n'
+    printf ' 7 Run PCAP — mutual authentication (9 profiles × 3 cases)\n'
+    printf ' 8 Run Native + PCAP — single authentication\n'
+    printf ' 9 Run Native + PCAP — mutual authentication\n'
+    printf '10 Run Native + PCAP — all 6 cases\n'
+    printf '11 Run Trust Anchor Retry performance (all 9 profiles)\n'
+    printf ' 0 Back\n'
+    read -r -p '> ' choice || return 0
+    case "$choice" in
+      1) "$SELF" init || true;;
+      2) "$SELF" status || true;;
+      3) "$SELF" plan || true;;
+      4) "$SELF" run-native-single || true;;
+      5) "$SELF" run-native-mutual || true;;
+      6) "$SELF" run-pcap-single || true;;
+      7) "$SELF" run-pcap-mutual || true;;
+      8) "$SELF" run-single || true;;
+      9) "$SELF" run-mutual || true;;
+      10) "$SELF" run-native-pcap || true;;
+      11) "$SELF" run-retry || true;;
+      0) return 0;;
+      *) echo 'Unknown option.';;
+    esac
+  done
+}
+
+command=${1:-menu}
+case "$command" in
+  menu) menu;;
+  init)
+    [[ $# -le 2 ]] || fail 'Usage: init [CONFIG]'
+    config=${2:-$DEFAULT_CONFIG}
+    [[ ! -e "$config" ]] || fail "Configuration exists: $config"
+    mkdir -p "$(dirname "$config")"; config_template > "$config"
+    echo "Created $config. A run will replace the placeholders automatically from the active validated fixtures."
+    ;;
+  status)
+    [[ $# -le 2 ]] || fail 'Usage: status [CONFIG]'
+    status_config "${2:-$DEFAULT_CONFIG}"
+    ;;
+  plan)
+    [[ $# -le 3 ]] || fail 'Usage: plan [CONFIG] [OUTPUT]'
+    config=${2:-$DEFAULT_CONFIG}
+    output=${3:-artifacts/results/handshake-performance-$(date -u +%Y%m%dT%H%M%SZ)-$$}
+
+    [[ -f "$config" ]] || fail "Missing configuration: $config. Run $SELF init first."
+
+    load_plan_counts "$config"
+
+    echo "Cases: ${CASES[*]}"
+    echo "Profiles (9): ${PROFILES[*]}"
+    echo "Matrix: $(( ${#PROFILES[@]} * ${#CASES[@]} )) profile/authentication scenarios"
+    echo "Single subset: $(( ${#PROFILES[@]} * ${#SINGLE_CASES[@]} )) scenarios (${SINGLE_CASES[*]})"
+    echo "Mutual subset: $(( ${#PROFILES[@]} * ${#MUTUAL_CASES[@]} )) scenarios (${MUTUAL_CASES[*]})"
+    echo "Native observations: $(( ${#PROFILES[@]} * ${#CASES[@]} * (RUNS + WARMUPS) )) (warmups included)"
+    echo "PCAP observations: $(( ${#PROFILES[@]} * ${#CASES[@]} * PCAP_RUNS ))"
+    echo "Native: $RUNS measured repetitions + $WARMUPS warmups per scenario; OpenSSL handshake bytes"
+    echo "PCAP: $PCAP_RUNS independent captures per scenario; ClientHello-to-Finished duration and wire bytes"
+    echo "Retry: 9-profile simple-authentication matrix; 70 transactions/profile, 630 total"
+    echo "Config: $config"
+    echo "Output: $output"
+
+    if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config"; then
+      echo 'Configuration status: INCOMPLETE; run-native/run-pcap/run-native-pcap will prepare or reuse dependencies and configure it automatically.'
+    else
+      echo 'Configuration status: no REPLACE placeholders found; file and credential checks occur before execution.'
+    fi
+    ;;
+  run-retry)
+    [[ $# -le 2 ]] || fail 'Usage: run-retry [OUTPUT]'
+    run_retry_matrix "${2:-}"
+    ;;
+  run-native|run-native-single|run-native-mutual|run-pcap|run-pcap-single|run-pcap-mutual|run-native-pcap|run-single|run-mutual|run-all)
+    if [[ "$command" == run-all ]]; then
+      echo 'Compatibility alias: run-all means run-native-pcap.'
+      command=run-native-pcap
+    fi
+    case "$command" in
+      *-single|run-single) ACTIVE_CASES=("${SINGLE_CASES[@]}");;
+      *-mutual|run-mutual) ACTIVE_CASES=("${MUTUAL_CASES[@]}");;
+      *) ACTIVE_CASES=("${CASES[@]}");;
+    esac
+    started_epoch=$(date +%s)
+    [[ $# -le 3 ]] || fail "Usage: $command [CONFIG] [OUTPUT]"
+    config=${2:-$DEFAULT_CONFIG}
+    requested_output=${3:-artifacts/results/handshake-performance-$(date -u +%Y%m%dT%H%M%SZ)-$$}
+    if [[ ! -f "$config" ]]; then
+      mkdir -p "$(dirname "$config")"; config_template > "$config"
+    fi
+    if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config"; then
+      ensure_dependencies
+      write_automatic_config "$config"
+    fi
+    load_config "$config"; output=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$requested_output")
+    trap cleanup EXIT INT TERM
+    prepare_run "$output"
+    case "$command" in
+      run-native|run-native-single|run-native-mutual) measure_native "$output";;
+      run-pcap|run-pcap-single|run-pcap-mutual) measure_pcap "$output";;
+      run-native-pcap|run-single|run-mutual) measure_native "$output"; measure_pcap "$output";;
+    esac
+    write_summary "$output"
+    report="$REPO/artifacts/reports/$(basename "$output")/report.html"
+    python3 "$REPORTER" "$output/summary.json" --output "$report" \
+      --mode "$command" --started-epoch "$started_epoch" --ended-epoch "$(date +%s)"
+    cleanup; trap - EXIT INT TERM
+    printf 'Completed: %s\nJSON report: %s\nHTML report: %s\n' "$output" "$output/summary.json" "$report"
+    ;;
+  help|-h|--help) usage;;
+  *) usage; exit 2;;
+esac

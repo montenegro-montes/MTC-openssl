@@ -1,0 +1,9 @@
+FROM mt-tls-network-measurement:local
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+       iproute2 iputils-ping iperf3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY campaigns/network/latency/client.sh /opt/network-latency/client.sh
+RUN chmod +x /opt/network-latency/client.sh

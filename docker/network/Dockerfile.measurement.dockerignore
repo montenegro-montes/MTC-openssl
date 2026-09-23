@@ -1,0 +1,15 @@
+**
+!docker/
+!docker/network/
+!docker/network/Dockerfile.measurement
+!campaigns/
+!campaigns/network/
+!campaigns/network/common/
+!campaigns/network/common/server.py
+!campaigns/network/common/measure.py
+!campaigns/network/common/
+!campaigns/network/common/*.py
+!campaigns/network/common/*.sh
+
+!campaigns/common/
+!campaigns/common/pcap_capture.py

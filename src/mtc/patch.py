@@ -11,7 +11,7 @@ for app in ['s_client','s_server']:
     p=root/'apps'/f'{app}.c';s=p.read_text()
 
     declarations = (
-        '#include "compact.h"\n'
+        '#include "mt_tls.h"\n'
         '#include "mtc.h"\n'
         'static const char *mtc_file=NULL;\n'
         'static int mtc_landmark_mode=0;'
@@ -21,7 +21,7 @@ for app in ['s_client','s_server']:
     else:
         declarations += '\nstatic const char *mtc_client_id=NULL;'
 
-    s=once(s,'#include "compact.h"',declarations)
+    s=once(s,'#include "mt_tls.h"',declarations)
 
     enums='    OPT_COMMON,\n    OPT_MTC_CONFIG, OPT_MTC_LANDMARK,'
     if app=='s_server':
@@ -62,7 +62,7 @@ for app in ['s_client','s_server']:
         # callback before set_cert_key_stuff() calls SSL_CTX_use_certificate().
         cert_anchor='    if (!set_cert_key_stuff(ctx, cert, key, chain, build_chain))'
         cert_code='''    if (mtc_client_id) {
-        if (mt_file || compact_a || compact_b || compact_mode || mt_incompatible || enable_server_rpk
+        if (mt_file || mt_incompatible || enable_server_rpk
             || !mtc_client_present(ctx,mtc_client_id,mtc_landmark_mode)) {
             BIO_printf(bio_err,"MTC-experimental configuration rejected\\n"); goto end;
         }
@@ -73,7 +73,7 @@ for app in ['s_client','s_server']:
         anchor='    con = SSL_new(ctx);'
         code='''    if (mtc_file || (mtc_landmark_mode && !mtc_client_id)) {
         if (!mtc_file
-            || mt_file || compact_a || compact_b || compact_mode || mt_incompatible || enable_server_rpk
+            || mt_file || mt_incompatible || enable_server_rpk
             || !mtc_client(ctx,mtc_file,mtc_landmark_mode)) {
             BIO_printf(bio_err,"MTC-experimental configuration rejected\\n"); goto end;
         }
@@ -92,7 +92,7 @@ for app in ['s_client','s_server']:
         anchor='    if (!set_cert_key_stuff(ctx, s_cert, s_key, s_chain, build_chain))'
         code='''    if (mtc_file || mtc_client_trust || mtc_landmark_mode) {
         if ((!mtc_file && !mtc_client_trust)
-            || mt_file || compact_a || compact_b || mt_incompatible || enable_server_rpk || ctx2
+            || mt_file || mt_incompatible || enable_server_rpk || ctx2
             || (mtc_file && !mtc_server(ctx,mtc_file))
             || (mtc_client_trust && !mtc_server_verify_client(ctx,mtc_client_trust,mtc_landmark_mode))) {
             BIO_printf(bio_err,"MTC-experimental configuration rejected\\n"); goto end;

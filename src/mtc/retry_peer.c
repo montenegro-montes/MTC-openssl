@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdint.h>
 #include <time.h>
 
 static double tick_ms(void) {
@@ -37,10 +38,14 @@ static void deadline(int fd) {
 }
 static void timing(SSL *ssl,double tcp_ms,double tls_ms,double attempt_ms) {
     unsigned char random[32];size_t n=SSL_get_client_random(ssl,random,sizeof(random));
+    uint64_t bytes_read=BIO_number_read(SSL_get_rbio(ssl));
+    uint64_t bytes_written=BIO_number_written(SSL_get_wbio(ssl));
     fprintf(stdout,"MTC_RETRY_TIMING {\"connection_id\":\"");
     retry_hex(stdout,random,n);
-    fprintf(stdout,"\",\"retry_tcp_connect_wall_ms_native\":%.6f,\"retry_tls_attempt_wall_ms\":%.6f,\"retry_attempt_wall_ms_native\":%.6f}\n",
-            tcp_ms,tls_ms,attempt_ms);
+    fprintf(stdout,"\",\"retry_tcp_connect_wall_ms_native\":%.6f,\"retry_tls_attempt_wall_ms\":%.6f,\"retry_attempt_wall_ms_native\":%.6f,\"tls_bytes_read\":%llu,\"tls_bytes_written\":%llu,\"tls_bytes_total\":%llu}\n",
+            tcp_ms,tls_ms,attempt_ms,(unsigned long long)bytes_read,
+            (unsigned long long)bytes_written,
+            (unsigned long long)(bytes_read+bytes_written));
     fflush(stdout);
 }
 static void result(SSL *ssl,int ok) {

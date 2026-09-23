@@ -103,6 +103,13 @@ def classify_attempt(completed, requested):
                 raise ValueError('invalid timing value')
             if not math.isfinite(value) or value < 0:
                 raise ValueError('invalid timing value')
+        byte_names = ('tls_bytes_read', 'tls_bytes_written', 'tls_bytes_total')
+        for name in byte_names:
+            value = measured.get(name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError('invalid TLS byte counter')
+        if measured['tls_bytes_total'] != measured['tls_bytes_read'] + measured['tls_bytes_written']:
+            raise ValueError('inconsistent TLS byte counters')
         if len(offered) != 1:
             raise ValueError('missing/ambiguous available list')
         ids = available_ids(offered[0]['available_list_hex'])
@@ -118,7 +125,7 @@ def classify_attempt(completed, requested):
                     server_supported_ids=ids,
                     **{k: native[k] for k in
                        ('connection_id', 'session_reused', 'tls_version', 'cipher', 'negotiated_group')},
-                    **{k: measured[k] for k in metric_names})
+                    **{k: measured[k] for k in metric_names + byte_names})
     except (ValueError, KeyError, TypeError):
         return dict(result='FAIL', reason='invalid_or_missing_native_evidence',
                     server_supported_ids=[], connection_id=None)
@@ -172,6 +179,9 @@ def transaction(initial_id, trusted_id, attempt):
          'retry_total_tls_attempt_wall_ms'),
         ('retry_attempt_wall_ms_native',
          'retry_total_attempt_wall_ms_native'),
+        ('tls_bytes_read', 'retry_total_tls_bytes_read'),
+        ('tls_bytes_written', 'retry_total_tls_bytes_written'),
+        ('tls_bytes_total', 'retry_total_tls_bytes'),
     )
     for source, target in totals:
         values = [record.get(source) for record in report['attempts']]

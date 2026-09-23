@@ -76,15 +76,15 @@ certificados. Es un protocolo de laboratorio, no un estándar interoperable.
 ## Generación y ejecución
 
 ```sh
-docker compose -f docker/original_campaigns/compose.yaml build
-docker compose -f docker/original_campaigns/compose.yaml run --rm setup
-SCENARIO=pq-mt docker compose -f docker/original_campaigns/compose.yaml up -d --force-recreate server
-SCENARIO=pq-mt docker compose -f docker/original_campaigns/compose.yaml run --rm client
-SCENARIO=pq-mt docker compose -f docker/original_campaigns/compose.yaml run --rm client python3 /opt/lab/benchmark.py --runs 30
-docker compose -f docker/original_campaigns/compose.yaml down
+docker compose -f docker/historical_campaigns/compose.yaml build
+docker compose -f docker/historical_campaigns/compose.yaml run --rm setup
+SCENARIO=pq-mt docker compose -f docker/historical_campaigns/compose.yaml up -d --force-recreate server
+SCENARIO=pq-mt docker compose -f docker/historical_campaigns/compose.yaml run --rm client
+SCENARIO=pq-mt docker compose -f docker/historical_campaigns/compose.yaml run --rm client python3 /opt/lab/benchmark.py --runs 30
+docker compose -f docker/historical_campaigns/compose.yaml down
 ```
 
-Esperar a que el servidor escuche (`docker compose -f docker/original_campaigns/compose.yaml logs server`) antes del
+Esperar a que el servidor escuche (`docker compose -f docker/historical_campaigns/compose.yaml logs server`) antes del
 cliente. `classic-mt` usa los mismos certificados que `classic`; `pq-mt` los
 mismos que `pq`. Las variantes Merkle agregan una comprobación a X.509.
 
@@ -96,21 +96,21 @@ al renovar certificados hay que generar un nuevo bundle concordante.
 Para un conjunto propio, el primer certificado corresponde a `proof-0000.bin`:
 
 ```sh
-docker compose -f docker/original_campaigns/compose.yaml run --rm client /opt/mt/bin/mt_bundle /work/merkle/mi-lote \
+docker compose -f docker/historical_campaigns/compose.yaml run --rm client /opt/mt/bin/mt_bundle /work/merkle/mi-lote \
   /work/certs/classic/server.pem /work/certs/pq/server.pem
 ```
 
 El destino debe ser nuevo. Si la generación falla, cualquier salida parcial no
 es válida. Para probar un bundle distinto se pueden pasar `-e MERKLE_ROOT=...` al
-cliente o `-e MERKLE_PROOF=...` al servidor ejecutados con `docker compose -f docker/original_campaigns/compose.yaml run`.
+cliente o `-e MERKLE_PROOF=...` al servidor ejecutados con `docker compose -f docker/historical_campaigns/compose.yaml run`.
 Las opciones nativas también están disponibles al invocar directamente
 `/opt/openssl-mt/bin/openssl s_client` o `s_server` en el contenedor.
 
 ## Pruebas
 
 ```sh
-docker compose -f docker/original_campaigns/compose.yaml run --rm client /opt/mt/bin/test_wire
-docker compose -f docker/original_campaigns/compose.yaml run --rm client python3 /opt/mt/tests/test_tls.py
+docker compose -f docker/historical_campaigns/compose.yaml run --rm client /opt/mt/bin/test_wire
+docker compose -f docker/historical_campaigns/compose.yaml run --rm client python3 /opt/mt/tests/test_tls.py
 ```
 
 `test_wire` se compila con AddressSanitizer y UndefinedBehaviorSanitizer y se

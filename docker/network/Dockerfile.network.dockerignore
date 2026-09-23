@@ -1,0 +1,11 @@
+**
+!docker/
+!docker/network/
+!docker/network/Dockerfile.network
+!campaigns/
+!campaigns/network/
+!campaigns/network/latency/
+!campaigns/network/latency/client.sh
+!campaigns/network/latency/
+!campaigns/network/latency/*.py
+!campaigns/network/latency/*.sh

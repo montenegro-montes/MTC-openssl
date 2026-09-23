@@ -1,4 +1,4 @@
-"""Create immutable initial issuance snapshots from the SAME compact population."""
+"""Create immutable MTC issuance snapshots from an explicit X.509 population."""
 import argparse,json,os,shutil,subprocess,time
 from pathlib import Path
 from core import *
@@ -15,6 +15,7 @@ def sign(path,data,family):
     finally:tmp.unlink()
 def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
     profile=crypto_profile(family)
+    legacy_population=originals is None
     if not 1<=n<=1024:raise ValueError('Unsupported MTC population')
     if originals is None and family in PAPER1_PROFILES:raise ValueError('Paper-1 requires an explicit same-profile X.509 population')
     begin=time.perf_counter();out.mkdir();caid=profile['ca_id'];ids=list(profile['cosigner_ids'])
@@ -67,11 +68,12 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
             'mtc_proof_encoded_bytes':len(outer[2][1])-1,'mtc_signature_bytes':len(ss[0][1]) if ss else 0,
             'mtc_cosignature_bytes':sum(len(s) for _,s in ss[1:]),'mtc_checkpoint_bytes':0,'mtc_landmark_reference_bytes':12,
             'mtc_predistributed_bytes':len(config) if mode=='landmark' else 0}
+    source_metadata=({'compact_batch':str(batch)} if legacy_population else {'source_population':str(batch)})
     meta={'draft':DRAFT,'trust_anchor_draft':TA_DRAFT,'status':'MTC-experimental','tree_size':n,'crypto_family':family,'ca_id':caid,
         'cosigner_ids':ids,'cosigner_policy':'CA AND one additional local cosigner; no public transparency claim',
         'subtrees':subtrees,'landmarks':[0,n],'checkpoint':{'tree_size':n,'timestamp':timestamp,'hash':checkpoint.hex()},
         'ca_spki_sha256':H(public[0]).hex(),'cosigner_spki_sha256':H(public[1]).hex(),
-        'input_sha256':{str(p):H(p.read_bytes()).hex() for p in originals},'compact_batch':str(batch),
+        'input_sha256':{str(p):H(p.read_bytes()).hex() for p in originals},**source_metadata,
         'setup_ms':(time.perf_counter()-begin)*1000,'sizes':sizes,'trust_file_bytes':len(config),
         'ca_key_note':'Separate from directly-signing X509 CA as required by MTC -05 section 5.4',
         'changed_fields':['issuer','serialNumber','signature algorithm','signatureValue','old authorityKeyIdentifier omitted']}

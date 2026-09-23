@@ -90,6 +90,7 @@ def load(source):
     )
     execution=model['documents'].get('result.json', {})
     status=execution.get('status') if isinstance(execution,dict) else None
+    if status is None: status=top.get('status') or top.get('result')
     if status in ('FAIL','FAILURE'): model['status']='FAILURE'
     elif model['warnings']: model['status']='PARTIAL / VALIDATION FAILURE'
     elif status in ('PASS','SUCCESS','COMPLETED'): model['status']='SUCCESS'

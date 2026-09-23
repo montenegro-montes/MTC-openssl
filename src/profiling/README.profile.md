@@ -15,24 +15,24 @@ The Compact image, original certificates, and N=16 batch must already exist.
 This phase never regenerates or overwrites them.
 
 ```sh
-docker compose -f docker/original_campaigns/compose.profile.yaml build
+docker compose -f docker/historical_campaigns/compose.profile.yaml build
 
-PROFILE_DETAIL=1 docker compose -f docker/original_campaigns/compose.profile.yaml run --rm --no-deps client \
+PROFILE_DETAIL=1 docker compose -f docker/historical_campaigns/compose.profile.yaml run --rm --no-deps client \
   python3 /opt/profiling/test_tls.py
-docker compose -f docker/original_campaigns/compose.profile.yaml run --rm --no-deps client \
+docker compose -f docker/historical_campaigns/compose.profile.yaml run --rm --no-deps client \
   sh /opt/profiling/test_timer.sh
 
-PROFILE_DETAIL=0 docker compose -f docker/original_campaigns/compose.profile.yaml \
+PROFILE_DETAIL=0 docker compose -f docker/historical_campaigns/compose.profile.yaml \
   up -d --force-recreate --wait server
-PROFILE_DETAIL=0 docker compose -f docker/original_campaigns/compose.profile.yaml run --rm client \
+PROFILE_DETAIL=0 docker compose -f docker/historical_campaigns/compose.profile.yaml run --rm client \
   python3 /opt/profiling/benchmark.py --runs 30
 
-PROFILE_DETAIL=1 docker compose -f docker/original_campaigns/compose.profile.yaml \
+PROFILE_DETAIL=1 docker compose -f docker/historical_campaigns/compose.profile.yaml \
   up -d --force-recreate --wait server
-PROFILE_DETAIL=1 docker compose -f docker/original_campaigns/compose.profile.yaml run --rm client \
+PROFILE_DETAIL=1 docker compose -f docker/historical_campaigns/compose.profile.yaml run --rm client \
   python3 /opt/profiling/benchmark.py --runs 30
 
-docker compose -f docker/original_campaigns/compose.profile.yaml down
+docker compose -f docker/historical_campaigns/compose.profile.yaml down
 ```
 
 Both endpoints must use the same `PROFILE_DETAIL` value. Every run creates a

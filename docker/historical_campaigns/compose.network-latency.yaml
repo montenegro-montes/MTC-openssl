@@ -1,0 +1,39 @@
+name: mtlatency
+x-lab: &lab
+  image: mt-tls-network:latency
+  cap_add: [NET_ADMIN]
+  volumes:
+    - ../../artifacts:/work:ro
+    - ../../artifacts/results:/work/results
+  environment:
+    COMPACT_BATCH: /work/compact/batch16
+    MTC_BATCH: /work/mtc/batch16-v2
+    PROFILE_DETAIL: "0"
+    MEASUREMENT_RUN_ROOT: ${MEASUREMENT_RUN_ROOT:?Set MEASUREMENT_RUN_ROOT}
+    MEASUREMENT_CAMPAIGN_ID: ${MEASUREMENT_CAMPAIGN_ID:?Set MEASUREMENT_CAMPAIGN_ID}
+    MEASUREMENT_SEED: ${MEASUREMENT_SEED:?Set MEASUREMENT_SEED}
+    NETWORK_HALF_DELAY_MS: ${NETWORK_HALF_DELAY_MS:-0}
+    MEASUREMENT_PCAP: ${MEASUREMENT_PCAP:-0}
+services:
+  server:
+    <<: *lab
+    command: ["python3", "/opt/measurement/serve.py"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/measurement-ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  client:
+    <<: *lab
+    entrypoint: ["/opt/network-latency/client.sh"]
+    command: []
+  capture:
+    profiles: [pcap]
+    image: mt-tls-capture:local
+    network_mode: "service:server"
+    cap_add: [NET_RAW, NET_ADMIN]
+    volumes:
+      - ../../artifacts/results:/work/results
+      - ../../campaigns/common:/opt/pcap-core:ro
+      - ../../campaigns/historical_campaigns/handshake_capture:/opt/handshake-capture:ro
+    command: ["python3", "/opt/pcap-core/pcap_capture.py", "serve", "${MEASUREMENT_RUN_ROOT}/${MEASUREMENT_CAMPAIGN_ID}/pcap"]

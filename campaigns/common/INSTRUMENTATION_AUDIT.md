@@ -83,7 +83,7 @@ A further concrete context defect was corrected: measurement COPY references `ca
 
 ### Rebuild provenance
 
-Each command used repository root context and normal cache: `docker build --progress=plain -f docker/original_campaigns/Dockerfile.<name> -t <tag> .`. No `--no-cache` or protocol patch workaround. Compact/base images were not rebuilt.
+Each command used repository root context and normal cache: `docker build --progress=plain -f docker/historical_campaigns/Dockerfile.<name> -t <tag> .`. No `--no-cache` or protocol patch workaround. Compact/base images were not rebuilt.
 
 | Tag | Before image ID | After image ID |
 |---|---|---|

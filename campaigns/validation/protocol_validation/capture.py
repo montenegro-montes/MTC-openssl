@@ -70,14 +70,14 @@ def main():
     p.add_argument('--profile',choices=PROFILES,default='pq')
     p.add_argument('--leaf',type=int,choices=range(16),default=0)
     p.add_argument('--fixture-dir',type=Path);p.add_argument('--server-key',type=Path);p.add_argument('--output',type=Path)
-    p.add_argument('--image',default='mt-tls-measurement:local');p.add_argument('--capture-image',default='mt-tls-capture:local')
+    p.add_argument('--image',default='mt-tls-mtc:local');p.add_argument('--capture-image',default='mt-tls-capture:local')
     p.add_argument('--execute',action='store_true');p.add_argument('--inside',choices=['server','client'],help=argparse.SUPPRESS)
     a=p.parse_args()
     if a.inside:inside(a);return
     if not all((a.fixture_dir,a.server_key,a.output)):p.error('Specify --fixture-dir, --server-key and --output')
     if a.output.exists():p.error('Output exists; captures are immutable')
     if not a.execute:print('PLAN ONLY: one N=16',a.profile,a.mode,'handshake, leaf',a.leaf,'; isolated server eth0, tcp port 4433');return
-    fixture=a.fixture_dir.resolve();key=a.server_key.resolve();out=a.output.resolve();repo=HERE.parents[1]
+    fixture=a.fixture_dir.resolve();key=a.server_key.resolve();out=a.output.resolve();repo=HERE.parents[2]
     if not key.is_file():p.error('Server key missing')
     leaf4=f'{a.leaf:04d}'
     selected_pem=fixture/f'{a.mode}-{leaf4}.pem'

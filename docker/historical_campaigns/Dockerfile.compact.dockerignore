@@ -1,0 +1,10 @@
+**
+!src/
+!src/compact/
+!src/compact/*.c
+!src/compact/*.h
+!src/compact/*.py
+!src/compact/*.sh
+!docker/
+!docker/historical_campaigns/
+!docker/historical_campaigns/Dockerfile.compact

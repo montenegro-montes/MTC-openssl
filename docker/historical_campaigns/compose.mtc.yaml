@@ -1,0 +1,33 @@
+name: mtclab
+x-lab: &lab
+  image: mt-tls-mtc:local
+  build:
+    context: ../..
+    dockerfile: docker/historical_campaigns/Dockerfile.mtc
+  environment:
+    COMPACT_BATCH: ${COMPACT_BATCH:-/work/compact/batch16}
+    MTC_BATCH: ${MTC_BATCH:-/work/mtc/batch16-v2}
+    PROFILE_DETAIL: "0"
+services:
+  setup:
+    <<: *lab
+    volumes:
+      - ../../artifacts:/work
+    command: ["python3", "/opt/mtc/prepare.py", "--output", "/work/mtc/batch16-v2"]
+  server:
+    <<: *lab
+    volumes:
+      - ../../artifacts:/work:ro
+      - ../../artifacts/results:/work/results
+    command: ["python3", "/opt/mtc/serve.py"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/mtc-ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  client:
+    <<: *lab
+    volumes:
+      - ../../artifacts:/work:ro
+      - ../../artifacts/results:/work/results
+    command: ["python3", "/opt/mtc/benchmark.py"]

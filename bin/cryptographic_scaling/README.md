@@ -5,15 +5,28 @@ are prerequisites for the Paper-1 workflow.
 
 ```sh
 # Prepare existing shared image dependencies, in order (manual Docker builds).
-bin/cryptographic_scaling/mt-prepare run ALL
+bin/base/mt-prepare run ALL
 
 # First use only; then run the quick N=16 campaign when ready.
 bin/cryptographic_scaling/mt-cert-scaling run ALL
 
 # First use only: select Paper-1 ML-DSA-65 from the configured MTC16 root.
-bin/cryptographic_scaling/mt-protocol-validation status
-bin/cryptographic_scaling/mt-protocol-validation menu
+bin/base/mt-protocol-validation status
+bin/base/mt-protocol-validation menu
 ```
+
+The manual handshake comparator covers X.509 and MTC-experimental with both
+server-only and mutual authentication. It records host-side execution time,
+OpenSSL handshake bytes, independent packet captures, captured connection time
+and wire bytes:
+
+```sh
+bin/performance/mt-handshake-performance init
+bin/performance/mt-handshake-performance plan .mt-state/handshake-performance.env
+```
+
+Edit the generated fixture paths before using `run-native`, `run-pcap` or
+`run-all`. The launcher never overwrites an output directory.
 
 Stop on any failure. If a launcher is already initialized, use `status` rather
 than initializing it again. `mt-cert-scaling run ALL` includes the authorized
@@ -24,8 +37,9 @@ just those fixtures, initialize cert-scaling and select stages50 and60 after ima
 setup; X.509 chain fixture generation and analysis can be done independently.
 
 `mt-prepare` provides `list`, `show N`, `status`, `run N`, `run ALL`, `rebuild N`,
-`rebuild ALL` and a menu. Stages1–6 are base OpenSSL/PQ, Compact, profiling, MTC,
-measurement and packet-capture tooling. `run N` prepares missing prerequisites
+`rebuild ALL` and a menu. Stages 1–3 are base OpenSSL/PQ, MTC and packet-capture
+tooling. Compact, its profiling image and its combined measurement image are not
+part of this preparation. `run N` prepares missing prerequisites
 through N, reusing existing images. `rebuild` is explicit; after source changes,
 rebuild ALL to refresh descendants as well. Existing image presence does not
 certify source freshness or scientific validity. Do not rebuild during an active
@@ -37,10 +51,9 @@ it does not silently modify that environment. Docker must already be running.
 No original campaign battery or packet capture is started. `run ALL` includes
 N=16 generation and functional TLS validation; it does not run a performance matrix.
 
-It reuses the shared Dockerfiles currently located in `docker/original_campaigns/`.
-Those recipes still contain historical instrumentation source dependencies;
-this change removes **execution/state/data dependencies on earlier campaigns**,
-not all code reuse. No recipes or algorithm versions are duplicated or changed.
+It uses the MTC/X.509 image chain under `docker/base/`. These prerequisites are
+independent of historical campaigns and their results. Compact remains available
+only under the historical source and Docker directories.
 Image tags are shared with the lab, so explicit rebuilds affect subsequent users
 of those tags. Scientific runs retain their image/source provenance gates.
 
@@ -53,36 +66,23 @@ Use `new` for a fresh Paper-1 protocol campaign while preserving old state/resul
 reinterpretation or regeneration. PROFILE/FIX/KEY may be changed before evidence
 exists. The profile is checked against the canonical issuer/cosigner registry.
 
-## Full TLS performance workflow
+## TLS performance workflow
 
-`run ALL` runs the default fixture validation and N=16 size-crossover stages;
-it does not run the full TLS performance matrix. The optional TLS stages are:
+`run ALL` runs fixture validation and the N=16 size-crossover stages. The former
+TLS performance stages are disabled because their measurement image included
+Compact instrumentation. They must not be used in the MTC/X.509-only battery
+until a dedicated measurement runner is implemented.
 
 | Stage | Action |
 | --- | --- |
-| 110 | Offline matrix preview using the recorded environment |
-| 120 | Full TLS execution: 5 campaigns, 30 repetitions, 5 warmups |
-| 130 | Aggregate completed eligible TLS observations |
-| 140 | Generate size and TLS performance plots in `TLS_ROOT/plots` |
+| 110 | Disabled MTC/X.509 matrix preview |
+| 120 | Disabled TLS execution |
+| 130 | Historical-result analysis only |
+| 140 | Historical-result plots only |
 
-After the default workflow has completed, inspect paths and preview:
-
-```sh
-bin/cryptographic_scaling/mt-cert-scaling status
-bin/cryptographic_scaling/mt-cert-scaling tls-full
-```
-
-**WARNING: FULL EXPERIMENT — MANUAL EXECUTION ONLY.** To explicitly run the
-preview, matrix, analysis and plots in order, stopping at the first failure:
-
-```sh
-bin/cryptographic_scaling/mt-cert-scaling tls-full --execute
-```
-
-The menu exposes preview and execution separately. Individual stages accept
-`show 120` or `run 120` (and likewise 110, 130, 140). The execution command uses
-both `--full-matrix` and `--execute`, with the same recorded `ENVIRONMENT` as
-the preview. Unsupported TLS algorithms remain explicitly excluded by the runner.
+Stages 110 and 120 fail closed with an explanatory error. Existing historical
+measurement evidence remains readable by stages 130 and 140, but the launcher
+will not create new Compact-derived measurements.
 
 `TLS_ROOT` defaults to `artifacts/results/cert-chain-tls-$STAMP`, including for
 older launcher configurations. Select another fresh location with
@@ -104,7 +104,7 @@ Do not run a separate launcher `init` afterward; inspect `status` instead.
 If images were prepared before this change, configure the missing paths only:
 
 ```sh
-bin/cryptographic_scaling/mt-prepare init
+bin/base/mt-prepare init
 ```
 
 This command does not need Docker and does not generate fixtures. Run `mt-prepare run ALL` to also generate and validate N=16 fixtures automatically.

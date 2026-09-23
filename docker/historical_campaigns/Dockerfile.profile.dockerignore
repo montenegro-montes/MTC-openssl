@@ -1,0 +1,10 @@
+**
+!src/
+!src/profiling/
+!src/profiling/*.c
+!src/profiling/*.h
+!src/profiling/*.py
+!src/profiling/*.sh
+!docker/
+!docker/historical_campaigns/
+!docker/historical_campaigns/Dockerfile.profile
