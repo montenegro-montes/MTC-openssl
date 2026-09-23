@@ -4,6 +4,9 @@
 handshakes. It provides native timing, packet-capture measurements, mutual
 authentication cases and the nine-profile Trust Anchor Retry matrix. Simple and
 mutual MTC measurements each include landmark and standalone credentials.
+For mutual authentication, the client and server use the same one of the nine
+signature profiles in each scenario. Dedicated client fixtures are prepared
+automatically under `artifacts/validation/handshake-performance-mutual-v2/`.
 The handshake report presents absolute results for every profile and case. Its
 Native and PCAP tables include sample count, mean, sample standard deviation,
 median and a 95% Student t confidence interval for the mean; it does not use a

@@ -100,25 +100,13 @@ RUNS=30
 WARMUPS=5
 PCAP_RUNS=30
 
-X509_SERVER_CERT=artifacts/REPLACE/server.pem
-X509_SERVER_KEY=artifacts/REPLACE/server.key
-X509_SERVER_CA=artifacts/REPLACE/server-ca.pem
-X509_CLIENT_CERT=artifacts/REPLACE/client.pem
-X509_CLIENT_KEY=artifacts/REPLACE/client.key
-X509_CLIENT_CA=artifacts/REPLACE/client-ca.pem
-
 MTC_SERVER_CERT=artifacts/REPLACE/server-landmark.pem
 MTC_SERVER_KEY=artifacts/REPLACE/server.key
 MTC_SERVER_TRUST=artifacts/REPLACE/server-trust.bin
 MTC_SERVER_ID=REPLACE_SERVER_TRUST_ANCHOR_ID
 
-MTC_CLIENT_CERT=artifacts/REPLACE/client-landmark.pem
-MTC_CLIENT_STANDALONE_CERT=artifacts/REPLACE/client-standalone.pem
-MTC_CLIENT_KEY=artifacts/REPLACE/client.key
-MTC_CLIENT_TRUST=artifacts/REPLACE/client-trust.bin
-MTC_CLIENT_AUTHORITY=artifacts/REPLACE/client-authority.bin
-MTC_CLIENT_ID=REPLACE_CLIENT_TRUST_ANCHOR_ID
 MTC_ROOT=artifacts/REPLACE/mtc-n16-root
+MUTUAL_CLIENT_ROOT=artifacts/validation/handshake-performance-mutual-v2
 EOF
 }
 
@@ -133,7 +121,7 @@ create_configuration() {
 }
 
 load_config() {
-  local file=$1 name value
+  local file=$1 name value profile relative
   [[ -f "$file" ]] || fail "Missing configuration: $file"
   # The file is user-controlled shell assignments. Refuse commands and expansions.
   while IFS='=' read -r name value; do
@@ -146,13 +134,17 @@ load_config() {
   : "${RUNS:?}" "${WARMUPS:?}" "${PCAP_RUNS:?}"
   [[ "$RUNS" =~ ^[1-9][0-9]*$ && "$WARMUPS" =~ ^[0-9]+$ && "$PCAP_RUNS" =~ ^[1-9][0-9]*$ ]] || fail 'RUNS/WARMUPS/PCAP_RUNS must be integers.'
   configure_kem "${KEM:-x25519}"
-  MTC_CLIENT_STANDALONE_CERT=${MTC_CLIENT_STANDALONE_CERT:-${MTC_CLIENT_CERT%/*}/standalone-0000.pem}
-  MTC_CLIENT_AUTHORITY=${MTC_CLIENT_AUTHORITY:-${MTC_CLIENT_TRUST%/*}/authority.bin}
-  for name in X509_CLIENT_CERT X509_CLIENT_KEY X509_CLIENT_CA MTC_CLIENT_CERT MTC_CLIENT_STANDALONE_CERT MTC_CLIENT_KEY MTC_CLIENT_TRUST MTC_CLIENT_AUTHORITY; do
-    value=${!name:-}; [[ "$value" == artifacts/* ]] || fail "$name must be below artifacts/."
-    [[ -f "$REPO/$value" ]] || fail "Missing $name: $value"
+  [[ "${MUTUAL_CLIENT_ROOT:-}" == artifacts/* && -f "$REPO/$MUTUAL_CLIENT_ROOT/manifest.json" ]] \
+    || fail 'MUTUAL_CLIENT_ROOT must contain the nine-profile mutual client fixtures.'
+  for profile in "${PROFILES[@]}"; do
+    for relative in x509/client.pem x509/client.key x509/client-ca.pem \
+      mtc-source/client-0000.key mtc-n16/landmark-0000.pem \
+      mtc-n16/standalone-0000.pem mtc-n16/trust.bin mtc-n16/authority.bin \
+      mtc-n16/manifest.json; do
+      [[ -f "$REPO/$MUTUAL_CLIENT_ROOT/profiles/$profile/$relative" ]] \
+        || fail "Missing mutual client fixture: $MUTUAL_CLIENT_ROOT/profiles/$profile/$relative"
+    done
   done
-  : "${MTC_CLIENT_ID:?Set MTC_CLIENT_ID}"
   [[ "${MTC_ROOT:-}" == artifacts/* && -f "$REPO/$MTC_ROOT/manifest.json" ]] || fail 'MTC_ROOT must contain the active N=16 fixture root.'
 }
 
@@ -184,13 +176,13 @@ load_plan_counts() {
 }
 
 ensure_dependencies() {
-  local manual="$REPO/artifacts/validation/mutual-auth-manual"
+  local performance_clients="$REPO/artifacts/validation/handshake-performance-mutual-v2"
   "$REPO/bin/base/mt-prepare" run ALL
   [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] || fail 'mt-prepare did not create the certificate-scaling configuration.'
   source "$REPO/.mt-state/cert-scaling/paths.env"
-  if [[ ! -f "$manual/manifest.json" ]]; then
+  if [[ ! -f "$performance_clients/manifest.json" ]]; then
     python3 "$REPO/campaigns/validation/protocol_validation/mutual_authentication/generate_fixtures.py" \
-      --output "$manual" --execute
+      --output "$performance_clients" --performance-clients --execute
   fi
 }
 
@@ -224,45 +216,29 @@ import json, sys
 from pathlib import Path
 
 repo, output, mtc_root, kem = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4]
-manual = Path('artifacts/validation/mutual-auth-manual')
 server = mtc_root / 'batch16/mtc/mldsa65'
-client = manual / 'mtc-client-n16/ecdsa-p256'
 server_manifest = json.loads((repo / server / 'manifest.json').read_text())
-client_manifest = json.loads((repo / client / 'manifest.json').read_text())
 values = {
-    'X509_SERVER_CERT': manual / 'pq-server.pem',
-    'X509_SERVER_KEY': manual / 'pq-server.key',
-    'X509_SERVER_CA': manual / 'pq-server-ca.pem',
-    'X509_CLIENT_CERT': manual / 'client.pem',
-    'X509_CLIENT_KEY': manual / 'client.key',
-    'X509_CLIENT_CA': manual / 'client-ca.pem',
     'MTC_SERVER_CERT': server / 'landmark-0000.pem',
     'MTC_SERVER_KEY': mtc_root / 'population/mldsa65/0.key',
     'MTC_SERVER_TRUST': server / 'trust.bin',
-    'MTC_CLIENT_CERT': client / 'landmark-0000.pem',
-    'MTC_CLIENT_STANDALONE_CERT': client / 'standalone-0000.pem',
-    'MTC_CLIENT_KEY': manual / 'mtc-client-source/client-0000.key',
-    'MTC_CLIENT_TRUST': client / 'trust.bin',
-    'MTC_CLIENT_AUTHORITY': client / 'authority.bin',
 }
 missing = [str(path) for path in values.values() if not (repo / path).is_file()]
 if missing:
     raise SystemExit('ERROR: automatic handshake fixtures are incomplete: ' + ', '.join(missing))
 text = f'''# Automatically derived from validated active fixtures.
 # X.509 and MTC use matching server profiles across all nine active profiles, leaf 0.
-# Mutual authentication uses ECDSA P-256 client credentials in both families.
+# Mutual authentication uses matching client/server signature profiles.
 KEM={kem}
 RUNS=30
 WARMUPS=5
 PCAP_RUNS=30
 
 '''
-text += ''.join(f'{key}={path}\n' for key, path in values.items() if key.startswith('X509_'))
-text += '\n' + ''.join(f'{key}={path}\n' for key, path in values.items() if key.startswith('MTC_SERVER_') and key != 'MTC_SERVER_ID')
+text += ''.join(f'{key}={path}\n' for key, path in values.items() if key.startswith('MTC_SERVER_') and key != 'MTC_SERVER_ID')
 text += f"MTC_SERVER_ID={server_manifest['ca_id']}.1.1.1\n\n"
-text += ''.join(f'{key}={path}\n' for key, path in values.items() if key.startswith('MTC_CLIENT_') and key != 'MTC_CLIENT_ID')
-text += f"MTC_CLIENT_ID={client_manifest['ca_id']}.1.1.1\n"
 text += f"MTC_ROOT={mtc_root}\n"
+text += "MUTUAL_CLIENT_ROOT=artifacts/validation/handshake-performance-mutual-v2\n"
 output.parent.mkdir(parents=True, exist_ok=True)
 temporary = output.with_name(output.name + '.tmp')
 temporary.write_text(text)
@@ -276,8 +252,11 @@ common=()
 configure_kem x25519
 
 case_args() {
-  local profile=$1 case_name=$2 population="$MTC_ROOT/population/$1" mtc="$MTC_ROOT/batch16/mtc/$1" ca_id
+  local profile=$1 case_name=$2 population="$MTC_ROOT/population/$1" mtc="$MTC_ROOT/batch16/mtc/$1" ca_id client client_mtc client_id
+  client="$MUTUAL_CLIENT_ROOT/profiles/$profile"
+  client_mtc="$client/mtc-n16"
   ca_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ca_id"])' "$REPO/$mtc/manifest.json")
+  client_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ca_id"])' "$REPO/$client_mtc/manifest.json")
   server_args=(); client_args=()
   case "$case_name" in
     x509-simple)
@@ -293,16 +272,16 @@ case_args() {
       client_args=(-mtc_trust "$(inside "$mtc/authority.bin")")
       ;;
     x509-mutual)
-      server_args=(-cert "$(inside "$population/0.pem")" -key "$(inside "$population/0.key")" -CAfile "$(inside "$X509_CLIENT_CA")" -Verify 1 -verify_return_error)
-      client_args=(-CAfile "$(inside "$population/ca.pem")" -verify_hostname server -cert "$(inside "$X509_CLIENT_CERT")" -key "$(inside "$X509_CLIENT_KEY")")
+      server_args=(-cert "$(inside "$population/0.pem")" -key "$(inside "$population/0.key")" -CAfile "$(inside "$client/x509/client-ca.pem")" -Verify 1 -verify_return_error)
+      client_args=(-CAfile "$(inside "$population/ca.pem")" -verify_hostname server -cert "$(inside "$client/x509/client.pem")" -key "$(inside "$client/x509/client.key")")
       ;;
     mtc-mutual-landmark)
-      server_args=(-cert "$(inside "$mtc/landmark-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id.1.1.1" -mtc_client_trust "$(inside "$MTC_CLIENT_TRUST")" -mtc_landmark -Verify 1 -verify_return_error)
-      client_args=(-mtc_trust "$(inside "$mtc/trust.bin")" -mtc_landmark -cert "$(inside "$MTC_CLIENT_CERT")" -key "$(inside "$MTC_CLIENT_KEY")" -mtc_client_id "$MTC_CLIENT_ID")
+      server_args=(-cert "$(inside "$mtc/landmark-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id.1.1.1" -mtc_client_trust "$(inside "$client_mtc/trust.bin")" -mtc_landmark -Verify 1 -verify_return_error)
+      client_args=(-mtc_trust "$(inside "$mtc/trust.bin")" -mtc_landmark -cert "$(inside "$client_mtc/landmark-0000.pem")" -key "$(inside "$client/mtc-source/client-0000.key")" -mtc_client_id "$client_id.1.1.1")
       ;;
     mtc-mutual-standalone)
-      server_args=(-cert "$(inside "$mtc/standalone-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id" -mtc_client_trust "$(inside "$MTC_CLIENT_AUTHORITY")" -Verify 1 -verify_return_error)
-      client_args=(-mtc_trust "$(inside "$mtc/authority.bin")" -cert "$(inside "$MTC_CLIENT_STANDALONE_CERT")" -key "$(inside "$MTC_CLIENT_KEY")" -mtc_client_id "${MTC_CLIENT_ID%.1.1.1}")
+      server_args=(-cert "$(inside "$mtc/standalone-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id" -mtc_client_trust "$(inside "$client_mtc/authority.bin")" -Verify 1 -verify_return_error)
+      client_args=(-mtc_trust "$(inside "$mtc/authority.bin")" -cert "$(inside "$client_mtc/standalone-0000.pem")" -key "$(inside "$client/mtc-source/client-0000.key")" -mtc_client_id "$client_id")
       ;;
     *) fail "Unknown case: $case_name";;
   esac
@@ -468,7 +447,10 @@ write_summary() {
   python3 - "$output" "$KEM" "$KEM_LABEL" "$KEM_GROUP" <<'PY'
 import csv,json,math,statistics,sys
 from pathlib import Path
-root=Path(sys.argv[1]); result={'key_establishment':{'id':sys.argv[2],'label':sys.argv[3],'openssl_group':sys.argv[4]},'definitions':{
+root=Path(sys.argv[1]); result={
+ 'key_establishment':{'id':sys.argv[2],'label':sys.argv[3],'openssl_group':sys.argv[4]},
+ 'mutual_authentication':{'signature_pairing':'client_and_server_use_the_same_profile'},
+ 'definitions':{
  'process_wall_ms':'host monotonic time around one Docker client process; includes process/container overhead',
  'tcp_connect_wall_ms_native':'native client connection entry through successful TCP connect return',
  'handshake_wall_ms':'native TLS handshake start through handshake completion',
@@ -587,7 +569,7 @@ status_config() {
     return 1
   fi
   printf 'Configuration: %s\n' "$config"
-  if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config"; then
+  if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config" || ! grep -q '^MUTUAL_CLIENT_ROOT=' "$config"; then
     echo 'Status: INCOMPLETE (the first measurement will prepare dependencies and configure it automatically).'
   else
     echo 'Status: CONFIGURED'
@@ -673,7 +655,7 @@ case "$command" in
     echo "Key establishment: $KEM_LABEL ($KEM_GROUP)"
     echo "Output: $output"
 
-    if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config"; then
+    if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config" || ! grep -q '^MUTUAL_CLIENT_ROOT=' "$config"; then
       echo 'Configuration status: INCOMPLETE; run-native/run-pcap/run-native-pcap will prepare or reuse dependencies and configure it automatically.'
     else
       echo 'Configuration status: no REPLACE placeholders found; file and credential checks occur before execution.'
@@ -706,7 +688,7 @@ case "$command" in
     fi
     load_plan_counts "$config"
     requested_output=${3:-$(default_performance_output)}
-    if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config"; then
+    if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config" || ! grep -q '^MUTUAL_CLIENT_ROOT=' "$config"; then
       ensure_dependencies
       write_automatic_config "$config"
     fi

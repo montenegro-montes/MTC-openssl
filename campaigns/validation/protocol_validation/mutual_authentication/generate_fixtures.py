@@ -12,6 +12,11 @@ REPO = Path(__file__).resolve().parents[4]
 DEFAULT_OUTPUT = Path("artifacts/validation/mutual-auth-manual")
 IMAGE = "mt-tls-mtc:local"
 OPENSSL = "/opt/openssl/bin/openssl"
+PROFILES = (
+    "ecdsa-p256", "ecdsa-p384", "ecdsa-p521",
+    "mldsa44", "mldsa65", "mldsa87",
+    "slhdsa128s", "slhdsa192s", "slhdsa256s",
+)
 
 
 def checked(*args):
@@ -30,18 +35,24 @@ def key(path, algorithm, curve=None):
 
 
 def profile_args(profile):
-    if profile == "ecdsa-p256":
-        return "EC", "P-256", "sha256"
-    if profile == "mldsa65":
-        return "mldsa65", None, None
-    raise ValueError(profile)
+    return {
+        "ecdsa-p256": ("EC", "P-256", "sha256"),
+        "ecdsa-p384": ("EC", "P-384", "sha384"),
+        "ecdsa-p521": ("EC", "P-521", "sha512"),
+        "mldsa44": ("mldsa44", None, None),
+        "mldsa65": ("mldsa65", None, None),
+        "mldsa87": ("mldsa87", None, None),
+        "slhdsa128s": ("slhdsasha2128s", None, None),
+        "slhdsa192s": ("slhdsasha2192s", None, None),
+        "slhdsa256s": ("slhdsasha2256s", None, None),
+    }[profile]
 
 
-def issue_pair(root, profile, role, ca_name, leaf_name, hostname, *, wrong=False):
+def issue_pair(root, profile, role, ca_name, leaf_name, hostname, *, wrong=False, fixed_stem=None):
     algorithm, curve, digest = profile_args(profile)
     prefix = "pq-" if profile == "mldsa65" else ""
-    ca_stem = f"{prefix}{role}-ca" if not wrong else "wrong-client-ca"
-    leaf_stem = f"{prefix}{role}" if not wrong else "wrong-client"
+    ca_stem = f"{fixed_stem}-ca" if fixed_stem else (f"{prefix}{role}-ca" if not wrong else "wrong-client-ca")
+    leaf_stem = fixed_stem if fixed_stem else (f"{prefix}{role}" if not wrong else "wrong-client")
     ca_key, ca_cert = root / f"{ca_stem}.key", root / f"{ca_stem}.pem"
     leaf_key, leaf_cert = root / f"{leaf_stem}.key", root / f"{leaf_stem}.pem"
     key(ca_key, algorithm, curve)
@@ -87,6 +98,57 @@ def mtc_domain(root, name):
                               "role": "client", "domain": name})
 
 
+def performance_client(root, profile):
+    """Generate matching X.509 and MTC client credentials for one profile."""
+    sys.path.insert(0, "/repo/src/mtc")
+    import prepare
+    algorithm, curve, digest_name = profile_args(profile)
+    digest_arg = [f"-{digest_name}"] if digest_name else []
+    base = root / "profiles" / profile
+    x509, source, target = base / "x509", base / "mtc-source", base / "mtc-n16"
+    x509.mkdir(parents=True)
+    source.mkdir(parents=True)
+
+    issue_pair(x509, profile, "client", f"Performance Client CA {profile}",
+               "client", "client", fixed_stem="client")
+
+    originals = []
+    for index in range(16):
+        stem = f"client-{index:04d}"
+        leaf_key, leaf_cert = source / f"{stem}.key", source / f"{stem}.pem"
+        key(leaf_key, algorithm, curve)
+        openssl("req", "-new", "-x509", "-key", leaf_key, "-out", leaf_cert,
+                "-days", "30", "-set_serial", str(index + 1),
+                "-subj", f"/CN={stem}",
+                "-addext", "basicConstraints=critical,CA:FALSE",
+                "-addext", "keyUsage=critical,digitalSignature",
+                "-addext", "extendedKeyUsage=clientAuth", *digest_arg)
+        originals.append(leaf_cert)
+    prepare.prepare(target, source, profile, 16, originals=originals,
+                    metadata={"experiment": "handshake-performance",
+                              "role": "client", "profile": profile})
+
+
+def generate_performance_clients(output):
+    os.umask(0o077)
+    output.mkdir(parents=True, exist_ok=False)
+    for profile in PROFILES:
+        performance_client(output, profile)
+    files = {str(p.relative_to(output)): digest(p) for p in sorted(output.rglob("*")) if p.is_file()}
+    manifest = {
+        "schema": 1,
+        "purpose": "nine-profile matching mutual-authentication clients",
+        "status": "PREPARED_NOT_VALIDATED",
+        "image_id": os.environ.get("MTC_IMAGE_ID"),
+        "git_commit": os.environ.get("MTC_GIT_COMMIT"),
+        "profiles": list(PROFILES),
+        "mtc_tree_size": 16,
+        "file_sha256": files,
+    }
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    print(output)
+
+
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -122,6 +184,7 @@ def main():
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--image", default=IMAGE)
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--performance-clients", action="store_true")
     parser.add_argument("--inside", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     output = args.output.resolve()
@@ -130,7 +193,10 @@ def main():
             parser.error("invalid internal execution request")
         if output.exists():
             parser.error(f"output exists and is immutable: {output}")
-        generate(output)
+        if args.performance_clients:
+            generate_performance_clients(output)
+        else:
+            generate(output)
         return
     artifacts = (REPO / "artifacts/validation").resolve()
     if not output.is_relative_to(artifacts):
@@ -139,7 +205,9 @@ def main():
         parser.error(f"output exists and is immutable: {output}")
     if not args.execute:
         print(json.dumps({"execute": False, "image": args.image, "output": str(output),
-                          "profiles": ["ecdsa-p256", "mldsa65"], "mtc_domains": 2}, indent=2))
+                          "profiles": list(PROFILES) if args.performance_clients else ["ecdsa-p256", "mldsa65"],
+                          "performance_clients": args.performance_clients,
+                          "mtc_domains": 0 if args.performance_clients else 2}, indent=2))
         return
     image_id = json.loads(checked("docker", "image", "inspect", args.image).stdout)[0]["Id"]
     commit = checked("git", "rev-parse", "HEAD").stdout.strip()
@@ -151,6 +219,8 @@ def main():
                "-v", f"{REPO}:/repo:ro", "-v", f"{output.parent}:/output",
                "--entrypoint", "python3", args.image, f"/repo/{relative}",
                "--inside", "--execute", "--output", f"/output/{output.name}"]
+    if args.performance_clients:
+        command.append("--performance-clients")
     print("Executing fixture generation in the pinned local image.")
     subprocess.run(command, check=True)
 

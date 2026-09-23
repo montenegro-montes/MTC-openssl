@@ -80,7 +80,7 @@ def main():
         cases='X.509 simple, MTC simple landmark and standalone, X.509 mutual authentication, and MTC mutual landmark and standalone'
     start=dt.datetime.fromtimestamp(args.started_epoch,dt.timezone.utc).isoformat(); end=dt.datetime.fromtimestamp(args.ended_epoch,dt.timezone.utc).isoformat()
     sections=[
-      ('What was executed',f'<p><strong>{esc(args.mode)}</strong> measured {cases}. Key establishment was <strong>{esc(args.kem_label)}</strong> using OpenSSL group <code>{esc(args.kem_group)}</code>. Native measurements use repeated client executions; PCAP measurements use independent packet captures from ClientHello through the last decrypted Finished.</p>'),
+      ('What was executed',f'<p><strong>{esc(args.mode)}</strong> measured {cases}. Key establishment was <strong>{esc(args.kem_label)}</strong> using OpenSSL group <code>{esc(args.kem_group)}</code>. In every mutual-authentication row, client and server use the same signature profile shown in the Profile column. Native measurements use repeated client executions; PCAP measurements use independent packet captures from ClientHello through the last decrypted Finished.</p>'),
       ('Native TCP, TLS, complete connection, process, and size measurements',source_tables(summary,'native')),
       ('Packet-capture TCP, TLS, connection, and size measurements',source_tables(summary,'pcap')),
       ('How to read the statistics','<p>The mean is the arithmetic average. Sample SD describes observation-to-observation dispersion. The median is resistant to isolated long executions. The 95% confidence interval estimates uncertainty around the mean using a two-sided Student t interval; it is not a range containing 95% of individual handshakes.</p>'),
