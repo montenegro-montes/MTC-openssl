@@ -8,6 +8,9 @@ x-lab: &lab
     - ../../campaigns/network/bandwidth:/opt/network-bandwidth:ro
   environment:
     PROFILE_DETAIL: "0"
+    MTC_KEM_ID: ${MTC_KEM_ID:-x25519}
+    MTC_KEM_LABEL: ${MTC_KEM_LABEL:-X25519}
+    MTC_TLS_GROUP: ${MTC_TLS_GROUP:-X25519}
     NETWORK_PROFILE: ${NETWORK_PROFILE:?Set NETWORK_PROFILE}
     NETWORK_AUTH_MODE: ${NETWORK_AUTH_MODE:?Set NETWORK_AUTH_MODE}
     NETWORK_MTC_ID: ${NETWORK_MTC_ID:?Set NETWORK_MTC_ID}

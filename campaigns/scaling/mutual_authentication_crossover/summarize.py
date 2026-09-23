@@ -682,6 +682,8 @@ def main():
     )
 
     manifest = {
+        "key_establishment": source_summary.get("key_establishment", "X25519"),
+        "openssl_group": source_summary.get("openssl_group", "X25519"),
         "experiment":
             "mutual-auth-crossover",
 

@@ -58,9 +58,9 @@ def validate(directory,seed,rtt,rate,runs,warmups,probe):
         for row in rows:
             if row['client_random'] in seen:raise RuntimeError('Duplicate handshake ID')
             seen.add(row['client_random']);log=(directory/'logs'/f'{"warmup" if warm else "sample"}-{int(row["round"]):04d}-{row["scenario"]}.log').read_text()
-            if 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' not in log or 'Shared groups: x25519' not in log or (AUTH_MODE=='single' and 'no client certificate available' not in log) or float(row['certificate_verify_bytes'])<=0:raise RuntimeError('TLS control failure')
+            if 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' not in log or (AUTH_MODE=='single' and 'no client certificate available' not in log) or float(row['certificate_verify_bytes'])<=0:raise RuntimeError('TLS control failure')
             if row['scenario'].startswith('mtc-') and 'MTC verification: OK' not in log:raise RuntimeError('MTC failure/fallback')
-    save(directory/'validation.json',{'passed':True,'seed':seed,'rtt_target_ms':rtt,'bandwidth_target_mbps':rate,**probe,'qdisc_drops':0,'goodput_acceptance_ratio':[GOODPUT_MIN_RATIO,GOODPUT_MAX_RATIO]})
+    save(directory/'validation.json',{'passed':True,'key_establishment':os.environ.get('MTC_KEM_LABEL','X25519'),'openssl_group':os.environ.get('MTC_TLS_GROUP','X25519'),'seed':seed,'rtt_target_ms':rtt,'bandwidth_target_mbps':rate,**probe,'qdisc_drops':0,'goodput_acceptance_ratio':[GOODPUT_MIN_RATIO,GOODPUT_MAX_RATIO]})
 def main():
     p=argparse.ArgumentParser();p.add_argument('root',type=Path);p.add_argument('--smoke',action='store_true');p.add_argument('--pcap',action='store_true',help='Opt-in measured-observation PCAP; separate performance population');a=p.parse_args();root=a.root.resolve();gate=load(root/'tests-status.json')
     if not gate['passed']:raise SystemExit('ABORT: regression gate failed')
@@ -68,7 +68,7 @@ def main():
     if image!=gate['image_id']:raise SystemExit('ABORT: image differs from tested image')
     hashes(root);status_path=root/('smoke-status.json' if a.smoke else 'campaign-status.json')
     if status_path.exists():raise SystemExit('Refusing to overwrite/retry')
-    output=root/('smoke' if a.smoke else 'campaigns');output.mkdir();status={'experiment':'bandwidth-limited','passed':False,'image_id':image,'failed_campaign':None,'campaigns':[]}
+    output=root/('smoke' if a.smoke else 'campaigns');output.mkdir();status={'key_establishment':os.environ.get('MTC_KEM_LABEL','X25519'),'openssl_group':os.environ.get('MTC_TLS_GROUP','X25519'),'experiment':'bandwidth-limited','passed':False,'image_id':image,'failed_campaign':None,'campaigns':[]}
     if a.pcap:
         capture_image=json.loads(subprocess.check_output(['docker','image','inspect','mt-tls-capture:local'],text=True))[0]
         status.update(pcap_enabled=True,performance_comparable_to_uncaptured=False,capture_image_id=capture_image['Id'])

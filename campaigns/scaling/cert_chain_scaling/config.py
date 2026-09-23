@@ -1,6 +1,6 @@
 """Frozen Paper-1 design, sharing the explicit signature-profile registry."""
 from pathlib import Path
-import sys
+import os,sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[3]/'src/mtc'))
 from crypto_profiles import PAPER1_PROFILES, LEGACY_PROFILE_MAP
 
@@ -11,7 +11,7 @@ PROFILES = {
 }
 DEPTHS = (2, 3, 4, 5)
 TREE_SIZES = (1, 4, 16, 64, 256)
-TLS = {"version": "TLSv1.3", "group": "X25519", "cipher": "TLS_AES_256_GCM_SHA384",
+TLS = {"version": "TLSv1.3", "group": os.environ.get("MTC_TLS_GROUP", "X25519"), "cipher": "TLS_AES_256_GCM_SHA384",
        "tickets": False, "resumption": False, "zero_rtt": False, "client_authentication": False}
 IMAGE = "mt-tls-mtc:local"
 MTC_PROFILE_MAP = {name:name for name in PAPER1_PROFILES}

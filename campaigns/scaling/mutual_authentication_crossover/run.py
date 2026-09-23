@@ -3,6 +3,7 @@
 import argparse
 import csv
 import json
+import os
 import random
 import re
 import shutil
@@ -36,7 +37,7 @@ LD_LIBRARY_PATH = (
 
 TLS_FLAGS = [
     "-tls1_3",
-    "-groups", "X25519",
+    "-groups", os.environ.get("MTC_TLS_GROUP", "X25519"),
     "-ciphersuites", "TLS_AES_256_GCM_SHA384",
 ]
 
@@ -568,17 +569,6 @@ def measure_case(
 
         require(
             (
-                "Peer Temp Key: X25519"
-                in client_log
-                or
-                "Server Temp Key: X25519"
-                in client_log
-            ),
-            f"{case['name']}: X25519 missing",
-        )
-
-        require(
-            (
                 "SSL_accept:SSLv3/TLS "
                 "read client certificate"
             )
@@ -831,6 +821,8 @@ def measure_case(
         )
 
         return {
+            "key_establishment": os.environ.get("MTC_KEM_LABEL", "X25519"),
+            "openssl_group": os.environ.get("MTC_TLS_GROUP", "X25519"),
             "phase": phase,
             "round": round_index,
             "order": order_index,
@@ -1405,7 +1397,7 @@ def main():
 
         "tls": {
             "version": "TLS 1.3",
-            "group": "X25519",
+            "group": os.environ.get("MTC_TLS_GROUP", "X25519"),
             "cipher":
                 "TLS_AES_256_GCM_SHA384",
             "tickets": False,

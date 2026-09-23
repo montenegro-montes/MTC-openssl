@@ -4,7 +4,7 @@ import os,signal,subprocess,time
 from pathlib import Path
 OPENSSL='/opt/mtc/openssl.sh';PROFILE=os.environ['NETWORK_PROFILE'];MODE=os.environ.get('NETWORK_AUTH_MODE','single');MTC_ID=os.environ['NETWORK_MTC_ID']
 metrics=Path(os.environ['MEASUREMENT_RUN_ROOT'])/os.environ['MEASUREMENT_CAMPAIGN_ID']/'server-metrics';metrics.mkdir(parents=True,exist_ok=True)
-common=['-tls1_3','-groups','X25519','-ciphersuites','TLS_AES_256_GCM_SHA384','-num_tickets','0','-www','-lab_metrics']
+common=['-tls1_3','-groups',os.environ.get('MTC_TLS_GROUP','X25519'),'-ciphersuites','TLS_AES_256_GCM_SHA384','-num_tickets','0','-www','-lab_metrics']
 if MODE=='single':
  root=f"/repo/{os.environ['NETWORK_SINGLE_ROOT']}";pop=f'{root}/population/{PROFILE}';mtc=f'{root}/batch16/mtc/{PROFILE}';key=f'{pop}/0.key';cases=[(4433,f'{pop}/0.pem',key,[]),(4434,f'{mtc}/landmark-0000.pem',key,['-mtc_id',MTC_ID]),(4435,f'{mtc}/standalone-0000.pem',key,['-mtc_id',MTC_ID.rsplit('.',3)[0]])]
 elif MODE=='mutual':

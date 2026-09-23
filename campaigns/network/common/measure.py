@@ -11,7 +11,7 @@ def write(path,data):
 def write_failures(path,data):
  with path.open('w',newline='') as f:w=csv.DictWriter(f,fieldnames=FAILURE_FIELDS);w.writeheader();w.writerows(data)
 def client_args(host,scenario,profile,mode):
- args=[OPENSSL,'s_client','-connect',f'{host}:{PORTS[scenario]}','-servername','server','-verify_hostname','server','-verify_return_error','-no_ticket','-ign_eof','-tls1_3','-groups','X25519','-ciphersuites','TLS_AES_256_GCM_SHA384','-lab_metrics']
+ args=[OPENSSL,'s_client','-connect',f'{host}:{PORTS[scenario]}','-servername','server','-verify_hostname','server','-verify_return_error','-no_ticket','-ign_eof','-tls1_3','-groups',os.environ.get('MTC_TLS_GROUP','X25519'),'-ciphersuites','TLS_AES_256_GCM_SHA384','-lab_metrics']
  variant=scenario.rsplit('-',1)[-1] if scenario.startswith('mtc-') else ''
  if mode=='single':
   root=f"/repo/{os.environ['NETWORK_SINGLE_ROOT']}";pop=f'{root}/population/{profile}';mtc=f'{root}/batch16/mtc/{profile}'
@@ -45,7 +45,7 @@ def main():
      if allow_failures:continue
      raise RuntimeError(f'{scenario}: TLS measurement failed ({reason})')
     m=json.loads(found[0]);components=m.get('components',{});mtc=components.get('peer_auth',{}).get('mtc',{}) if isinstance(components.get('peer_auth'),dict) else {}
-    row={'campaign_id':os.environ['MEASUREMENT_CAMPAIGN_ID'],'profile':profile,'authentication':mode,'round':round_id-1,'round_id':round_id,'order':position-1,'order_in_round':position,'scenario_order':position,'scenario':scenario,'tree_size':16,'seed':a.seed,'is_warmup':warm,'client_random':m['client_random'],'handshake_wall_ms':m['handshake_wall_ms'],'handshake_client_cpu_ms':m['handshake_cpu_ms'],'certificate_message_bytes':m['certificate_message_bytes'],'certificate_verify_bytes':m['certificate_verify_message_bytes'],'transport_read_bytes':m['transport_read_bytes'],'transport_written_bytes':m['transport_written_bytes'],'transport_total_bytes':m['transport_read_bytes']+m['transport_written_bytes'],'mtc_proof_encoded_bytes':mtc.get('proof_encoded_bytes',0),'mtc_signature_bytes':mtc.get('signature_bytes',0),'mtc_inclusion_proof_bytes':mtc.get('inclusion_proof_bytes',0),'image_id':a.image_id,'success':1}
+    row={'campaign_id':os.environ['MEASUREMENT_CAMPAIGN_ID'],'profile':profile,'authentication':mode,'key_establishment':os.environ.get('MTC_KEM_LABEL','X25519'),'openssl_group':os.environ.get('MTC_TLS_GROUP','X25519'),'round':round_id-1,'round_id':round_id,'order':position-1,'order_in_round':position,'scenario_order':position,'scenario':scenario,'tree_size':16,'seed':a.seed,'is_warmup':warm,'client_random':m['client_random'],'handshake_wall_ms':m['handshake_wall_ms'],'handshake_client_cpu_ms':m['handshake_cpu_ms'],'certificate_message_bytes':m['certificate_message_bytes'],'certificate_verify_bytes':m['certificate_verify_message_bytes'],'transport_read_bytes':m['transport_read_bytes'],'transport_written_bytes':m['transport_written_bytes'],'transport_total_bytes':m['transport_read_bytes']+m['transport_written_bytes'],'mtc_proof_encoded_bytes':mtc.get('proof_encoded_bytes',0),'mtc_signature_bytes':mtc.get('signature_bytes',0),'mtc_inclusion_proof_bytes':mtc.get('inclusion_proof_bytes',0),'image_id':a.image_id,'success':1}
     (warmups if warm else measured).append(row);write(out/('warmups.csv' if warm else 'samples.csv'),warmups if warm else measured)
  print(out)
 if __name__=='__main__':main()

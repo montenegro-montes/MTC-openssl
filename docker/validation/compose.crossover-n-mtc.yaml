@@ -12,6 +12,9 @@ x-common: &common
     CERT_PROFILE: "${CERT_PROFILE:-missing-profile}"
     MTC_TREE_SIZE: "${MTC_TREE_SIZE:-missing-tree-size}"
     PROFILE_DETAIL: "1"
+    MTC_KEM_ID: ${MTC_KEM_ID:-x25519}
+    MTC_KEM_LABEL: ${MTC_KEM_LABEL:-X25519}
+    MTC_TLS_GROUP: ${MTC_TLS_GROUP:-X25519}
 
 services:
   server:
@@ -39,6 +42,9 @@ services:
       CERT_PROFILE_NAME: "${CERT_PROFILE:-missing-profile}"
       MTC_TREE_SIZE: "${MTC_TREE_SIZE:-missing-tree-size}"
       PROFILE_DETAIL: "1"
+      MTC_KEM_ID: ${MTC_KEM_ID:-x25519}
+      MTC_KEM_LABEL: ${MTC_KEM_LABEL:-X25519}
+      MTC_TLS_GROUP: ${MTC_TLS_GROUP:-X25519}
       FIXTURE_SHA256: "${FIXTURE_SHA256:-missing-fixture-sha256}"
       SOURCE_COMMIT: "${SOURCE_COMMIT:-missing-source-commit}"
       IMAGE_ID: "${IMAGE_ID:-missing-image-id}"

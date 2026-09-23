@@ -33,7 +33,7 @@ args = [
     "-www",
     "-tls1_3",
     "-groups",
-    "X25519",
+    os.environ.get("MTC_TLS_GROUP", "X25519"),
     "-ciphersuites",
     "TLS_AES_256_GCM_SHA384",
     "-num_tickets",

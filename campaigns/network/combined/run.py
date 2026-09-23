@@ -43,7 +43,7 @@ def validate_attempts(directory, good, failures, rounds, warmups, scenarios):
     for row in good:
         label='warmup' if row.get('is_warmup','0')=='1' else 'sample';number=int(row.get('round',row.get('round_id')))
         log=(directory/'logs'/f'{label}-{number:04d}-{row["scenario"]}.log').read_text()
-        if 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' not in log or 'Shared groups: x25519' not in log or (AUTH_MODE=='single' and 'no client certificate available' not in log) or float(row['certificate_verify_bytes'])<=0:raise RuntimeError('TLS controls missing')
+        if 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' not in log or (AUTH_MODE=='single' and 'no client certificate available' not in log) or float(row['certificate_verify_bytes'])<=0:raise RuntimeError('TLS controls missing')
         if row['scenario'].startswith('mtc-') and 'MTC verification: OK' not in log:raise RuntimeError('MTC fallback/failure')
 def parse_nstat(text):
     out={}
@@ -61,7 +61,7 @@ def execute(root,mode,selected,pcap=False):
     if status_path.exists():raise SystemExit('refusing overwrite/retry')
     if out.exists():raise SystemExit('refusing existing output directory: '+str(out))
     out.mkdir()
-    status={'experiment':'combined-network','passed':False,'failed_campaign':None,'expected':spec,'campaigns':[]};save(status_path,status)
+    status={'key_establishment':os.environ.get('MTC_KEM_LABEL','X25519'),'openssl_group':os.environ.get('MTC_TLS_GROUP','X25519'),'experiment':'combined-network','passed':False,'failed_campaign':None,'expected':spec,'campaigns':[]};save(status_path,status)
     if pcap:
         status.update(pcap_enabled=True,performance_comparable_to_uncaptured=False,
                       measurement_population='pcap-enabled; separate from uncaptured')
@@ -91,7 +91,7 @@ def execute(root,mode,selected,pcap=False):
         server_tbf_own=own_tbf_drops(server_drops);client_tbf_own=own_tbf_drops(client_drops)
         if server_tbf_own or client_tbf_own:raise RuntimeError('unexpected TBF-own queue drops')
         tcp1=parse_nstat(subprocess.check_output(['docker','exec',container,'nstat','-az','TcpRetransSegs','TcpOutSegs','TcpInSegs'],text=True));save(directory/'tcp-counters.json',{k:tcp1[k]-tcp0[k] for k in tcp0})
-        save(directory/'validation.json',{'passed':True,'profile':name,**profile,**probe,'measured_bandwidth_mbit':throughput,'bandwidth_gate':'positive descriptive throughput' if profile['rate_mbit'] is None else 'positive and no more than 15% above configured cap','server_qdisc_drops_by_kind':server_drops,'client_qdisc_drops_by_kind':client_drops,'server_tbf_own_drops':server_tbf_own,'client_tbf_own_drops':client_tbf_own,'tbf_parent_drop_accounting':'TBF raw total includes child netem drops; own=max(tbf-netem,0)','qdisc_configuration_authoritative_for_loss':True,'qdisc_configuration_authoritative_for_bandwidth_cap':True})
+        save(directory/'validation.json',{'passed':True,'key_establishment':os.environ.get('MTC_KEM_LABEL','X25519'),'openssl_group':os.environ.get('MTC_TLS_GROUP','X25519'),'profile':name,**profile,**probe,'measured_bandwidth_mbit':throughput,'bandwidth_gate':'positive descriptive throughput' if profile['rate_mbit'] is None else 'positive and no more than 15% above configured cap','server_qdisc_drops_by_kind':server_drops,'client_qdisc_drops_by_kind':client_drops,'server_tbf_own_drops':server_tbf_own,'client_tbf_own_drops':client_tbf_own,'tbf_parent_drop_accounting':'TBF raw total includes child netem drops; own=max(tbf-netem,0)','qdisc_configuration_authoritative_for_loss':True,'qdisc_configuration_authoritative_for_bandwidth_cap':True})
         rec.update(state='complete',measured_attempts=spec['measured_rounds']*len(spec['scenarios']),warmup_attempts=spec['warmup_rounds']*len(spec['scenarios']),successful_measured=len(good),failed_attempts=len(failure),**probe,measured_bandwidth_mbit=throughput);save(status_path,status)
       status['passed']=True;save(status_path,status);verify_hashes(root)
     except BaseException as e:

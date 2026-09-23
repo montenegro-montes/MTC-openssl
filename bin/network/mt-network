@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd);cd "$REPO"
-STATE="$REPO/.mt-state/network";CONFIG="$STATE/paths.env"
+STATE=${MT_NETWORK_STATE:-"$REPO/.mt-state/network"};CONFIG="$STATE/paths.env"
 PROFILES=(ecdsa-p256 ecdsa-p384 ecdsa-p521 mldsa44 mldsa65 mldsa87 slhdsa128s slhdsa192s slhdsa256s)
 fail(){ printf 'ERROR: %s\n' "$*" >&2;exit 1; }
+configure_kem(){ case "${1:-1}" in 1|x25519) KEM=x25519;KEM_LABEL=X25519;KEM_GROUP=X25519;KEM_SLUG=x25519;;2|x25519-mlkem512) KEM=x25519-mlkem512;KEM_LABEL=X25519+ML-KEM512;KEM_GROUP=x25519_mlkem512;KEM_SLUG=x25519-mlkem512;;3|mlkem512) KEM=mlkem512;KEM_LABEL=ML-KEM-512;KEM_GROUP=mlkem512;KEM_SLUG=mlkem512;;*)fail 'KEM must be 1/x25519, 2/x25519-mlkem512 or 3/mlkem512.';;esac;export KEM KEM_LABEL KEM_GROUP KEM_SLUG MTC_KEM_ID="$KEM" MTC_KEM_LABEL="$KEM_LABEL" MTC_TLS_GROUP="$KEM_GROUP"; }
+select_kem(){ local x;printf 'Key establishment:\n  1 X25519 (default)\n  2 X25519+ML-KEM512\n  3 ML-KEM-512\n' >&2;read -r -p '> ' x||x=1;configure_kem "${x:-1}"; }
 load(){
  [[ -f "$CONFIG" ]]||fail 'Run init first.';source "$CONFIG"
+ configure_kem "${KEM:-x25519}"
  if [[ -z "${NETWORK_SINGLE_ROOT:-}" ]];then
   local scaling=.mt-state/cert-scaling/paths.env;[[ -f "$scaling" ]]||fail 'Initialize mt-cert-scaling first.';source "$scaling"
   NETWORK_SINGLE_ROOT=${MTC16#"$REPO"/};NETWORK_MUTUAL_ROOT=${MUTUAL_FIXTURES:-artifacts/scaling/mutual-auth-crossover/fixtures-$STAMP};NETWORK_MUTUAL_SERVER_X509=${MUTUAL_SERVER_FIXTURES:-artifacts/scaling/mutual-auth-crossover/server-x509-$STAMP}
@@ -14,6 +17,7 @@ load(){
 }
 save(){ mkdir -p "$STATE";(umask 077;cat > "$CONFIG" <<EOF
 STAMP=$(printf %q "$STAMP")
+KEM=$(printf %q "$KEM")
 NETWORK_SINGLE_ROOT=$(printf %q "$NETWORK_SINGLE_ROOT")
 NETWORK_MUTUAL_ROOT=$(printf %q "$NETWORK_MUTUAL_ROOT")
 NETWORK_MUTUAL_SERVER_X509=$(printf %q "$NETWORK_MUTUAL_SERVER_X509")
@@ -25,21 +29,21 @@ EOF
 );}
 init(){
  [[ ! -e "$CONFIG" ]]||fail 'Configuration exists; move it or use a new state file.'
- local scaling=.mt-state/cert-scaling/paths.env;[[ -f "$scaling" ]]||fail 'Initialize mt-cert-scaling first.';source "$scaling";STAMP=${1:-$(date -u +%Y%m%dT%H%M%SZ)}
+ local scaling=.mt-state/cert-scaling/paths.env;[[ -f "$scaling" ]]||fail 'Initialize mt-cert-scaling first.';source "$scaling";STAMP=${1:-$(date -u +%Y%m%dT%H%M%SZ)};if [[ -n "${2:-}" ]];then configure_kem "$2";else select_kem;fi
  NETWORK_SINGLE_ROOT=${MTC16#"$REPO"/};NETWORK_MUTUAL_ROOT=${MUTUAL_FIXTURES:-artifacts/scaling/mutual-auth-crossover/fixtures-$STAMP};NETWORK_MUTUAL_SERVER_X509=${MUTUAL_SERVER_FIXTURES:-artifacts/scaling/mutual-auth-crossover/server-x509-$STAMP}
- LATENCY_ROOT="artifacts/results/network-latency-$STAMP";BANDWIDTH_ROOT="artifacts/results/network-bandwidth-$STAMP";LOSS_ROOT="artifacts/results/network-loss-$STAMP";COMBINED_ROOT="artifacts/results/network-combined-$STAMP";save;printf 'Network paths saved; nothing executed.\n'
+ LATENCY_ROOT="artifacts/results/network-latency-$KEM_SLUG-$STAMP";BANDWIDTH_ROOT="artifacts/results/network-bandwidth-$KEM_SLUG-$STAMP";LOSS_ROOT="artifacts/results/network-loss-$KEM_SLUG-$STAMP";COMBINED_ROOT="artifacts/results/network-combined-$KEM_SLUG-$STAMP";save;printf 'Network paths saved for %s (%s); nothing executed.\n' "$KEM_LABEL" "$KEM_GROUP"
 }
 root_for(){ case "$1" in latency) printf %s "$LATENCY_ROOT";;bandwidth) printf %s "$BANDWIDTH_ROOT";;loss) printf %s "$LOSS_ROOT";;combined) printf %s "$COMBINED_ROOT";;*)fail 'Campaign must be latency, bandwidth, loss or combined.';;esac;}
 validate_mode(){ case "$1" in single|mutual);;*)fail 'Authentication must be single or mutual.';;esac;}
 mtc_id(){ case "$1" in ecdsa-p256)echo 32473.101.1.1.1;;ecdsa-p384)echo 32473.102.1.1.1;;ecdsa-p521)echo 32473.103.1.1.1;;mldsa44)echo 32473.111.1.1.1;;mldsa65)echo 32473.112.1.1.1;;mldsa87)echo 32473.113.1.1.1;;slhdsa128s)echo 32473.121.1.1.1;;slhdsa192s)echo 32473.122.1.1.1;;slhdsa256s)echo 32473.123.1.1.1;;esac;}
 select_profile(){ export NETWORK_PROFILE=$1 NETWORK_AUTH_MODE=$2 NETWORK_MTC_ID;NETWORK_MTC_ID=$(mtc_id "$1"); }
 profile_root(){ printf '%s/%s/%s' "$(root_for "$1")" "$2" "$3"; }
-status(){ load;for k in NETWORK_SINGLE_ROOT NETWORK_MUTUAL_ROOT NETWORK_MUTUAL_SERVER_X509 LATENCY_ROOT BANDWIDTH_ROOT LOSS_ROOT COMBINED_ROOT;do printf '%-28s %s\n' "$k" "${!k}";done;[[ -d "$NETWORK_MUTUAL_ROOT" && -d "$NETWORK_MUTUAL_SERVER_X509" ]]&&echo 'Mutual fixtures              available'||echo 'Mutual fixtures              missing (mt-cert-scaling mutual-crossover required)';for c in latency bandwidth loss combined;do for a in single mutual;do local n=0;for p in "${PROFILES[@]}";do [[ -f "$(profile_root "$c" "$a" "$p")/tests-status.json" ]]&&n=$((n+1));done;printf '%-18s %-7s %d/9 prepared\n' "$c" "$a" "$n";done;done;}
+status(){ load;printf 'Key establishment            %s (%s)\n' "$KEM_LABEL" "$KEM_GROUP";for k in NETWORK_SINGLE_ROOT NETWORK_MUTUAL_ROOT NETWORK_MUTUAL_SERVER_X509 LATENCY_ROOT BANDWIDTH_ROOT LOSS_ROOT COMBINED_ROOT;do printf '%-28s %s\n' "$k" "${!k}";done;[[ -d "$NETWORK_MUTUAL_ROOT" && -d "$NETWORK_MUTUAL_SERVER_X509" ]]&&echo 'Mutual fixtures              available'||echo 'Mutual fixtures              missing (mt-cert-scaling mutual-crossover required)';for c in latency bandwidth loss combined;do for a in single mutual;do local n=0;for p in "${PROFILES[@]}";do [[ -f "$(profile_root "$c" "$a" "$p")/tests-status.json" ]]&&n=$((n+1));done;printf '%-18s %-7s %d/9 prepared\n' "$c" "$a" "$n";done;done;}
 prepare(){ load;local c=$1 a=$2;validate_mode "$a";if [[ "$a" == mutual && ( ! -d "$NETWORK_MUTUAL_ROOT" || ! -d "$NETWORK_MUTUAL_SERVER_X509" ) ]];then fail 'Mutual fixtures are missing. Run bin/cryptographic_scaling/mt-cert-scaling mutual-crossover; this is an expensive campaign and is not started automatically.';fi;for p in "${PROFILES[@]}";do select_profile "$p" "$a";local r;r=$(profile_root "$c" "$a" "$p");python3 "campaigns/network/$c/control.py" init "$r";python3 "campaigns/network/$c/control.py" tests "$r";done;}
 run_one(){ local c=$1 r=$2;case "$c" in loss|combined)python3 "campaigns/network/$c/run.py" --root "$r" --preflight;python3 "campaigns/network/$c/run.py" --root "$r" --smoke;python3 "campaigns/network/$c/run.py" --root "$r";;*)python3 "campaigns/network/$c/run.py" "$r";;esac;}
 execute(){ load;local c=$1 a=$2;validate_mode "$a";for p in "${PROFILES[@]}";do select_profile "$p" "$a";local r;r=$(profile_root "$c" "$a" "$p");[[ -f "$r/tests-status.json" ]]||fail "Prepare $c $a first (missing $p).";printf '[NETWORK] campaign=%s authentication=%s profile=%s\n' "$c" "$a" "$p";run_one "$c" "$r";done;}
 show(){ load;local c=$1 a=$2;validate_mode "$a";printf 'bin/network/mt-network run %q %q\n' "$c" "$a";printf '# Executes 9 profiles; results: %s/%s/<profile>\n' "$(root_for "$c")" "$a";}
 analyze(){ load;local c=$1 a=$2;validate_mode "$a";local r;r="$(root_for "$c")/$a";python3 campaigns/network/$c/analyze.py "$r";python3 campaigns/network/$c/plots.py "$r";}
 build_command(){ printf '%s\n' 'docker build -f docker/network/Dockerfile.measurement -t mt-tls-network-measurement:local .' 'docker build -f docker/network/Dockerfile.network -t mt-tls-network:local .'; }
-menu(){ local x c a;while true;do printf '\nNetwork campaigns (9 profiles; single or mutual)\n1 Initialize  2 Status  3 Show image-build commands\n4 Prepare campaign  5 Show campaign commands\n6 Execute campaign  7 Analyze and plot  0 Exit\n';read -r -p '> ' x||return;case "$x" in 1)"$0" init||true;;2)"$0" status||true;;3)"$0" build-plan;;4|5|6|7)read -r -p 'Campaign (latency/bandwidth/loss/combined): ' c;read -r -p 'Authentication (single/mutual): ' a;case "$x" in 4)"$0" prepare "$c" "$a";;5)"$0" show "$c" "$a";;6)"$0" run "$c" "$a";;7)"$0" analyze "$c" "$a";;esac||true;;0)return;;esac;done;}
-case "${1:-menu}" in init)init "${2:-$(date -u +%Y%m%dT%H%M%SZ)}";;status)status;;build-plan)build_command;;prepare)prepare "${2:?campaign required}" "${3:?single or mutual required}";;show)show "${2:?campaign required}" "${3:?single or mutual required}";;run)execute "${2:?campaign required}" "${3:?single or mutual required}";;analyze)analyze "${2:?campaign required}" "${3:?single or mutual required}";;menu)menu;;*)fail 'Usage: mt-network init|status|build-plan|prepare|show|run|analyze [campaign] [single|mutual]' ;;esac
+menu(){ local x c a;while true;do printf '\nNetwork campaigns (9 profiles; single or mutual)\n1 Initialize configuration  2 Status  3 Show image-build commands\n4 Prepare campaign  5 Show campaign commands\n6 Execute campaign  7 Analyze and plot  0 Exit\n';read -r -p '> ' x||return;case "$x" in 1)"$0" init||true;;2)"$0" status||true;;3)"$0" build-plan;;4|5|6|7)read -r -p 'Campaign (latency/bandwidth/loss/combined): ' c;read -r -p 'Authentication (single/mutual): ' a;case "$x" in 4)"$0" prepare "$c" "$a";;5)"$0" show "$c" "$a";;6)"$0" run "$c" "$a";;7)"$0" analyze "$c" "$a";;esac||true;;0)return;;esac;done;}
+case "${1:-menu}" in init)init "${2:-$(date -u +%Y%m%dT%H%M%SZ)}" "${3:-}";;status)status;;build-plan)build_command;;prepare)prepare "${2:?campaign required}" "${3:?single or mutual required}";;show)show "${2:?campaign required}" "${3:?single or mutual required}";;run)execute "${2:?campaign required}" "${3:?single or mutual required}";;analyze)analyze "${2:?campaign required}" "${3:?single or mutual required}";;menu)menu;;*)fail 'Usage: mt-network init|status|build-plan|prepare|show|run|analyze [campaign] [single|mutual]' ;;esac

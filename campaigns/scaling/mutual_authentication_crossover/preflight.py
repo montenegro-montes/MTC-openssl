@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -25,11 +26,14 @@ SERVER_NAME = "mt-mutual-auth-crossover-server"
 COMMON_ENV = {
     "LD_LIBRARY_PATH":
         "/opt/openssl-mtc/lib:/opt/openssl/lib:/opt/oqs/lib",
+    "MTC_KEM_ID": os.environ.get("MTC_KEM_ID", "x25519"),
+    "MTC_KEM_LABEL": os.environ.get("MTC_KEM_LABEL", "X25519"),
+    "MTC_TLS_GROUP": os.environ.get("MTC_TLS_GROUP", "X25519"),
 }
 
 TLS_FLAGS = [
     "-tls1_3",
-    "-groups", "X25519",
+    "-groups", os.environ.get("MTC_TLS_GROUP", "X25519"),
     "-ciphersuites", "TLS_AES_256_GCM_SHA384",
 ]
 
@@ -708,7 +712,7 @@ def main():
         "expected_case_count": 3,
         "tls": {
             "version": "TLS 1.3",
-            "group": "X25519",
+            "group": os.environ.get("MTC_TLS_GROUP", "X25519"),
             "cipher":
                 "TLS_AES_256_GCM_SHA384",
             "tickets": False,

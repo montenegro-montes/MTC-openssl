@@ -21,12 +21,12 @@ def main():
  if not root.is_relative_to(REPO/'artifacts/results'):raise SystemExit('root must be below artifacts/results')
  if a.action=='init':
   if root.exists():raise SystemExit('output exists')
-  root.mkdir(parents=True);files=inputs();sources=[p for base in (REPO/'campaigns/network',REPO/'docker/network',REPO/'bin/network') for p in base.rglob('*') if p.is_file() and '__pycache__' not in p.parts and p.suffix!='.pyc'];save(root/'fixture-sha256.json',{str(f):sha(f) for f in files});save(root/'baseline-source-sha256.json',{str(f.relative_to(REPO)):sha(f) for f in sorted(sources)});save(root/'metadata.json',{'experiment':a.experiment,'profile':os.environ['NETWORK_PROFILE'],'authentication':os.environ['NETWORK_AUTH_MODE'],'scenarios':['x509','mtc-landmark','mtc-standalone'],'status':'PREPARED_NOT_EXECUTED'});print(root);return
+  root.mkdir(parents=True);files=inputs();sources=[p for base in (REPO/'campaigns/network',REPO/'docker/network',REPO/'bin/network') for p in base.rglob('*') if p.is_file() and '__pycache__' not in p.parts and p.suffix!='.pyc'];save(root/'fixture-sha256.json',{str(f):sha(f) for f in files});save(root/'baseline-source-sha256.json',{str(f.relative_to(REPO)):sha(f) for f in sorted(sources)});save(root/'metadata.json',{'experiment':a.experiment,'profile':os.environ['NETWORK_PROFILE'],'authentication':os.environ['NETWORK_AUTH_MODE'],'key_establishment':os.environ.get('MTC_KEM_LABEL','X25519'),'openssl_group':os.environ.get('MTC_TLS_GROUP','X25519'),'scenarios':['x509','mtc-landmark','mtc-standalone'],'status':'PREPARED_NOT_EXECUTED'});print(root);return
  for name in ('fixture-sha256.json','baseline-source-sha256.json'):
   for path,digest in json.loads((root/name).read_text()).items():
    file=Path(path) if Path(path).is_absolute() else REPO/path
    if not file.is_file() or sha(file)!=digest:raise SystemExit('preservation mismatch: '+path)
  if a.action=='tests':
-  image=json.loads(subprocess.check_output(['docker','image','inspect','mt-tls-network:local'],text=True))[0]['Id'];save(root/'tests-status.json',{'passed':True,'scope':'fixture/source preservation and image availability; no TLS executed','image_id':image});print(root/'tests-status.json')
+  image=json.loads(subprocess.check_output(['docker','image','inspect','mt-tls-network:local'],text=True))[0]['Id'];save(root/'tests-status.json',{'passed':True,'key_establishment':os.environ.get('MTC_KEM_LABEL','X25519'),'openssl_group':os.environ.get('MTC_TLS_GROUP','X25519'),'scope':'fixture/source preservation and image availability; no TLS executed','image_id':image});print(root/'tests-status.json')
  else:print('PASS',root)
 if __name__=='__main__':main()

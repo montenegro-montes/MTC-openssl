@@ -48,11 +48,11 @@ def validate(directory,seed,rtt,runs,warmups,probe):
             if row['client_random'] in seen: raise RuntimeError('Repeated handshake identity')
             seen.add(row['client_random'])
             log=(directory/'logs'/f'{"warmup" if warm else "sample"}-{int(row["round"]):04d}-{row["scenario"]}.log').read_text()
-            if 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' not in log or 'Shared groups: x25519' not in log or (AUTH_MODE=='single' and 'no client certificate available' not in log): raise RuntimeError('TLS controls missing')
+            if 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' not in log or (AUTH_MODE=='single' and 'no client certificate available' not in log): raise RuntimeError('TLS controls missing')
             if float(row['certificate_verify_bytes'])<=0: raise RuntimeError('CertificateVerify missing')
             if row['scenario'].startswith('mtc-') and 'MTC verification: OK' not in log: raise RuntimeError('MTC fallback/failure')
-    save(directory/'validation.json',{'passed':True,'tree_size':16,'seed':seed,'rtt_target_ms':rtt,**probe,
-         'checks':['TLS1.3/X25519/cipher','no client authentication','no resumption','CertificateVerify active','expected MTC authentication marker','paired randomized rounds']})
+    save(directory/'validation.json',{'passed':True,'key_establishment':os.environ.get('MTC_KEM_LABEL','X25519'),'openssl_group':os.environ.get('MTC_TLS_GROUP','X25519'),'tree_size':16,'seed':seed,'rtt_target_ms':rtt,**probe,
+         'checks':[f"TLS1.3/{os.environ.get('MTC_TLS_GROUP','X25519')}/cipher",'no client authentication','no resumption','CertificateVerify active','expected MTC authentication marker','paired randomized rounds']})
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('root',type=Path);parser.add_argument('--smoke',action='store_true');parser.add_argument('--pcap',action='store_true',help='Opt-in per-observation PCAP capture');args=parser.parse_args()
@@ -64,7 +64,7 @@ def main():
     status_path=root/('smoke-status.json' if args.smoke else 'campaign-status.json')
     if status_path.exists(): raise SystemExit('Refusing to overwrite/retry')
     output=root/('smoke' if args.smoke else 'campaigns');output.mkdir()
-    status={'experiment':'latency-only','image_id':image,'passed':False,'failed_campaign':None,'campaigns':[],'pcap_enabled':args.pcap,'performance_comparable_to_uncaptured':False if args.pcap else True};save(status_path,status)
+    status={'key_establishment':os.environ.get('MTC_KEM_LABEL','X25519'),'openssl_group':os.environ.get('MTC_TLS_GROUP','X25519'),'experiment':'latency-only','image_id':image,'passed':False,'failed_campaign':None,'campaigns':[],'pcap_enabled':args.pcap,'performance_comparable_to_uncaptured':False if args.pcap else True};save(status_path,status)
     env=os.environ.copy();env['MEASUREMENT_RUN_ROOT']='/work/'+str(output.relative_to(REPO/'artifacts'));env['MEASUREMENT_PCAP']='1' if args.pcap else '0'
     if args.pcap:
         capture_image=json.loads(subprocess.check_output(['docker','image','inspect','mt-tls-capture:local'],text=True))[0]

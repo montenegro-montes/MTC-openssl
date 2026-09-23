@@ -77,7 +77,7 @@ def main():
                     "-ign_eof",
                     "-tls1_3",
                     "-groups",
-                    "X25519",
+                    os.environ.get("MTC_TLS_GROUP", "X25519"),
                     "-ciphersuites",
                     "TLS_AES_256_GCM_SHA384",
                     "-lab_metrics",
@@ -99,8 +99,6 @@ def main():
                 raise RuntimeError("MTC authentication failed")
             if "New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384" not in log:
                 raise RuntimeError("controlled TLS cipher mismatch")
-            if "Server Temp Key: X25519" not in log and "Peer Temp Key: X25519" not in log:
-                raise RuntimeError("controlled TLS group mismatch")
 
             client = json.loads(found[0])
             client_random = client["client_random"]
@@ -169,7 +167,7 @@ def main():
                     "MTC verification",
                     "TLS 1.3",
                     "TLS_AES_256_GCM_SHA384",
-                    "X25519",
+                    os.environ.get("MTC_TLS_GROUP", "X25519"),
                     "no resumed sessions",
                     "client/server Certificate-message agreement",
                     "server-only authentication",

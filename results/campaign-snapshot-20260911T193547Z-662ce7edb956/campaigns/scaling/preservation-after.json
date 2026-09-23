@@ -1,9 +1,0 @@
-{
-  "passed": true,
-  "counts": {
-    "baseline-source-sha256.json": 3351,
-    "fixture-sha256.json": 15586,
-    "scaling-fixture-sha256.json": 34247
-  },
-  "checked_utc": "2026-09-10T06:25:16.467237+00:00"
-}

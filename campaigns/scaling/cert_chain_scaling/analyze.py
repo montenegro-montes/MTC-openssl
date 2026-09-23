@@ -43,7 +43,7 @@ def main():
  metrics=["handshake_wall_ms","client_cpu_ms","server_cpu_ms","authentication_processing_wall_ms","authentication_processing_cpu_ms","certificate_message_bytes","certificate_verify_message_bytes","tls_bio_read_bytes","tls_bio_written_bytes"]
  output=[]
  for scenario in sorted({r["scenario"] for r in rows}):
-  group=[r for r in rows if r["scenario"]==scenario];entry={"result_domain":"TLS_PERFORMANCE","scenario":scenario,"profile":group[0]["profile"],"family":group[0]["family"],"algorithm":group[0]["algorithm"],"security_level":group[0]["security_level"],"TLS_signature_supported":True,"n":len(group),"campaigns":len({r["campaign"] for r in group})}
+  group=[r for r in rows if r["scenario"]==scenario];entry={"result_domain":"TLS_PERFORMANCE","key_establishment":group[0].get("key_establishment","X25519"),"openssl_group":group[0].get("openssl_group","X25519"),"scenario":scenario,"profile":group[0]["profile"],"family":group[0]["family"],"algorithm":group[0]["algorithm"],"security_level":group[0]["security_level"],"TLS_signature_supported":True,"n":len(group),"campaigns":len({r["campaign"] for r in group})}
   for metric in metrics:
    values=[statistics.median(float(r[metric]) for r in group if r["campaign"]==c) for c in sorted({r["campaign"] for r in group})];entry[metric+"_median_of_campaign_medians"]=statistics.median(values)
    if len(values)>=2:
@@ -52,7 +52,7 @@ def main():
   output.append(entry)
  with target.open("x",newline="") as f:w=csv.DictWriter(f,fieldnames=list(output[0]));w.writeheader();w.writerows(output)
  write_support(table,support)
- with meta.open('x') as f:json.dump({'result_domain':'TLS_PERFORMANCE','excluded_cells':excluded,'image_id':environment.get('image_id') or environment['image']['Id'],
+ with meta.open('x') as f:json.dump({'result_domain':'TLS_PERFORMANCE','key_establishment':rows[0].get('key_establishment','X25519'),'openssl_group':rows[0].get('openssl_group','X25519'),'excluded_cells':excluded,'image_id':environment.get('image_id') or environment['image']['Id'],
    'caption':'Only complete cells supported by the recorded TLS stack are summarized. Unsupported signature schemes have no timing observation; static certificate results are separate.'},f,indent=2)
  print(target)
 if __name__=="__main__":main()

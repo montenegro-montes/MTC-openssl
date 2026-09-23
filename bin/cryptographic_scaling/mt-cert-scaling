@@ -4,13 +4,15 @@ set -euo pipefail
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$REPO"
 source "$REPO/bin/lib/docker-preflight.sh"
-STATE="$REPO/.mt-state/cert-scaling"
+STATE=${MT_CERT_SCALING_STATE:-"$REPO/.mt-state/cert-scaling"}
 CONFIG="$STATE/paths.env"
 CHAIN=campaigns/scaling/cert_chain_scaling
 MTC=campaigns/scaling/mtc_profile_scaling/workflow.py
 STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 80.crossover 85.crossover-html 90.audit 95.mtc-all-sizes 100.cross-advanced 102.crossover-boundary-audit 105.advanced-crossover-html 110.tls-depth-validation 120.mutual-auth-crossover 122.mutual-crossover-exact 124.mutual-boundary-audit 125.mutual-crossover-html)
 DEFAULT_STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 80.crossover 85.crossover-html 90.audit)
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+configure_kem() { case "${1:-1}" in 1|x25519) KEM=x25519;KEM_LABEL=X25519;KEM_GROUP=X25519;KEM_SLUG=x25519;; 2|x25519-mlkem512) KEM=x25519-mlkem512;KEM_LABEL=X25519+ML-KEM512;KEM_GROUP=x25519_mlkem512;KEM_SLUG=x25519-mlkem512;; 3|mlkem512) KEM=mlkem512;KEM_LABEL=ML-KEM-512;KEM_GROUP=mlkem512;KEM_SLUG=mlkem512;; *) fail 'KEM must be 1/x25519, 2/x25519-mlkem512 or 3/mlkem512.';; esac; export KEM KEM_LABEL KEM_GROUP KEM_SLUG MTC_KEM_ID="$KEM" MTC_KEM_LABEL="$KEM_LABEL" MTC_TLS_GROUP="$KEM_GROUP"; }
+select_kem() { local value; printf 'Key establishment:\n  1 X25519 (default)\n  2 X25519+ML-KEM512\n  3 ML-KEM-512\n' >&2; read -r -p '> ' value || value=1; configure_kem "${value:-1}"; }
 usage() {
  cat <<'HELP'
 Usage: bin/cryptographic_scaling/mt-cert-scaling [COMMAND]
@@ -43,11 +45,11 @@ TLS depth validation is manual: run 110 or tls-depth-validation.
 For a previous manual campaign, use init with its name and set its paths.
 HELP
 }
-load() { [[ -f "$CONFIG" ]] || fail 'Run init [NAME] first.'; source "$CONFIG"; ADVANCED_ROOT=${ADVANCED_ROOT:-${STATIC_ROOT}-advanced}; TLS_ROOT=${TLS_ROOT:-artifacts/results/cert-chain-tls-$STAMP}; MUTUAL_SERVER_FIXTURES=${MUTUAL_SERVER_FIXTURES:-artifacts/scaling/mutual-auth-crossover/server-x509-$STAMP}; MUTUAL_FIXTURES=${MUTUAL_FIXTURES:-artifacts/scaling/mutual-auth-crossover/fixtures-$STAMP}; MUTUAL_RESULTS=${MUTUAL_RESULTS:-artifacts/results/mutual-auth-crossover-$STAMP}; MUTUAL_ANALYSIS=${MUTUAL_ANALYSIS:-artifacts/results/mutual-auth-crossover-analysis-$STAMP}; MUTUAL_EXACT=${MUTUAL_EXACT:-artifacts/results/mutual-auth-crossover-exact-$STAMP}; MUTUAL_BOUNDARY=${MUTUAL_BOUNDARY:-artifacts/results/mutual-auth-crossover-boundary-audit-$STAMP}; BOUNDARY_ROOT=${BOUNDARY_ROOT:-artifacts/results/mtc-crossover-boundary-audit-$STAMP}; }
+load() { [[ -f "$CONFIG" ]] || fail 'Run init [NAME] first.'; source "$CONFIG"; configure_kem "${KEM:-x25519}"; ADVANCED_ROOT=${ADVANCED_ROOT:-${STATIC_ROOT}-advanced}; TLS_ROOT=${TLS_ROOT:-artifacts/results/cert-chain-tls-$STAMP}; MUTUAL_SERVER_FIXTURES=${MUTUAL_SERVER_FIXTURES:-artifacts/scaling/mutual-auth-crossover/server-x509-$STAMP}; MUTUAL_FIXTURES=${MUTUAL_FIXTURES:-artifacts/scaling/mutual-auth-crossover/fixtures-$STAMP}; MUTUAL_RESULTS=${MUTUAL_RESULTS:-artifacts/results/mutual-auth-crossover-$STAMP}; MUTUAL_ANALYSIS=${MUTUAL_ANALYSIS:-artifacts/results/mutual-auth-crossover-analysis-$STAMP}; MUTUAL_EXACT=${MUTUAL_EXACT:-artifacts/results/mutual-auth-crossover-exact-$STAMP}; MUTUAL_BOUNDARY=${MUTUAL_BOUNDARY:-artifacts/results/mutual-auth-crossover-boundary-audit-$STAMP}; BOUNDARY_ROOT=${BOUNDARY_ROOT:-artifacts/results/mtc-crossover-boundary-audit-$STAMP}; }
 save() {
  local key
  (umask 077; : > "$CONFIG.tmp"
- for key in STAMP CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT TLS_ROOT MUTUAL_SERVER_FIXTURES MUTUAL_FIXTURES MUTUAL_RESULTS MUTUAL_ANALYSIS MUTUAL_EXACT MUTUAL_BOUNDARY BOUNDARY_ROOT; do
+ for key in STAMP KEM CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT TLS_ROOT MUTUAL_SERVER_FIXTURES MUTUAL_FIXTURES MUTUAL_RESULTS MUTUAL_ANALYSIS MUTUAL_EXACT MUTUAL_BOUNDARY BOUNDARY_ROOT; do
   printf '%s=%q\n' "$key" "${!key}" >> "$CONFIG.tmp"
  done
  mv "$CONFIG.tmp" "$CONFIG")
@@ -55,25 +57,27 @@ save() {
 init() {
  [[ ! -e "$CONFIG" ]] || fail 'Configuration already exists. Use status and set; it will not be overwritten.'
  STAMP=${1:-$(date -u +%Y%m%dT%H%M%SZ)}
- [[ "$STAMP" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid date/name.'
- CHAIN_FIXTURES="artifacts/cert-chain-scaling/fixtures-$STAMP"
- CHAIN_VALID="artifacts/results/cert-chain-validation-$STAMP.json"
- ENVIRONMENT="artifacts/cert-chain-scaling/environment-$STAMP.json"
- SUPPORT="artifacts/cert-chain-scaling/algorithm_support-$STAMP.csv"
- MTC16="artifacts/mtc/n16-$STAMP"
- MTC_VALID="artifacts/results/mtc-n16-$STAMP"
- MTC_ALL="artifacts/mtc/all-$STAMP"
- STATIC_ROOT="artifacts/results/mtc-crossover-n16-$STAMP"
- ADVANCED_ROOT="artifacts/results/mtc-crossover-advanced-$STAMP"
- TLS_ROOT="artifacts/results/cert-chain-tls-$STAMP"
- AUDIT="artifacts/results/mtc-crossover-audit-$STAMP.json"
- MUTUAL_SERVER_FIXTURES="artifacts/scaling/mutual-auth-crossover/server-x509-$STAMP"
- MUTUAL_FIXTURES="artifacts/scaling/mutual-auth-crossover/fixtures-$STAMP"
- MUTUAL_RESULTS="artifacts/results/mutual-auth-crossover-$STAMP"
- MUTUAL_ANALYSIS="artifacts/results/mutual-auth-crossover-analysis-$STAMP"
- MUTUAL_EXACT="artifacts/results/mutual-auth-crossover-exact-$STAMP"
- MUTUAL_BOUNDARY="artifacts/results/mutual-auth-crossover-boundary-audit-$STAMP"
- BOUNDARY_ROOT="artifacts/results/mtc-crossover-boundary-audit-$STAMP"
+ if [[ -n "${2:-}" ]]; then configure_kem "$2"; else select_kem; fi
+ TAG="$KEM_SLUG-$STAMP"
+ [[ "$TAG" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid date/name.'
+ CHAIN_FIXTURES="artifacts/cert-chain-scaling/fixtures-$TAG"
+ CHAIN_VALID="artifacts/results/cert-chain-validation-$TAG.json"
+ ENVIRONMENT="artifacts/cert-chain-scaling/environment-$TAG.json"
+ SUPPORT="artifacts/cert-chain-scaling/algorithm_support-$TAG.csv"
+ MTC16="artifacts/mtc/n16-$TAG"
+ MTC_VALID="artifacts/results/mtc-n16-$TAG"
+ MTC_ALL="artifacts/mtc/all-$TAG"
+ STATIC_ROOT="artifacts/results/mtc-crossover-n16-$TAG"
+ ADVANCED_ROOT="artifacts/results/mtc-crossover-advanced-$TAG"
+ TLS_ROOT="artifacts/results/cert-chain-tls-$TAG"
+ AUDIT="artifacts/results/mtc-crossover-audit-$TAG.json"
+ MUTUAL_SERVER_FIXTURES="artifacts/scaling/mutual-auth-crossover/server-x509-$TAG"
+ MUTUAL_FIXTURES="artifacts/scaling/mutual-auth-crossover/fixtures-$TAG"
+ MUTUAL_RESULTS="artifacts/results/mutual-auth-crossover-$TAG"
+ MUTUAL_ANALYSIS="artifacts/results/mutual-auth-crossover-analysis-$TAG"
+ MUTUAL_EXACT="artifacts/results/mutual-auth-crossover-exact-$TAG"
+ MUTUAL_BOUNDARY="artifacts/results/mutual-auth-crossover-boundary-audit-$TAG"
+ BOUNDARY_ROOT="artifacts/results/mtc-crossover-boundary-audit-$TAG"
  mkdir -p "$STATE"; save
  printf 'Paths saved. No campaign has been executed.\n'
 }
@@ -86,7 +90,7 @@ new_campaign() {
  for file in "$STATE"/*.status; do
   [[ ! -f "$file" ]] || mv "$file" "$file.previous-$archive"
  done
- init "$name"
+ init "$name" "${2:-}"
  printf 'Previous configuration and stage status were archived. Existing artifacts were not changed.\n'
 }
 select_step() {
@@ -159,7 +163,7 @@ python3 "$1/plots.py" "$5" --measurements "$3" --output "$3/plots"
   125.*) OUT="artifacts/reports/${MUTUAL_ANALYSIS##*/}/report.html"; CMD=(python3 bin/renders/mutual-crossover.py --analysis "$MUTUAL_ANALYSIS" --exact "$MUTUAL_EXACT" --audit "$MUTUAL_BOUNDARY" --output "$OUT");;
  esac
 }
-show_command() { printf '%q ' "${CMD[@]}"; printf '\n'; }
+show_command() { printf 'env MTC_KEM_ID=%q MTC_KEM_LABEL=%q MTC_TLS_GROUP=%q ' "$KEM" "$KEM_LABEL" "$KEM_GROUP"; printf '%q ' "${CMD[@]}"; printf '\n'; }
 progress() {
  local root=$1 dir count
  [[ -d "$root/population" ]] || return 0
@@ -174,6 +178,7 @@ progress() {
 status() {
  load
  local key step state display_state
+ printf 'Key establishment: %s (%s)\n' "$KEM_LABEL" "$KEM_GROUP"
  for key in CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT BOUNDARY_ROOT TLS_ROOT MUTUAL_SERVER_FIXTURES MUTUAL_FIXTURES MUTUAL_RESULTS MUTUAL_ANALYSIS MUTUAL_EXACT MUTUAL_BOUNDARY; do
   printf '%-16s %s\n' "$key" "${!key}"
  done
@@ -285,7 +290,7 @@ run() (
  trap 'kill "$monitor" 2>/dev/null || true; rmdir "$STATE/lock" 2>/dev/null || true' EXIT
  trap 'printf "interrupted; log=%s\n" "$log" > "$STATE/$STEP.status"; exit 130' INT TERM
  set +e
- PYTHONUNBUFFERED=1 "${CMD[@]}" 2>&1 | tee "$log"
+ env PYTHONUNBUFFERED=1 MTC_KEM_ID="$KEM" MTC_KEM_LABEL="$KEM_LABEL" MTC_TLS_GROUP="$KEM_GROUP" "${CMD[@]}" 2>&1 | tee "$log"
  rc=${PIPESTATUS[0]}
  set -e
  kill "$monitor" 2>/dev/null || true
@@ -441,8 +446,8 @@ menu() {
  done
 }
 case "${1:-menu}" in
- init) init "${2:-$(date -u +%Y%m%dT%H%M%SZ)}";;
- new) new_campaign "${2:-$(date -u +%Y%m%dT%H%M%SZ)}";;
+ init) init "${2:-$(date -u +%Y%m%dT%H%M%SZ)}" "${3:-}";;
+ new) new_campaign "${2:-$(date -u +%Y%m%dT%H%M%SZ)}" "${3:-}";;
  status) status;;
  list) print_steps;;
  show) load; plan "${2:?Stage required}"; show_command;;

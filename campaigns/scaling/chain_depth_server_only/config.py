@@ -6,7 +6,7 @@ chain depth under fixed TLS settings.
 """
 
 from pathlib import Path
-import sys
+import os,sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src/mtc"))
 
@@ -76,7 +76,7 @@ MTC_CHAIN_PROFILES = {
 
 TLS = {
     "version": "TLSv1.3",
-    "group": "X25519",
+    "group": os.environ.get("MTC_TLS_GROUP", "X25519"),
     "cipher": "TLS_AES_256_GCM_SHA384",
     "tickets": False,
     "resumption": False,

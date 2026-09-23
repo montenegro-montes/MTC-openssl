@@ -9,6 +9,9 @@ x-common: &common
     CERT_FIXTURE: /fixtures/${CERT_PROFILE:?Set CERT_PROFILE}/depth-${CERT_DEPTH:?Set CERT_DEPTH}
     SERVER_METRICS: /results/${CERT_CAMPAIGN:?Set CERT_CAMPAIGN}/endpoint-metrics
     PROFILE_DETAIL: "1"
+    MTC_KEM_ID: ${MTC_KEM_ID:-x25519}
+    MTC_KEM_LABEL: ${MTC_KEM_LABEL:-X25519}
+    MTC_TLS_GROUP: ${MTC_TLS_GROUP:-X25519}
 services:
   server:
     <<: *common
@@ -25,6 +28,9 @@ services:
       SERVER_METRICS: /results/${CERT_CAMPAIGN:?Set CERT_CAMPAIGN}/endpoint-metrics
       CAMPAIGN_OUTPUT: /results/${CERT_CAMPAIGN:?Set CERT_CAMPAIGN}/data
       PROFILE_DETAIL: "1"
+      MTC_KEM_ID: ${MTC_KEM_ID:-x25519}
+      MTC_KEM_LABEL: ${MTC_KEM_LABEL:-X25519}
+      MTC_TLS_GROUP: ${MTC_TLS_GROUP:-X25519}
       FIXTURE_SHA256: ${FIXTURE_SHA256:?Set FIXTURE_SHA256}
       SOURCE_COMMIT: ${SOURCE_COMMIT:?Set SOURCE_COMMIT}
       IMAGE_ID: ${IMAGE_ID:?Set IMAGE_ID}

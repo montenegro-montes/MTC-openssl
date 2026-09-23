@@ -1,9 +1,0 @@
-{
-  "passed": true,
-  "plot_files": 21,
-  "visual_review": "All seven PNG figures inspected; legend repositioned without changing data",
-  "resource_allocation_identical_across_campaigns": true,
-  "resource_note": "MemTotal/CPU/cgroup limits checked; MemFree and MemAvailable legitimately vary",
-  "source_snapshot_matches_workspace": true,
-  "required_outputs_present": true
-}
