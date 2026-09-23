@@ -13,8 +13,9 @@ def status(value):
     if raw is True:return 'PASS'
     if raw is False:return 'NO PASS'
     return 'PASS' if str(raw).upper() in ('PASS','SUCCESS','COMPLETED') else 'NO PASS'
-def table(headers, rows):
-    return '<div class="scroll"><table><thead><tr>'+''.join(f'<th>{esc(x)}</th>' for x in headers)+'</tr></thead><tbody>'+''.join('<tr>'+''.join(f'<td>{esc(x)}</td>' for x in row)+'</tr>' for row in rows)+'</tbody></table></div>'
+def table(headers, rows, css_class=''):
+    class_attr=f' class="{esc(css_class)}"' if css_class else ''
+    return f'<div class="scroll"><table{class_attr}><thead><tr>'+''.join(f'<th>{esc(x)}</th>' for x in headers)+'</tr></thead><tbody>'+''.join('<tr>'+''.join(f'<td>{esc(x)}</td>' for x in row)+'</tr>' for row in rows)+'</tbody></table></div>'
 def draft_section_key(value):
     """Sort draft references numerically; local/non-section rules come last."""
     text=str(value or '').strip()
@@ -26,7 +27,7 @@ def draft_section_key(value):
     return (0,tuple(int(part) for part in section.split('.')),text.casefold())
 def shell(title, result, intro, sections):
     color='pass' if result=='PASS' else 'fail'; body=''.join(f'<section><h2>{esc(name)}</h2>{content}</section>' for name,content in sections)
-    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>{esc(title)}</title><style>body{{font:16px system-ui;background:#f3f6fa;color:#172033;margin:0}}main{{max-width:1150px;margin:auto;padding:28px}}header,section{{background:#fff;border:1px solid #dbe3ed;border-radius:12px;padding:22px;margin:16px 0}}h1{{margin:.2em 0}}h2{{font-size:20px}}h3{{margin-top:25px}}.result{{font-size:26px;font-weight:800}}.pass{{color:#087443}}.fail{{color:#b42318}}.note{{background:#eef5ff;padding:14px;border-left:5px solid #3974c6}}table{{border-collapse:collapse;width:100%}}th,td{{padding:10px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top;overflow-wrap:anywhere}}th{{background:#edf2f7}}.scroll{{overflow:auto}}code{{background:#edf2f7;padding:2px 5px}}</style></head><body><main><header><p>Explained validation report</p><h1>{esc(title)}</h1><p class="result {color}">{esc(result)}</p><p>{esc(intro)}</p></header>{body}</main></body></html>'''
+    return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>{esc(title)}</title><style>body{{font:16px system-ui;background:#f3f6fa;color:#172033;margin:0}}main{{max-width:1150px;margin:auto;padding:28px}}header,section{{background:#fff;border:1px solid #dbe3ed;border-radius:12px;padding:22px;margin:16px 0}}h1{{margin:.2em 0}}h2{{font-size:20px}}h3{{margin-top:25px}}.result{{font-size:26px;font-weight:800}}.pass{{color:#087443}}.fail{{color:#b42318}}.note{{background:#eef5ff;padding:14px;border-left:5px solid #3974c6}}table{{border-collapse:collapse;width:100%}}th,td{{padding:10px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top;overflow-wrap:anywhere}}th{{background:#edf2f7}}.draft-checks th:first-child,.draft-checks td:first-child{{width:150px;min-width:150px;white-space:nowrap}}.scroll{{overflow:auto}}code{{background:#edf2f7;padding:2px 5px}}</style></head><body><main><header><p>Explained validation report</p><h1>{esc(title)}</h1><p class="result {color}">{esc(result)}</p><p>{esc(intro)}</p></header>{body}</main></body></html>'''
 
 def mutual(source):
     s=read(source/'summary.json') or {}; rows=[]; cfg=s.get('configuration') or {}
@@ -119,7 +120,7 @@ def offline_details(source, filename, stage, explanation):
     counts=data.get('draft_checks') or {}
     count_rows=[('Implemented rules passed',counts.get('passed','—')),('Failed',counts.get('failed','—')),('Not implemented',counts.get('not_implemented','—')),('Unresolved',counts.get('unresolved','—'))]
     limits=''.join(f'<li>{esc(value)}</li>' for value in data.get('limits') or []) or '<li>None recorded</li>'
-    return f'<p>{esc(explanation)}</p><h3>Observed object and proof</h3>'+table(('Element','Observed value'),observed)+'<h3>Draft-rule checks</h3>'+table(('Draft section','Requirement checked','Offline-stage status','Final campaign evidence'),check_rows)+'<h3>Check counts</h3>'+table(('Category','Count'),count_rows)+f'<h3>Recorded limits</h3><ul>{limits}</ul>'
+    return f'<p>{esc(explanation)}</p><h3>Observed object and proof</h3>'+table(('Element','Observed value'),observed)+'<h3>Draft-rule checks</h3>'+table(('Draft section','Requirement checked','Offline-stage status','Final campaign evidence'),check_rows,'draft-checks')+'<h3>Check counts</h3>'+table(('Category','Count'),count_rows)+f'<h3>Recorded limits</h3><ul>{limits}</ul>'
 
 def transport_mapping_details(source):
     rows=[]
