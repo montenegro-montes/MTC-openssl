@@ -38,3 +38,21 @@ only for their three authentication cases. `run-native-pcap` retains the full
 six-case execution.
 
 HTML renderers are centralized under `bin/renders/`.
+
+### Performance KEM selection versus fixture provenance
+
+The KEM chosen in the performance configuration controls the TLS group. Loading
+`.mt-state/cert-scaling/paths.env` must not replace it with the KEM recorded for
+fixture preparation. The runner now scopes those KEM assignments locally when
+loading fixture paths. Newly written PCAP CSV rows include `key_establishment`
+and `openssl_group`, matching native rows. These columns record configuration;
+they are not an independent decoding of ServerHello key_share.
+
+Historical run `handshake-performance-x25519-mlkem512-20260923T170822Z-800`
+has an inconsistent directory label: its summary/configured-group logs report
+X25519, and inspected OpenSSL client logs report `Server Temp Key: X25519`.
+Do not use it as X25519+ML-KEM512 evidence or rewrite its artifacts. Old PCAP
+CSVs lack the new columns. Existing performance configurations may already have
+been rewritten to `KEM=x25519`; correcting the runner does not restore their
+original selection. Review the intended KEM before any new run.
+The correction was inspected only; no tests or measurements were executed.

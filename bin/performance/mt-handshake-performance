@@ -175,11 +175,18 @@ load_plan_counts() {
   configure_kem "$KEM"
 }
 
+# Fixture provenance must not replace the performance KEM selection. Bash
+# locals isolate same-named assignments while keeping fixture paths available.
+load_fixture_paths() {
+  local KEM="${KEM:-}" KEM_LABEL="${KEM_LABEL:-}" KEM_GROUP="${KEM_GROUP:-}" KEM_SLUG="${KEM_SLUG:-}"
+  source "$REPO/.mt-state/cert-scaling/paths.env"
+}
+
 ensure_dependencies() {
   local performance_clients="$REPO/artifacts/validation/handshake-performance-mutual-v2"
   "$REPO/bin/base/mt-prepare" run ALL
   [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] || fail 'mt-prepare did not create the certificate-scaling configuration.'
-  source "$REPO/.mt-state/cert-scaling/paths.env"
+  load_fixture_paths
   if [[ ! -f "$performance_clients/manifest.json" ]]; then
     python3 "$REPO/campaigns/validation/protocol_validation/mutual_authentication/generate_fixtures.py" \
       --output "$performance_clients" --performance-clients --execute
@@ -210,7 +217,7 @@ ensure_retry_group_support() {
 
 write_automatic_config() {
   local file=$1
-  source "$REPO/.mt-state/cert-scaling/paths.env"
+  load_fixture_paths
   python3 - "$REPO" "$file" "$MTC16" "$KEM" <<'PYCONFIG'
 import json, sys
 from pathlib import Path
@@ -386,7 +393,7 @@ PYMETRICS
 measure_pcap() {
   local output=$1 profile case_name repetition directory pcap keylog log capture_log analysis_log first last syn synack bytes packets elapsed tcp_elapsed connection_elapsed ready attempt done_count=0 total_count started now eta
   total_count=$(( ${#PROFILES[@]} * ${#ACTIVE_CASES[@]} * PCAP_RUNS )); started=$(date +%s)
-  printf 'profile,case,repetition,tcp_syn_to_synack_ms,tls_clienthello_to_finished_ms,connection_syn_to_finished_ms,wire_bytes,packet_count\n' > "$output/pcap.csv"
+  printf 'profile,case,key_establishment,openssl_group,repetition,tcp_syn_to_synack_ms,tls_clienthello_to_finished_ms,connection_syn_to_finished_ms,wire_bytes,packet_count\n' > "$output/pcap.csv"
   printf '\nPCAP MEASUREMENTS — 9 profiles × %d authentication cases\n' "${#ACTIVE_CASES[@]}"
   for profile in "${PROFILES[@]}"; do
    for case_name in "${ACTIVE_CASES[@]}"; do
@@ -447,7 +454,7 @@ measure_pcap() {
       tcp_elapsed=$(python3 -c "print(($synack-$syn)*1000)")
       elapsed=$(python3 -c "print(($last-$first)*1000)")
       connection_elapsed=$(python3 -c "print(($last-$syn)*1000)")
-      printf '%s,%s,%s,%s,%s,%s,%s,%s\n' "$profile" "$case_name" "$repetition" "$tcp_elapsed" "$elapsed" "$connection_elapsed" "$bytes" "$packets" >> "$output/pcap.csv"
+      printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$profile" "$case_name" "$KEM_LABEL" "$KEM_GROUP" "$repetition" "$tcp_elapsed" "$elapsed" "$connection_elapsed" "$bytes" "$packets" >> "$output/pcap.csv"
       done_count=$((done_count+1)); now=$(date +%s); eta=$(( done_count ? (now-started)*(total_count-done_count)/done_count : 0 ))
       printf '[PCAP] %d/%d profile=%s case=%s capture=%d tcp=%sms tls=%sms total=%sms bytes=%s packets=%s elapsed=%ds eta=%ds\n' "$done_count" "$total_count" "$profile" "$case_name" "$repetition" "$tcp_elapsed" "$elapsed" "$connection_elapsed" "$bytes" "$packets" "$((now-started))" "$eta"
     done
@@ -532,7 +539,7 @@ run_retry_profile() {
   mt_images_required "$IMAGE" || return
   ensure_retry_group_support
   ensure_kem_supported
-  source "$REPO/.mt-state/cert-scaling/paths.env"
+  load_fixture_paths
   run_retry_profile_inner "$profile" "$requested" 0 70
   output=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$requested")
   report="$REPO/artifacts/reports/$(basename "$requested")/report.html"
@@ -552,7 +559,7 @@ run_retry_matrix() {
   mt_images_required "$IMAGE" || return
   ensure_retry_group_support
   ensure_kem_supported
-  source "$REPO/.mt-state/cert-scaling/paths.env"
+  load_fixture_paths
   mkdir -p "$output"
   report_root="$REPO/artifacts/reports/$(basename "$requested")"
   started_epoch=$(date +%s)
