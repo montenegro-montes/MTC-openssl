@@ -28,6 +28,10 @@ The main authentication representations are:
 | Mutual | X.509/X.509, MTC landmark/MTC landmark, MTC standalone/MTC standalone |
 | Trust Anchor Retry | MTC server authentication with one retry on a fresh TCP/TLS connection |
 
+Handshake-performance configurations select key establishment independently
+from authentication: `X25519` (default), `X25519+ML-KEM512`, or `ML-KEM-512`.
+The selection is included in artifact/report directory names and report metadata.
+
 MTC fixture and crossover work uses explicit tree sizes. The primary fixture set
 is **N=16**; advanced crossover analysis covers **N=1, 4, 16, 64 and 256**.
 Certificate-chain TLS scaling covers depths **D=2–5**.

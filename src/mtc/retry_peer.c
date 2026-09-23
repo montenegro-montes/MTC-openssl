@@ -10,6 +10,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <time.h>
 
 static double tick_ms(void) {
@@ -59,9 +60,11 @@ static void result(SSL *ssl,int ok) {
 int main(int argc,char **argv) {
     SSL_CTX *ctx=NULL;SSL *ssl=NULL;X509 *cert=NULL;EVP_PKEY *key=NULL;BIO *b=NULL;
     int server,landmark,fd=-1,listener=-1,ok=0,count=1,exit_code=1;
+    const char *tls_group=getenv("MTC_TLS_GROUP");
+    if(!tls_group||!*tls_group)tls_group="X25519";
     signal(SIGPIPE,SIG_IGN);
     if(argc==2&&!strcmp(argv[1],"--help")){
-        puts("inspect TRUST landmark|standalone\nclient HOST PORT TRUST MODE REQUESTED_ID HOSTNAME\nserver HOST PORT TRUST MODE CERT KEY CONNECTIONS(1|2)");return 0;
+        puts("MTC_TLS_GROUP selects the TLS 1.3 key-establishment group (default X25519).\ninspect TRUST landmark|standalone\nclient HOST PORT TRUST MODE REQUESTED_ID HOSTNAME\nserver HOST PORT TRUST MODE CERT KEY CONNECTIONS(1|2)");return 0;
     }
     if(argc==4&&!strcmp(argv[1],"inspect")){
         MTCConfig *trust;
@@ -76,7 +79,7 @@ int main(int argc,char **argv) {
     landmark=!strcmp(argv[5],"landmark");
     ctx=SSL_CTX_new(server?TLS_server_method():TLS_client_method());if(!ctx)goto end;
     if(!SSL_CTX_set_min_proto_version(ctx,TLS1_3_VERSION)||!SSL_CTX_set_max_proto_version(ctx,TLS1_3_VERSION)
-       ||!SSL_CTX_set_ciphersuites(ctx,"TLS_AES_256_GCM_SHA384")||!SSL_CTX_set1_groups_list(ctx,"X25519"))goto end;
+       ||!SSL_CTX_set_ciphersuites(ctx,"TLS_AES_256_GCM_SHA384")||!SSL_CTX_set1_groups_list(ctx,tls_group))goto end;
     if(server){
         if(strcmp(argv[8],"1")&&strcmp(argv[8],"2"))goto end;
         count=atoi(argv[8]);

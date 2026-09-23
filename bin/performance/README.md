@@ -15,6 +15,20 @@ Run it from the repository root:
 bin/performance/mt-handshake-performance
 ```
 
+Creating a configuration asks for one key-establishment option:
+
+1. `X25519` (default; OpenSSL group `X25519`)
+2. `X25519+ML-KEM512` (OpenSSL group `x25519_mlkem512`)
+3. `ML-KEM-512` (OpenSSL group `mlkem512`)
+
+The selected value is stored as `KEM` in the configuration. Default result and
+report directory names include its stable slug, and both JSON and HTML reports
+record the display label and exact OpenSSL TLS group.
+
+`init` creates the default configuration (or an explicitly named file). `new`
+creates an independent timestamped configuration by default, so several KEM
+configurations can coexist under `.mt-state/`.
+
 Native and PCAP populations can be executed independently for simple or mutual
 authentication. `run-single` and `run-mutual` execute Native followed by PCAP
 only for their three authentication cases. `run-native-pcap` retains the full

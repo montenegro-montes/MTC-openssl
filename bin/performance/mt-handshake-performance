@@ -12,6 +12,7 @@ RETRY_MATRIX_REPORTER="$REPO/bin/renders/handshake-retry-matrix.py"
 NETWORK=mt-handshake-performance
 SERVER=mt-handshake-performance-server
 DEFAULT_CONFIG="$REPO/.mt-state/handshake-performance.env"
+ACTIVE_CONFIG_FILE=${MT_HANDSHAKE_ACTIVE_CONFIG:-"$REPO/.mt-state/handshake-performance.active"}
 PROFILES=(ecdsa-p256 ecdsa-p384 ecdsa-p521 mldsa44 mldsa65 mldsa87 slhdsa128s slhdsa192s slhdsa256s)
 CASES=(x509-simple mtc-simple-landmark mtc-simple-standalone x509-mutual mtc-mutual-landmark mtc-mutual-standalone)
 SINGLE_CASES=(x509-simple mtc-simple-landmark mtc-simple-standalone)
@@ -23,7 +24,8 @@ usage() {
   cat <<EOF
 Usage:
   $SELF menu
-  $SELF init [CONFIG]
+  $SELF init [CONFIG] [KEM]
+  $SELF new [CONFIG] [KEM]
   $SELF status [CONFIG]
   $SELF plan [CONFIG] [OUTPUT]
   $SELF run-native [CONFIG] [OUTPUT]
@@ -36,7 +38,7 @@ Usage:
   $SELF run-single [CONFIG] [OUTPUT]
   $SELF run-mutual [CONFIG] [OUTPUT]
   $SELF run-all [CONFIG] [OUTPUT]  # compatibility alias
-  $SELF run-retry [OUTPUT]
+  $SELF run-retry [CONFIG] [OUTPUT]
 
 CONFIG defaults to .mt-state/handshake-performance.env. When OUTPUT is omitted,
 a new timestamped directory is selected below artifacts/results/. Nothing is
@@ -44,9 +46,56 @@ executed by init or plan.
 EOF
 }
 
+active_config() {
+  local selected
+  if [[ -f "$ACTIVE_CONFIG_FILE" ]]; then
+    selected=$(cat "$ACTIVE_CONFIG_FILE")
+    [[ -n "$selected" && -f "$selected" ]] && { printf '%s\n' "$selected"; return; }
+  fi
+  printf '%s\n' "$DEFAULT_CONFIG"
+}
+
+select_active_config() {
+  local config=$1 temporary="$ACTIVE_CONFIG_FILE.tmp"
+  config=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$config")
+  mkdir -p "$(dirname "$ACTIVE_CONFIG_FILE")"
+  printf '%s\n' "$config" > "$temporary"
+  mv "$temporary" "$ACTIVE_CONFIG_FILE"
+}
+
+configure_kem() {
+  case "${1:-x25519}" in
+    1|x25519|X25519)
+      KEM=x25519; KEM_LABEL=X25519; KEM_GROUP=X25519; KEM_SLUG=x25519;;
+    2|x25519-mlkem512|x25519_mlkem512|X25519+ML-KEM512)
+      KEM=x25519-mlkem512; KEM_LABEL=X25519+ML-KEM512; KEM_GROUP=x25519_mlkem512; KEM_SLUG=x25519-mlkem512;;
+    3|mlkem512|ML-KEM-512)
+      KEM=mlkem512; KEM_LABEL=ML-KEM-512; KEM_GROUP=mlkem512; KEM_SLUG=mlkem512;;
+    *) fail 'KEM must be 1/x25519, 2/x25519-mlkem512, or 3/mlkem512.';;
+  esac
+  export KEM KEM_LABEL KEM_GROUP KEM_SLUG
+  common=( -tls1_3 -groups "$KEM_GROUP" -ciphersuites TLS_AES_256_GCM_SHA384 )
+}
+
+select_kem() {
+  local selection
+  printf 'Key establishment:\n  1 X25519 (default)\n  2 X25519+ML-KEM512\n  3 ML-KEM-512\n' >&2
+  read -r -p '> ' selection || selection=1
+  configure_kem "${selection:-1}"
+}
+
+default_performance_output() {
+  printf 'artifacts/results/handshake-performance-%s-%s-%s\n' "$KEM_SLUG" "$(date -u +%Y%m%dT%H%M%SZ)" "$$"
+}
+
+default_retry_output() {
+  printf 'artifacts/results/handshake-retry-matrix-%s-%s-%s\n' "$KEM_SLUG" "$(date -u +%Y%m%dT%H%M%SZ)" "$$"
+}
+
 config_template() {
   cat <<'EOF'
 # Paths are relative to the repository and must remain below artifacts/.
+KEM=x25519
 RUNS=30
 WARMUPS=5
 PCAP_RUNS=30
@@ -73,6 +122,16 @@ MTC_ROOT=artifacts/REPLACE/mtc-n16-root
 EOF
 }
 
+create_configuration() {
+  local config=$1 selected=${2:-}
+  [[ ! -e "$config" ]] || fail "Configuration exists: $config"
+  if [[ -n "$selected" ]]; then configure_kem "$selected"; else select_kem; fi
+  mkdir -p "$(dirname "$config")"
+  config_template | sed "s/^KEM=x25519$/KEM=$KEM/" > "$config"
+  select_active_config "$config"
+  echo "Created $config with key establishment $KEM_LABEL ($KEM_GROUP). A run will replace the placeholders automatically from the active validated fixtures."
+}
+
 load_config() {
   local file=$1 name value
   [[ -f "$file" ]] || fail "Missing configuration: $file"
@@ -86,6 +145,7 @@ load_config() {
   done < "$file"
   : "${RUNS:?}" "${WARMUPS:?}" "${PCAP_RUNS:?}"
   [[ "$RUNS" =~ ^[1-9][0-9]*$ && "$WARMUPS" =~ ^[0-9]+$ && "$PCAP_RUNS" =~ ^[1-9][0-9]*$ ]] || fail 'RUNS/WARMUPS/PCAP_RUNS must be integers.'
+  configure_kem "${KEM:-x25519}"
   MTC_CLIENT_STANDALONE_CERT=${MTC_CLIENT_STANDALONE_CERT:-${MTC_CLIENT_CERT%/*}/standalone-0000.pem}
   MTC_CLIENT_AUTHORITY=${MTC_CLIENT_AUTHORITY:-${MTC_CLIENT_TRUST%/*}/authority.bin}
   for name in X509_CLIENT_CERT X509_CLIENT_KEY X509_CLIENT_CA MTC_CLIENT_CERT MTC_CLIENT_STANDALONE_CERT MTC_CLIENT_KEY MTC_CLIENT_TRUST MTC_CLIENT_AUTHORITY; do
@@ -99,13 +159,14 @@ load_config() {
 load_plan_counts() {
   local file=$1 name value
 
+  KEM=x25519
   RUNS=
   WARMUPS=
   PCAP_RUNS=
 
   while IFS='=' read -r name value; do
     case "$name" in
-      RUNS|WARMUPS|PCAP_RUNS)
+      KEM|RUNS|WARMUPS|PCAP_RUNS)
         printf -v "$name" '%s' "$value"
         ;;
     esac
@@ -119,6 +180,7 @@ load_plan_counts() {
      "$WARMUPS" =~ ^[0-9]+$ &&
      "$PCAP_RUNS" =~ ^[1-9][0-9]*$ ]] ||
     fail 'RUNS/WARMUPS/PCAP_RUNS must be integers.'
+  configure_kem "$KEM"
 }
 
 ensure_dependencies() {
@@ -132,14 +194,33 @@ ensure_dependencies() {
   fi
 }
 
+ensure_kem_supported() {
+  local groups
+  groups=$(docker run --rm --network none --entrypoint /opt/mtc/openssl.sh "$IMAGE" list -tls-groups 2>&1) \
+    || fail 'Unable to list TLS groups in the active MTC image.'
+  printf '%s\n' "$groups" | grep -Eq "(^|[[:space:]])${KEM_GROUP}([[:space:]]|$)" \
+    || fail "The active MTC image does not provide the selected OpenSSL TLS group: $KEM_GROUP"
+}
+
+ensure_retry_group_support() {
+  local help
+  help=$(docker run --rm --network none --entrypoint /opt/mtc/retry-peer "$IMAGE" --help 2>&1 || true)
+  if [[ "$help" != *MTC_TLS_GROUP* ]]; then
+    printf 'The retry peer predates configurable key establishment; rebuilding the MTC image once.\n'
+    "$REPO/bin/base/mt-prepare" rebuild 2
+    help=$(docker run --rm --network none --entrypoint /opt/mtc/retry-peer "$IMAGE" --help 2>&1 || true)
+  fi
+  [[ "$help" == *MTC_TLS_GROUP* ]] || fail 'The retry peer still lacks configurable key establishment after rebuild.'
+}
+
 write_automatic_config() {
   local file=$1
   source "$REPO/.mt-state/cert-scaling/paths.env"
-  python3 - "$REPO" "$file" "$MTC16" <<'PYCONFIG'
+  python3 - "$REPO" "$file" "$MTC16" "$KEM" <<'PYCONFIG'
 import json, sys
 from pathlib import Path
 
-repo, output, mtc_root = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+repo, output, mtc_root, kem = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4]
 manual = Path('artifacts/validation/mutual-auth-manual')
 server = mtc_root / 'batch16/mtc/mldsa65'
 client = manual / 'mtc-client-n16/ecdsa-p256'
@@ -164,9 +245,10 @@ values = {
 missing = [str(path) for path in values.values() if not (repo / path).is_file()]
 if missing:
     raise SystemExit('ERROR: automatic handshake fixtures are incomplete: ' + ', '.join(missing))
-text = '''# Automatically derived from validated active fixtures.
+text = f'''# Automatically derived from validated active fixtures.
 # X.509 and MTC use matching server profiles across all nine active profiles, leaf 0.
 # Mutual authentication uses ECDSA P-256 client credentials in both families.
+KEM={kem}
 RUNS=30
 WARMUPS=5
 PCAP_RUNS=30
@@ -187,7 +269,8 @@ PYCONFIG
 }
 
 inside() { printf '/work/%s' "${1#artifacts/}"; }
-common=( -tls1_3 -groups X25519 -ciphersuites TLS_AES_256_GCM_SHA384 )
+common=()
+configure_kem x25519
 
 case_args() {
   local profile=$1 case_name=$2 population="$MTC_ROOT/population/$1" mtc="$MTC_ROOT/batch16/mtc/$1" ca_id
@@ -253,6 +336,7 @@ prepare_run() {
     run-native|run-native-single|run-native-mutual) mt_images_required "$IMAGE" || return;;
     run-pcap|run-pcap-single|run-pcap-mutual|run-native-pcap|run-single|run-mutual) mt_images_required "$IMAGE" "$CAPTURE_IMAGE" || return;;
   esac
+  ensure_kem_supported
   if [[ "$command" == run-native || "$command" == run-native-single || "$command" == run-native-mutual || "$command" == run-native-pcap || "$command" == run-single || "$command" == run-mutual ]]; then
     help_output=$(docker run --rm --network none --entrypoint /opt/mtc/openssl.sh "$IMAGE" \
       s_client -help 2>&1) \
@@ -374,10 +458,10 @@ measure_pcap() {
 
 write_summary() {
   local output=$1
-  python3 - "$output" <<'PY'
+  python3 - "$output" "$KEM" "$KEM_LABEL" "$KEM_GROUP" <<'PY'
 import csv,json,math,statistics,sys
 from pathlib import Path
-root=Path(sys.argv[1]); result={'definitions':{
+root=Path(sys.argv[1]); result={'key_establishment':{'id':sys.argv[2],'label':sys.argv[3],'openssl_group':sys.argv[4]},'definitions':{
  'process_wall_ms':'host monotonic time around one Docker client process; includes process/container overhead',
  'tcp_connect_wall_ms_native':'native client connection entry through successful TCP connect return',
  'handshake_wall_ms':'native TLS handshake start through handshake completion',
@@ -419,6 +503,7 @@ run_retry_profile_inner() {
   [[ ! -e "$output" ]] || fail "Output exists: $output"
   printf '\n[RETRY] profile=%s mode=full output=%s\n' "$profile" "$requested"
   docker run --rm --network none -e PYTHONDONTWRITEBYTECODE=1 \
+    -e MTC_TLS_GROUP="$KEM_GROUP" -e MTC_KEM_ID="$KEM" -e MTC_KEM_LABEL="$KEM_LABEL" \
     -v "$REPO:/repo:ro" -v "$REPO/artifacts:/repo/artifacts" -w /repo \
     --entrypoint python3 "$IMAGE" \
     campaigns/validation/protocol_validation/mtc_retry/run.py full \
@@ -434,12 +519,14 @@ validate_retry_profile() {
 }
 
 run_retry_profile() {
-  local profile=$1 requested=${2:-artifacts/results/handshake-retry-${1}-$(date -u +%Y%m%dT%H%M%SZ)-$$}
+  local profile=$1 requested=${2:-artifacts/results/handshake-retry-${1}-${KEM_SLUG}-$(date -u +%Y%m%dT%H%M%SZ)-$$}
   local output report
   validate_retry_profile "$profile"
   [[ "$requested" == artifacts/results/* ]] || fail 'Retry OUTPUT must be a new directory below artifacts/results/.'
   ensure_dependencies
   mt_images_required "$IMAGE" || return
+  ensure_retry_group_support
+  ensure_kem_supported
   source "$REPO/.mt-state/cert-scaling/paths.env"
   run_retry_profile_inner "$profile" "$requested" 0 70
   output=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$requested")
@@ -450,7 +537,7 @@ run_retry_profile() {
 }
 
 run_retry_matrix() {
-  local requested=${1:-artifacts/results/handshake-retry-matrix-$(date -u +%Y%m%dT%H%M%SZ)-$$}
+  local requested=${1:-$(default_retry_output)}
   local output report report_root profile profile_output profile_report index=0
   local started_epoch ended_epoch total_profiles=${#PROFILES[@]} total_transactions=$(( ${#PROFILES[@]} * 70 ))
   [[ "$requested" == artifacts/results/* ]] || fail 'Retry OUTPUT must be a new directory below artifacts/results/.'
@@ -458,11 +545,13 @@ run_retry_matrix() {
   [[ ! -e "$output" ]] || fail "Output exists: $output"
   ensure_dependencies
   mt_images_required "$IMAGE" || return
+  ensure_retry_group_support
+  ensure_kem_supported
   source "$REPO/.mt-state/cert-scaling/paths.env"
   mkdir -p "$output"
   report_root="$REPO/artifacts/reports/$(basename "$requested")"
   started_epoch=$(date +%s)
-  printf '\nMTC TRUST ANCHOR RETRY PERFORMANCE — 9 PROFILES\nMode: simple server authentication\nTransactions: %d (70 per profile)\nOutput: %s\n\n' "$total_transactions" "$requested"
+  printf '\nMTC TRUST ANCHOR RETRY PERFORMANCE — 9 PROFILES\nMode: simple server authentication\nKey establishment: %s (%s)\nTransactions: %d (70 per profile)\nOutput: %s\n\n' "$KEM_LABEL" "$KEM_GROUP" "$total_transactions" "$requested"
   for profile in "${PROFILES[@]}"; do
     index=$((index + 1))
     profile_output="$requested/$profile"
@@ -475,13 +564,14 @@ run_retry_matrix() {
   ended_epoch=$(date +%s)
   report="$report_root/report.html"
   python3 "$RETRY_MATRIX_REPORTER" "$output" --output "$report" \
-    --started-epoch "$started_epoch" --ended-epoch "$ended_epoch"
+    --started-epoch "$started_epoch" --ended-epoch "$ended_epoch" \
+    --kem-id "$KEM" --kem-label "$KEM_LABEL" --kem-group "$KEM_GROUP"
   printf '\nCompleted nine-profile Trust Anchor Retry performance.\nJSON report: %s\nHTML report: %s\nProfile reports: %s\n' \
     "$output/matrix-summary.json" "$report" "$report_root"
 }
 
 status_config() {
-  local config=${1:-$DEFAULT_CONFIG}
+  local config=${1:-$(active_config)}
   if [[ ! -f "$config" ]]; then
     printf 'Configuration: MISSING (%s)\nRun init or select initialization from the menu.\n' "$config"
     return 1
@@ -492,15 +582,17 @@ status_config() {
   else
     echo 'Status: CONFIGURED'
   fi
-  sed -nE 's/^(RUNS|WARMUPS|PCAP_RUNS|MTC_ROOT)=/  \1=/p' "$config"
+  sed -nE 's/^(KEM|RUNS|WARMUPS|PCAP_RUNS|MTC_ROOT)=/  \1=/p' "$config"
+  load_plan_counts "$config"
+  printf 'Key establishment: %s (%s)\n' "$KEM_LABEL" "$KEM_GROUP"
   printf 'Profiles: %s\nCases: %s\n' "${PROFILES[*]}" "${CASES[*]}"
 }
 
 menu() {
-  local choice profile
+  local choice profile config_path
   while true; do
     printf '\nHandshake performance\n'
-    printf ' 1 Initialize configuration\n'
+    printf ' 1 Create new configuration\n'
     printf ' 2 Status\n'
     printf ' 3 Plan\n'
     printf ' 4 Run Native — single authentication (9 profiles × 3 cases)\n'
@@ -514,7 +606,8 @@ menu() {
     printf ' 0 Back\n'
     read -r -p '> ' choice || return 0
     case "$choice" in
-      1) "$SELF" init || true;;
+      1) read -r -p 'Configuration path (empty=new timestamped file): ' config_path
+         "$SELF" new ${config_path:+"$config_path"} || true;;
       2) "$SELF" status || true;;
       3) "$SELF" plan || true;;
       4) "$SELF" run-native-single || true;;
@@ -535,24 +628,26 @@ command=${1:-menu}
 case "$command" in
   menu) menu;;
   init)
-    [[ $# -le 2 ]] || fail 'Usage: init [CONFIG]'
+    [[ $# -le 3 ]] || fail 'Usage: init [CONFIG] [KEM]'
     config=${2:-$DEFAULT_CONFIG}
-    [[ ! -e "$config" ]] || fail "Configuration exists: $config"
-    mkdir -p "$(dirname "$config")"; config_template > "$config"
-    echo "Created $config. A run will replace the placeholders automatically from the active validated fixtures."
+    create_configuration "$config" "${3:-}"
+    ;;
+  new)
+    [[ $# -le 3 ]] || fail 'Usage: new [CONFIG] [KEM]'
+    config=${2:-"$REPO/.mt-state/handshake-performance-$(date -u +%Y%m%dT%H%M%SZ)-$$.env"}
+    create_configuration "$config" "${3:-}"
     ;;
   status)
     [[ $# -le 2 ]] || fail 'Usage: status [CONFIG]'
-    status_config "${2:-$DEFAULT_CONFIG}"
+    status_config "${2:-$(active_config)}"
     ;;
   plan)
     [[ $# -le 3 ]] || fail 'Usage: plan [CONFIG] [OUTPUT]'
-    config=${2:-$DEFAULT_CONFIG}
-    output=${3:-artifacts/results/handshake-performance-$(date -u +%Y%m%dT%H%M%SZ)-$$}
-
+    config=${2:-$(active_config)}
     [[ -f "$config" ]] || fail "Missing configuration: $config. Run $SELF init first."
 
     load_plan_counts "$config"
+    output=${3:-$(default_performance_output)}
 
     echo "Cases: ${CASES[*]}"
     echo "Profiles (9): ${PROFILES[*]}"
@@ -565,6 +660,7 @@ case "$command" in
     echo "PCAP: $PCAP_RUNS independent captures per scenario; ClientHello-to-Finished duration and wire bytes"
     echo "Retry: 9-profile simple-authentication matrix; 70 transactions/profile, 630 total"
     echo "Config: $config"
+    echo "Key establishment: $KEM_LABEL ($KEM_GROUP)"
     echo "Output: $output"
 
     if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config"; then
@@ -574,8 +670,13 @@ case "$command" in
     fi
     ;;
   run-retry)
-    [[ $# -le 2 ]] || fail 'Usage: run-retry [OUTPUT]'
-    run_retry_matrix "${2:-}"
+    [[ $# -le 3 ]] || fail 'Usage: run-retry [CONFIG] [OUTPUT]'
+    config=${2:-$(active_config)}
+    if [[ "${2:-}" == artifacts/results/* ]]; then config=$(active_config); requested_output=$2
+    else requested_output=${3:-}; fi
+    [[ -f "$config" ]] || fail "Missing configuration: $config. Run $SELF init first."
+    load_plan_counts "$config"
+    run_retry_matrix "${requested_output:-$(default_retry_output)}"
     ;;
   run-native|run-native-single|run-native-mutual|run-pcap|run-pcap-single|run-pcap-mutual|run-native-pcap|run-single|run-mutual|run-all)
     if [[ "$command" == run-all ]]; then
@@ -589,11 +690,12 @@ case "$command" in
     esac
     started_epoch=$(date +%s)
     [[ $# -le 3 ]] || fail "Usage: $command [CONFIG] [OUTPUT]"
-    config=${2:-$DEFAULT_CONFIG}
-    requested_output=${3:-artifacts/results/handshake-performance-$(date -u +%Y%m%dT%H%M%SZ)-$$}
+    config=${2:-$(active_config)}
     if [[ ! -f "$config" ]]; then
-      mkdir -p "$(dirname "$config")"; config_template > "$config"
+      fail "Missing configuration: $config. Run $SELF init first to select key establishment."
     fi
+    load_plan_counts "$config"
+    requested_output=${3:-$(default_performance_output)}
     if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config"; then
       ensure_dependencies
       write_automatic_config "$config"
@@ -609,7 +711,8 @@ case "$command" in
     write_summary "$output"
     report="$REPO/artifacts/reports/$(basename "$output")/report.html"
     python3 "$REPORTER" "$output/summary.json" --output "$report" \
-      --mode "$command" --started-epoch "$started_epoch" --ended-epoch "$(date +%s)"
+      --mode "$command" --started-epoch "$started_epoch" --ended-epoch "$(date +%s)" \
+      --kem-id "$KEM" --kem-label "$KEM_LABEL" --kem-group "$KEM_GROUP"
     cleanup; trap - EXIT INT TERM
     printf 'Completed: %s\nJSON report: %s\nHTML report: %s\n' "$output" "$output/summary.json" "$report"
     ;;

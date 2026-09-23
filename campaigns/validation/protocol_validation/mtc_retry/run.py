@@ -12,6 +12,7 @@ This is a native retry-validation experiment. It does not use PCAP timing.
 import argparse
 import json
 import math
+import os
 import random
 import statistics
 import subprocess
@@ -789,6 +790,11 @@ def main():
         "hostname": HOSTNAME,
         "profile": args.profile,
         "leaf": args.leaf,
+        "key_establishment": {
+            "id": os.environ.get("MTC_KEM_ID", "x25519"),
+            "label": os.environ.get("MTC_KEM_LABEL", "X25519"),
+            "openssl_group": os.environ.get("MTC_TLS_GROUP", "X25519"),
+        },
     }
 
     save_json(root / "design.json", metadata)
