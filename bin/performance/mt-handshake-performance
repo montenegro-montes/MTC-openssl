@@ -195,11 +195,14 @@ ensure_dependencies() {
 }
 
 ensure_kem_supported() {
-  local groups
-  groups=$(docker run --rm --network none --entrypoint /opt/mtc/openssl.sh "$IMAGE" list -tls-groups 2>&1) \
-    || fail 'Unable to list TLS groups in the active MTC image.'
-  printf '%s\n' "$groups" | grep -Eq "(^|[[:space:]])${KEM_GROUP}([[:space:]]|$)" \
-    || fail "The active MTC image does not provide the selected OpenSSL TLS group: $KEM_GROUP"
+  # OpenSSL 3.4 does not expose `openssl list -tls-groups` consistently.
+  # Every client/server command receives -groups explicitly, so OpenSSL itself
+  # performs the authoritative capability check when that scenario starts.
+  case "$KEM_GROUP" in
+    X25519|x25519_mlkem512|mlkem512) ;;
+    *) fail "Unsupported configured TLS group: $KEM_GROUP";;
+  esac
+  printf 'Key establishment: %s (OpenSSL group %s)\n' "$KEM_LABEL" "$KEM_GROUP"
 }
 
 ensure_retry_group_support() {
