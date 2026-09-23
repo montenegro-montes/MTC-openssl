@@ -166,8 +166,17 @@ its metadata reader does not authenticate it: authentication stays in `mtc_load`
 The memory-BIO probe now accepts an optional `landmark` argument with `trust.bin`
 and checks the initial group. Its standalone default is unchanged.
 New `test_ids.c` covers CA/individual/group construction; `test_trust_ids.py`
-covers the runner reader and non-hardcoded coordinates. Tests are prepared,
-**not executed**. Existing historical BoringSSL handshake results advertised
+covers the runner reader and non-hardcoded coordinates.
+
+Validation executed for the landmark-group change:
+- CA/individual/group native ID construction: PASS
+- trust-ID Python tests: PASS
+- bounded retry Python tests: 17/17 PASS
+- native retry test: PASS
+- landmark TLS smoke: 4/4 PASS
+- ClientHello probe: PASS, with exactly one `0xca34` extension and no `0xffa7`
+- initial ClientHello landmark group: `32473.101.2.1.1`
+- selected individual landmark / explicit retry: `32473.101.1.1.1` Existing historical BoringSSL handshake results advertised
 individual landmark IDs; they do not validate the new group-advertising path,
 regardless of whether their wire codepoint was 0xffa7 or 0xca34.
 

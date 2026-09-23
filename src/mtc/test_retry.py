@@ -19,6 +19,9 @@ def completed(requested, supported=B, reason='trust_anchor_mismatch', ok=False, 
         retry_tcp_connect_wall_ms_native=0.1,
         retry_tls_attempt_wall_ms=0.9,
         retry_attempt_wall_ms_native=1.1,
+        tls_bytes_read=100,
+        tls_bytes_written=50,
+        tls_bytes_total=150,
     )
     stdout += 'MTC_RETRY_TIMING ' + json.dumps(timing) + '\n'
     stderr = 'MTC_RETRY_CH ' + json.dumps(dict(requested_id_hex=retry.encode_id(requested).hex())) + '\n'
