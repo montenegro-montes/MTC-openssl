@@ -5,6 +5,7 @@ import json
 from copy import deepcopy
 from pathlib import Path
 from validate_mtc import require,save,sha
+from semantics import CODEPOINT, CODEPOINT_STATUS, DRAFT
 
 def layers(wire, obj, independent=None):
     absent = dict(status='NOT_EXECUTED', verified=None, reason='No supplemental independent transcript report supplied')
@@ -18,7 +19,8 @@ def layers(wire, obj, independent=None):
         trust_anchors_semantic_mapping=mapping,
         trust_anchors_structure=dict(status='PASS' if mapping.get('wire_structure_match') is True else mapping['status']),
         trust_anchors_semantics=dict(status='PASS_EXPERIMENTAL_CODEPOINT' if mapping.get('message_semantics_match') is True else mapping['status']),
-        trust_anchors_codepoint_status=dict(extension_codepoint='0xffa7', codepoint_status='experimental/private', draft_extension_type='TBD', draft_revision='draft-ietf-tls-trust-anchor-ids-04'),
+        # Preserve the observed evidence, including historical private runs.
+        trust_anchors_codepoint_status=dict(extension_codepoint=mapping.get('extension_codepoint'), codepoint_status=mapping.get('codepoint_status', CODEPOINT_STATUS if mapping.get('extension_codepoint') == CODEPOINT else 'UNKNOWN'), draft_extension_type=mapping.get('draft_extension_type', 'TBD'), draft_revision=mapping.get('draft_revision', DRAFT)),
         timestamp_draft_requirement=obj.get('timestamp_draft_requirement', dict(status='NOT_EXECUTED', reason='Historical object report; no new timestamp evidence')),
         timestamp_local_policy=obj.get('timestamp_local_policy', dict(status='LOCAL_POLICY', execution_status='NOT_EXECUTED', reason='Source policy is separate from historical evidence')),
         certificate_verify_endpoint_acceptance=endpoint,

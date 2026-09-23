@@ -441,3 +441,14 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
   -s campaigns/scaling/cert_chain_scaling \
   -p test_landmark_size_model.py
 ```
+
+## Wire codepoint migration
+
+The active laboratory uses provisional `0xca34`, matching native Chromium/BoringSSL
+`trust_anchors`. Earlier experimental runs used private `0xffa7`; their artifacts
+remain unchanged. Neither value is described here as a final IANA assignment.
+The pinned Trust Anchor IDs -04 text says ExtensionType TBD; changing the codepoint
+does not establish full draft compliance or update the pinned specification.
+Both values occupy a uint16: this migration alone changes no size-model numbers.
+Active extractors accept only the current codepoint; historical captures require
+the matching historical tools, not relabeling or regeneration in place.

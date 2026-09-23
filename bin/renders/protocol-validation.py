@@ -139,7 +139,7 @@ def transport_mapping_details(source):
         report=read(source/mode/'protocol-report.json') or {}; mapping=((report.get('validation_layers') or {}).get('trust_anchors_semantic_mapping') or {})
         if mapping:
             details.extend([(mode,'Requested IDs',', '.join(map(str,mapping.get('requested_ids') or [])) or '—'),(mode,'Available IDs',', '.join(map(str,mapping.get('available_ids') or [])) or '—'),(mode,'Scope',mapping.get('scope','—'))])
-    intro='<p>The offline object stages cannot observe TLS extensions. Stages 50/90 extract the captured extension, stages 55/95 verify it independently, and stages 70/110 consolidate the final result shown here. <strong>PASS_EXPERIMENTAL_CODEPOINT</strong> means that the captured structure and message semantics passed for the implemented profile, while extension codepoint <code>0xffa7</code> remains private and experimental rather than an assigned final IANA value.</p>'
+    intro='<p>The offline object stages cannot observe TLS extensions. Stages 50/90 extract the captured extension, stages 55/95 verify it independently, and stages 70/110 consolidate the final result shown here. <strong>PASS_EXPERIMENTAL_CODEPOINT</strong> means that the captured structure and message semantics passed for the implemented profile, with the codepoint recorded in each evidence: historical private <code>0xffa7</code> or current provisional <code>0xca34</code>. Neither label implies a final IANA assignment.</p>'
     result=intro+table(('Mode','Evidence stages','Final mapping status','Codepoint','Wire structure match','Message semantics match','Explanation'),rows)
     if details:result+='<h3>Observed identifiers and scope</h3>'+table(('Mode','Element','Observed value'),details)
     return result

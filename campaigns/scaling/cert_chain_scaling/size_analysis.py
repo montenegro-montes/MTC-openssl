@@ -16,7 +16,7 @@ def cert_metrics(path):
 def tls_certificate_message_size(certs, *, mtc_confirmation=False):
  # Handshake(4), certificate_request_context vector(1), certificate_list vector(3),
  # and, per CertificateEntry, cert_data vector(3) plus extensions vector(2).
- # MTC additionally confirms negotiation with empty 0xffa7 on entry zero (4 bytes).
+ # MTC additionally confirms negotiation with empty trust_anchors on entry zero (4 bytes).
  return 8+sum(len(x)+5 for x in certs)+(4 if mtc_confirmation else 0)
 def crossover_status(profile, fixtures_supplied, series, crossed, mapping=None):
  if profile not in (MTC_PROFILE_MAP if mapping is None else mapping):return "UNSUPPORTED_MTC_PROFILE"

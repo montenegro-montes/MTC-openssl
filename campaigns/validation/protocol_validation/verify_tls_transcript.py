@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 
 from validate_mtc import Reader, core, require, save, sha
-from semantics import trust_mapping
+from semantics import trust_mapping, MTC_EXT, CODEPOINT
 
 
 class Pairs(list):
@@ -296,7 +296,7 @@ def verify(args):
     # Native subset fixes landmark number to one. This is source/config context,
     # not a field extracted from the MTCProof (which carries no landmark number).
     ee = extensions(Reader(raw[2][4:]))
-    report['trust_anchors_semantic_mapping'] = trust_mapping(ch_ext.get(0xffa7, {}).get('data', b''), ee.get(0xffa7, {}).get('data', b''), [cert_ext.get(0xffa7)], crypto_profile(meta['profile'])['ca_id'], meta['mode'], log, 1)
+    report['trust_anchors_semantic_mapping'] = trust_mapping(ch_ext.get(MTC_EXT, {}).get('data', b''), ee.get(MTC_EXT, {}).get('data', b''), [cert_ext.get(MTC_EXT)], crypto_profile(meta['profile'])['ca_id'], meta['mode'], log, 1)
     layers = [report['certificate_verify_independent_verification'], report['server_finished_independent_verification'], report['client_finished_independent_verification']]
     if report['trust_anchors_semantic_mapping']['status'] == 'FAIL':
         report.update(overall='FAIL', reason='Trust anchor semantic mapping failed')

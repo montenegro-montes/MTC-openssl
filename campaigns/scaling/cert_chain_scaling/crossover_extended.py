@@ -189,7 +189,7 @@ def run(a):
     for name in ('core.py','tls.c','mtc.c','crypto_profiles.py'):
         file=REPO/'src/mtc'/name;source_hashes[str(file.relative_to(REPO))]=hashlib.sha256(inputs.read(file)).hexdigest()
     metadata=dict(schema=1,result_domain='CERTIFICATE_SIZE_CROSSOVER',draft=DRAFT,merkle_hash='SHA-256',
-                  boundary='TLS Certificate handshake header + body; excludes CertificateVerify, records, latency and CPU; MTC includes empty 0xffa7 confirmation',
+                  boundary='TLS Certificate handshake header + body; excludes CertificateVerify, records, latency and CPU; MTC includes empty trust_anchors confirmation',
                   leaf_index=0,log_number=1,landmark_policy='initial cover(0,N), first covering subtree; not a population-wide maximum/average credential size',
                   maximum_supported_N=MAXIMUM_SUPPORTED_N,draft_limit=1<<48,draft_limit_definition='index space permits 2^48 entries; full-landmark end=2^48 cannot fit uint48',
                   draft_endpoint_limit=MAXIMUM_SUPPORTED_N,implementation_limit=IMPLEMENTATION_LIMIT,workflow_sizes=list(TREE_SIZES),
@@ -230,7 +230,8 @@ No large SLH-DSA signature has been compressed: it is distributed out of band.
 SLH-DSA-256s SPKI is 82 bytes versus 91 for ECDSA P-256, explaining its smaller
 landmark fixture. Different identity/extension fields also contribute to the base.
 
-The old model omitted the 4-byte empty 0xffa7 CertificateEntry extension. This new
+The old model omitted the 4-byte empty trust_anchors CertificateEntry extension
+(historically 0xffa7; currently provisional 0xca34, still uint16). This new
 analysis corrects TLS=DER+17 for MTC; X509 uses 8+sum(DER+5). Existing files are
 untouched. The N16 DER fixtures round-trip exactly, and the additive breakdown
 sums to DER, then adds TLS framing. TBS extensions and SPKI AlgorithmIdentifier

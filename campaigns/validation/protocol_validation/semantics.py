@@ -1,6 +1,15 @@
-"""Pure parsing/classification for the pinned MTC-05 and trust-anchor-ids-04 subset."""
+"""Parsing/classification for the pinned MTC-05 and trust-anchor-ids-04 subset."""
 DRAFT = 'draft-ietf-tls-trust-anchor-ids-04'
-CODEPOINT = '0xffa7'
+# Read the authoritative C constant; no alternate wire codepoint or fallback.
+from pathlib import Path
+import re
+_HEADER = Path(__file__).resolve().parents[3] / 'src/mtc/mtc.h'
+_MATCH = re.search(r'^#define MTC_EXT (0x[0-9a-fA-F]+)$', _HEADER.read_text(), re.M)
+if _MATCH is None:
+    raise ValueError('Missing MTC_EXT in ' + str(_HEADER))
+MTC_EXT = int(_MATCH.group(1), 16)
+CODEPOINT = f'0x{MTC_EXT:04x}'
+CODEPOINT_STATUS = 'provisional/Chromium-BoringSSL-aligned'
 
 
 def require(ok, reason):
@@ -63,7 +72,7 @@ def encode_list(ids):
 def trust_mapping(ch, ee, certificate_extensions, ca_id, mode, log, landmark):
     """Classify observed payloads; single-candidate initial-group / exact-ID subset only."""
     result = dict(draft_revision=DRAFT, extension_codepoint=CODEPOINT,
-                  codepoint_status='experimental/private', draft_extension_type='TBD',
+                  codepoint_status=CODEPOINT_STATUS, draft_extension_type='TBD',
                   wire_structure_match=False, message_semantics_match=False,
                   scope='single candidate, initial single-log group or exact individual-ID negotiation; not complete trust_anchors support')
     try:
@@ -93,7 +102,7 @@ def trust_mapping(ch, ee, certificate_extensions, ca_id, mode, log, landmark):
         require((requested == [expected] or membership) and available == [expected],
                 'observed IDs do not match the configured single-candidate individual anchor')
         result.update(status='PASS_EXPERIMENTAL_CODEPOINT', message_semantics_match=True,
-                      reason='Observed single-candidate wire structures and configured group-member or exact-ID selection match trust-anchor-ids-04; codepoint remains private.')
+                      reason='Observed single-candidate wire structures and configured group-member or exact-ID selection match trust-anchor-ids-04; codepoint is provisional, not a final IANA assignment.')
         result['landmark_group_recommendation'] = dict(
             status=('PASS' if membership else 'UNRESOLVED') if mode == 'landmark' else 'NOT_APPLICABLE',
             section='MTC-05 8.2.1',

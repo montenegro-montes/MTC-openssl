@@ -86,13 +86,13 @@ uses `mldsa65` and IDs 32473.112 / 32473.212 instead; do not relabel old capture
 
 Check these fields against `src/mtc/core.py`, `mtc.c` and `tls.c`:
 
-- ClientHello and EncryptedExtensions: experimental extension 0xffa7, uint16
+- ClientHello and EncryptedExtensions: provisional extension 0xca34, uint16
   list length, uint8 individual lengths, canonical base-128 trust-anchor ID and
   matching selection. Landmark signaling includes the `.1.1.1` suffix;
   standalone uses the authority ID. This is a local extension, not an assigned
   IANA code point; keep captures separate from other experimental protocols.
 - Certificate: one leaf; TLS uint24 certificate length and uint16 extensions
-  length; empty 0xffa7 CertificateEntry extension confirming negotiation.
+  length; empty 0xca34 CertificateEntry extension confirming negotiation.
 - DER: v3 certificate; inner and outer proof algorithm OID
   `1.3.6.1.4.1.44363.47.0` with no parameters; issuer attribute OID
   `1.3.6.1.4.1.44363.47.1`; serial `(log_id << 48) | leaf_index`; actual
@@ -120,3 +120,14 @@ Remaining manual risks: provider algorithm/curve aliases and TLS scheme support,
 compilation against the actual image, and large SLH-DSA standalone proofs. In
 particular, two SLH-DSA-SHA2-256s signatures approach the 65536-byte local bound;
 the gate must validate their actual serialized lengths and successful processing.
+
+## Wire codepoint migration
+
+The active laboratory uses provisional `0xca34`, matching native Chromium/BoringSSL
+`trust_anchors`. Earlier experimental runs used private `0xffa7`; their artifacts
+remain unchanged. Neither value is described here as a final IANA assignment.
+The pinned Trust Anchor IDs -04 text says ExtensionType TBD; changing the codepoint
+does not establish full draft compliance or update the pinned specification.
+Both values occupy a uint16: this migration alone changes no size-model numbers.
+Active extractors accept only the current codepoint; historical captures require
+the matching historical tools, not relabeling or regeneration in place.

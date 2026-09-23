@@ -18,7 +18,7 @@ import xml.etree.ElementTree as ET
 
 from validate_mtc import Reader, require, sha, save
 import core
-from semantics import trust_mapping
+from semantics import trust_mapping, MTC_EXT, CODEPOINT
 
 
 def xml_fields(node, name):
@@ -231,8 +231,8 @@ def extract(a):
         p['ca_id'] + ('.1.1.1' if meta['mode'] == 'landmark' else '')
     )
 
-    require(0xffa7 in ch_ext, 'missing private 0xffa7 ClientHello signal')
-    signal(ch_ext[0xffa7]['data'], anchor,
+    require(MTC_EXT in ch_ext, f'missing provisional {CODEPOINT} ClientHello signal')
+    signal(ch_ext[MTC_EXT]['data'], anchor,
            core.relid(p['ca_id'] + '.2.1.1') if meta['mode'] == 'landmark' else None)
     require(41 not in ch_ext and 42 not in ch_ext, 'resumption or early data offered')
 
@@ -252,8 +252,8 @@ def extract(a):
     # EncryptedExtensions
     ee_row, ee = one(8)
     ee_ext = extension_map(ee)
-    require(0xffa7 in ee_ext, 'missing private 0xffa7 EncryptedExtensions signal')
-    signal(ee_ext[0xffa7]['data'], anchor)
+    require(MTC_EXT in ee_ext, f'missing provisional {CODEPOINT} EncryptedExtensions signal')
+    signal(ee_ext[MTC_EXT]['data'], anchor)
 
     # Certificate
     cert_row, cert_node = one(11)
@@ -281,9 +281,9 @@ def extract(a):
     )
 
     cert_ext = extension_map(cert_node)
-    require(0xffa7 in cert_ext, 'missing experimental CertificateEntry confirmation')
+    require(MTC_EXT in cert_ext, 'missing experimental CertificateEntry confirmation')
     require(
-        cert_ext[0xffa7]['length'] == 0 and cert_ext[0xffa7]['data'] == b'',
+        cert_ext[MTC_EXT]['length'] == 0 and cert_ext[MTC_EXT]['data'] == b'',
         'missing/nonempty experimental CertificateEntry confirmation',
     )
 
@@ -372,14 +372,14 @@ def extract(a):
             '-showcerts reserializes the received X509; original raw input not retained'
         ),
         trust_anchors_semantic_mapping=trust_mapping(
-            ch_ext[0xffa7]['data'], ee_ext[0xffa7]['data'], [cert_ext[0xffa7]],
+            ch_ext[MTC_EXT]['data'], ee_ext[MTC_EXT]['data'], [cert_ext[MTC_EXT]],
             p['ca_id'], meta['mode'], int.from_bytes(tbs[1][1], 'big') >> 48, 1),
         endpoint_authentication=True,
         tls_version='TLSv1.3',
         cipher='TLS_AES_256_GCM_SHA384',
         key_exchange='X25519',
         unresolved=[
-            'Private 0xffa7 supports initial single-log group and exact individual-ID selection; general groups, automatic retry and complete trust_anchors behavior remain outside the implementation',
+            f'Provisional {CODEPOINT} supports initial single-log group and exact individual-ID selection; general groups, automatic retry and complete trust_anchors behavior remain outside the implementation',
             'CertificateVerify/Finished cryptographic acceptance is endpoint evidence, not independent transcript verification',
         ],
     )

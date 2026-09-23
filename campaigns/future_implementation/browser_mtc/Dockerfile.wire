@@ -1,0 +1,10 @@
+FROM mt-browser-boringssl:baseline
+
+WORKDIR /opt/boringssl
+RUN test "$(git rev-parse HEAD)" = f8625c50f6d57cb0bab55b44552ad367a98eb540 \
+    && git diff --exit-code -- include/openssl/tls1.h \
+    && grep -q "^#define TLSEXT_TYPE_trust_anchors 0xca34$" include/openssl/tls1.h \
+    && cmake -GNinja -B build-mtc -DCMAKE_BUILD_TYPE=Release \
+    && ninja -C build-mtc bssl
+
+ENV PATH="/opt/boringssl/build-mtc:${PATH}"

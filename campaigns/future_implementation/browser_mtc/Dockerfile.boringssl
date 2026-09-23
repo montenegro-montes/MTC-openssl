@@ -25,6 +25,6 @@ RUN cmake -GNinja \
     -DCMAKE_BUILD_TYPE=Release \
     && ninja -C build bssl
 
-ENV PATH="/opt/boringssl/build/tool:${PATH}"
+ENV PATH="/opt/boringssl/build:${PATH}"
 
 CMD ["/bin/bash"]

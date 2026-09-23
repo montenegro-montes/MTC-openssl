@@ -3,7 +3,8 @@
 #include <openssl/ssl.h>
 #include <stdint.h>
 #define MTC_MAX 65536
-#define MTC_EXT 0xffa7
+/* Provisional Chromium/BoringSSL trust_anchors codepoint; not final IANA. */
+#define MTC_EXT 0xca34
 #define MTC_DRAFT "draft-ietf-plants-merkle-tree-certs-05"
 typedef struct mtc_config MTCConfig;
 MTCConfig *mtc_load(const char *path, int landmark);

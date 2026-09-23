@@ -288,7 +288,7 @@ image or the host environment.
 - Endpoint acceptance and independent verification are separate layers.
   `verify_tls_transcript.py` provides optional offline verification; absent
   supplemental evidence remains NOT_EXECUTED in old reports.
-- MCF1 is local out-of-band storage. The private 0xffa7 CH/EE/CertificateEntry
+- MCF1 is local out-of-band storage. The provisional 0xca34 CH/EE/CertificateEntry
   negotiation is checked against source behavior, not claimed to implement the
   complete recommended trust_anchors extension. Draft OIDs/UTF8String are expressly
   experimental encodings in sections5.1/6.2, not unresolved guesses.
@@ -373,7 +373,7 @@ a complete independent TLS verification PASS. No secret values enter reports or 
 The real supplemental JSON was written only to `/tmp/mtc-landmark-independent-final.json`.
 It is local review output, not committed scientific evidence.
 
-The private **0xffa7** codepoint remains experimental; TA-04 ExtensionType is
+That historical capture used private **0xffa7**; TA-04 ExtensionType is
 **TBD**. The observed single-candidate CH/EE lists and zero-length first-entry
 confirmation support **PASS_EXPERIMENTAL_CODEPOINT** for this restricted semantic
 mapping. That historical capture advertised an individual landmark; it does not
@@ -386,7 +386,7 @@ offline group semantics report `landmark_group_advertised: true`, both IDs,
 `group_membership_valid: true`, and `landmark_group_recommendation.status: PASS`.
 This is restricted to initial log 1 / landmark 1. General group membership,
 standalone-CA fallback from a group, automatic retry and empty requested lists
-remain unsupported. The unchanged private `0xffa7` is experimental; this remains
+remain unsupported. The active `0xca34` is provisional (not a final IANA assignment); this remains
 **implemented-subset conformance**, not full MTC-05 conformance.
 
 Timestamp reports separate (a) zero timestamp used for MTCProof signatures,
@@ -400,7 +400,7 @@ distribution and public independent cosigner ecosystem.
 
 - PASS: that specific layer has observed successful evidence.
 - PASS_EXPERIMENTAL_CODEPOINT: observed single-candidate structures/selection match,
-  while 0xffa7 remains private. Not full trust_anchors or MTC compliance.
+  with the codepoint/status recorded in that evidence (historical private 0xffa7 or current provisional 0xca34). Not full trust_anchors or MTC compliance.
 - LOCAL_POLICY: source-identified local rule; execution status is separate.
 - UNRESOLVED: a mapping or assertion is still unsupported by sufficient evidence.
 - NOT_EXECUTED: no corresponding verification result, including old report fields.
@@ -514,3 +514,14 @@ executes it once, requires that global result to be `PASS`, and copies the exact
 evidence into every profile/leaf directory. This lets the normal stage-10
 prerequisite gate and any per-identity report reuse the matrix result without
 rerunning the 12,807 inclusion evaluations.
+
+## Wire codepoint migration
+
+The active laboratory uses provisional `0xca34`, matching native Chromium/BoringSSL
+`trust_anchors`. Earlier experimental runs used private `0xffa7`; their artifacts
+remain unchanged. Neither value is described here as a final IANA assignment.
+The pinned Trust Anchor IDs -04 text says ExtensionType TBD; changing the codepoint
+does not establish full draft compliance or update the pinned specification.
+Both values occupy a uint16: this migration alone changes no size-model numbers.
+Active extractors accept only the current codepoint; historical captures require
+the matching historical tools, not relabeling or regeneration in place.

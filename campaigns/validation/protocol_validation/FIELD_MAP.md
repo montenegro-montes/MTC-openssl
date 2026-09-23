@@ -38,8 +38,8 @@ separate blocks for derived and out-of-band data; it is not one concatenated obj
 | landmark identifier | mtc.c:mtc_load / tls.c | TLS selection CA.1.log.landmark, normal advertisement CA.2.1.1, base128 IDs | 8.2 | individual landmark trust anchor | For local log1/landmark1 require CA.1.1.1 | yes | **Absent from MTCProof**; only configuration/transport names it |
 | tree size / root / signer keys | prepare.py / mtc.c | OOB only; root also derived from proof | 6.3, 6.4, 7.1–7.4 | trusted state | Trust supplied explicitly; bind via signatures | yes | No N, root or issuer SPKI embedded as separate MTCProof fields |
 | TLS Certificate | src/mtc/patch.py, tls.c | Standard TLS1.3 type11,U24 body,V8 context,V24 list; entry V24 DER,V16 extensions | 8 (RFC8446 framing) | certificate transport | Extract exact DER from decrypted/reassembled packet bytes | yes | Payload MTC is experimental; TLS framing remains native |
-| 0xffa7 CH/EE | src/mtc/tls.c:add/parse | Private extension U16 type,U16 length; V16 list of V8 IDs | TA-04 3, 4.1–4.3; MTC-05 8.1/8.2 | initial single-log group / exact individual-ID subset | CH CA.2.1.1 or exact CA.1.1.1; EE CA.1.1.1, canonical encoded bytes | local only | Complete trust_anchors draft protocol not validated; do not equate private code point to standard |
-| 0xffa7 CertificateEntry | src/mtc/tls.c:add/parse | U16 type=0xffa7,U16 length=0 | TA-04 4.1/4.2 | first-entry selection confirmation | Required on entry0 only, after matching EE | local only | Prototype-specific additional negotiation gate |
+| 0xca34 CH/EE | src/mtc/tls.c:add/parse | Provisional extension U16 type,U16 length; V16 list of V8 IDs | TA-04 3, 4.1–4.3; MTC-05 8.1/8.2 | initial single-log group / exact individual-ID subset | CH CA.2.1.1 or exact CA.1.1.1; EE CA.1.1.1, canonical encoded bytes | local only | Complete trust_anchors draft protocol not validated; not a final IANA codepoint assignment |
+| 0xca34 CertificateEntry | src/mtc/tls.c:add/parse | U16 type=0xca34,U16 length=0 | TA-04 4.1/4.2 | first-entry selection confirmation | Required on entry0 only, after matching EE | local only | Prototype-specific additional negotiation gate |
 | CertificateVerify / Finished | native OpenSSL via patch.py | Standard TLS1.3 type15/type20 | 8 (RFC8446) | possession/transcript authentication | Endpoint success + decrypted message order; actual CV scheme recorded | yes | Optional exact-byte offline verifier; separate endpoint and independent results |
 
 ## Checklist classification
@@ -106,5 +106,16 @@ ECDSA 0x0403/0x0503/0x0603); unsupported schemes remain NOT_IMPLEMENTED.
 Normal landmark clients advertise `32473.112.2.1.1`; the individual
 `32473.112.1.1.1` remains available for exact selection/retry by callers.
 Automatic retry and standalone-CA fallback from a group are not implemented.
-The unchanged private `0xffa7` remains experimental: this is implemented-subset
+The active provisional `0xca34` is aligned with Chromium/BoringSSL, not final IANA: this is implemented-subset
 conformance, not full MTC-05 conformance. Historical captures retain their observed IDs.
+
+## Wire codepoint migration
+
+The active laboratory uses provisional `0xca34`, matching native Chromium/BoringSSL
+`trust_anchors`. Earlier experimental runs used private `0xffa7`; their artifacts
+remain unchanged. Neither value is described here as a final IANA assignment.
+The pinned Trust Anchor IDs -04 text says ExtensionType TBD; changing the codepoint
+does not establish full draft compliance or update the pinned specification.
+Both values occupy a uint16: this migration alone changes no size-model numbers.
+Active extractors accept only the current codepoint; historical captures require
+the matching historical tools, not relabeling or regeneration in place.

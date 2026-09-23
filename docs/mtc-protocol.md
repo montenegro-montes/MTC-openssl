@@ -62,7 +62,7 @@ MTC autentica la credencial; CertificateVerify prueba posesión de la clave TLS.
 Sus bytes se miden por separado.
 
 Se implementan las listas solicitada/disponible en ClientHello/EncryptedExtensions
-y la confirmación vacía en CertificateEntry 0 de TAI -04, usando **0xffa7 privado**.
+y la confirmación vacía en CertificateEntry 0 de TAI -04, usando **0xca34 provisional**, alineado con Chromium/BoringSSL (no asignación IANA definitiva). El laboratorio utilizó históricamente `0xffa7` privado; esas evidencias se conservan.
 La selección admite coincidencia exacta con un CA ID o landmark específico.
 No se implementan grupos, negociación de cosigners, reintentos ni rutas alternativas.
 La configuración de cada servidor fija un certificado; el cliente debe anunciar
