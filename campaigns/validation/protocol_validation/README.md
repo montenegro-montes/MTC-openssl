@@ -510,4 +510,7 @@ MTC draft C.1, C.2 and C.4 vectors from `src/mtc/test_core.py`, including 12,807
 inclusion evaluations. The JSON and HTML reports identify this as core-vector
 agreement rather than complete draft conformance. A single-profile run stores
 the evidence inside its protocol-validation directory; the complete matrix
-executes it once and includes it in the matrix result.
+executes it once, requires that global result to be `PASS`, and copies the exact
+evidence into every profile/leaf directory. This lets the normal stage-10
+prerequisite gate and any per-identity report reuse the matrix result without
+rerunning the 12,807 inclusion evaluations.

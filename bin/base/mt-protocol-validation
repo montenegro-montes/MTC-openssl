@@ -822,7 +822,7 @@ run_leaf_pipeline() (
 )
 run_all_profiles() (
  local name=${1:-$(date -u +%Y%m%dT%H%M%SZ)}
- local profile leaf leaf4 leaf_state stress_state
+ local profile leaf leaf4 leaf_state leaf_cap leaf_core matrix_core stress_state
  local started_epoch now elapsed completed=0 total eta average profile_index=0
  [[ "$name" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid matrix campaign name.'
  [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] || fail 'Initialize mt-cert-scaling before starting the profile/leaf matrix.'
@@ -867,11 +867,13 @@ PYOVERALL
  total=$(( ${#PROFILE_MATRIX[@]} * LEAF_COUNT ))
 
  mkdir -p "artifacts/protocol-validation/$name"
- if [[ ! -f "artifacts/protocol-validation/$name/05.draft-core-vectors.json" ]]; then
+ matrix_core="artifacts/protocol-validation/$name/05.draft-core-vectors.json"
+ if [[ ! -f "$matrix_core" ]]; then
   printf '\nDraft core-vector evaluation (once for the complete matrix)\n'
   python3 campaigns/validation/protocol_validation/draft_core_audit.py \
-   --output "artifacts/protocol-validation/$name/05.draft-core-vectors.json"
+   --output "$matrix_core"
  fi
+ passed "$matrix_core"
 
  for profile in "${PROFILE_MATRIX[@]}"; do
   profile_index=$((profile_index+1))
@@ -894,6 +896,17 @@ PYOVERALL
    printf '============================================================\n'
    if [[ ! -f "$leaf_state/paths.env" ]]; then
     MT_PROTOCOL_STATE="$leaf_state" "$SELF" init-profile "$name" "$profile" "$leaf"
+   fi
+   # Stage 05 is evaluated once for the matrix.  Each identity receives the
+   # exact same evidence so its ordinary prerequisite gate and standalone
+   # report remain self-contained without rerunning the draft vectors.
+   leaf_cap="artifacts/protocol-validation/$name/$profile/leaf-$leaf4"
+   leaf_core="$leaf_cap/05.draft-core-vectors.json"
+   mkdir -p "$leaf_cap"
+   if [[ -f "$leaf_core" ]]; then
+    cmp -s "$matrix_core" "$leaf_core" || fail "Leaf draft-core evidence differs from the matrix result: $leaf_core"
+   else
+    cp -p "$matrix_core" "$leaf_core"
    fi
    MT_PROTOCOL_STATE="$leaf_state" "$SELF" run LEAF-ALL
    completed=$((completed+1))
