@@ -79,7 +79,7 @@ configure_kem() {
 
 select_kem() {
   local selection
-  printf 'Key establishment:\n  1 X25519 (default)\n  2 X25519+ML-KEM512\n  3 ML-KEM-512\n' >&2
+  printf 'Key establishment:\n  1 X25519\n  2 X25519+ML-KEM512\n  3 ML-KEM-512\n' >&2
   read -r -p '> ' selection || selection=1
   configure_kem "${selection:-1}"
 }

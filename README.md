@@ -29,7 +29,7 @@ The main authentication representations are:
 | Trust Anchor Retry | MTC server authentication with one retry on a fresh TCP/TLS connection |
 
 Handshake-performance configurations select key establishment independently
-from authentication: `X25519` (default), `X25519+ML-KEM512`, or `ML-KEM-512`.
+from authentication: `X25519`, `X25519+ML-KEM512`, or `ML-KEM-512`.
 The selection is included in artifact/report directory names and report metadata.
 
 MTC fixture and crossover work uses explicit tree sizes. The primary fixture set
