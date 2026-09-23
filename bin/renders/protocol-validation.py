@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Render plain-language English HTML reports for protocol validation."""
-import argparse, html, json
+import argparse, html, json, re
 from pathlib import Path
 
 def esc(x): return html.escape(str(x))
@@ -15,6 +15,15 @@ def status(value):
     return 'PASS' if str(raw).upper() in ('PASS','SUCCESS','COMPLETED') else 'NO PASS'
 def table(headers, rows):
     return '<div class="scroll"><table><thead><tr>'+''.join(f'<th>{esc(x)}</th>' for x in headers)+'</tr></thead><tbody>'+''.join('<tr>'+''.join(f'<td>{esc(x)}</td>' for x in row)+'</tr>' for row in rows)+'</tbody></table></div>'
+def draft_section_key(value):
+    """Sort draft references numerically; local/non-section rules come last."""
+    text=str(value or '').strip()
+    references=re.findall(r'\d+(?:\.\d+)+|\d+',text)
+    if not references:return (1,(),text.casefold())
+    # Prefixes such as MTC-05 and TA-04 identify the document revision.  A
+    # following dotted value is the actual section number.
+    section=next((item for item in references if '.' in item),references[-1])
+    return (0,tuple(int(part) for part in section.split('.')),text.casefold())
 def shell(title, result, intro, sections):
     color='pass' if result=='PASS' else 'fail'; body=''.join(f'<section><h2>{esc(name)}</h2>{content}</section>' for name,content in sections)
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>{esc(title)}</title><style>body{{font:16px system-ui;background:#f3f6fa;color:#172033;margin:0}}main{{max-width:1150px;margin:auto;padding:28px}}header,section{{background:#fff;border:1px solid #dbe3ed;border-radius:12px;padding:22px;margin:16px 0}}h1{{margin:.2em 0}}h2{{font-size:20px}}h3{{margin-top:25px}}.result{{font-size:26px;font-weight:800}}.pass{{color:#087443}}.fail{{color:#b42318}}.note{{background:#eef5ff;padding:14px;border-left:5px solid #3974c6}}table{{border-collapse:collapse;width:100%}}th,td{{padding:10px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top;overflow-wrap:anywhere}}th{{background:#edf2f7}}.scroll{{overflow:auto}}code{{background:#edf2f7;padding:2px 5px}}</style></head><body><main><header><p>Explained validation report</p><h1>{esc(title)}</h1><p class="result {color}">{esc(result)}</p><p>{esc(intro)}</p></header>{body}</main></body></html>'''
@@ -84,7 +93,8 @@ def offline_details(source, filename, stage, explanation):
     later_transport=later_layers.get('transport_structure_validation') or {}
     later_stages='50–70' if later_mode=='landmark' else '90–110'
     check_rows=[]
-    for item in checks:
+    ordered_checks=sorted(enumerate(checks),key=lambda pair:(draft_section_key(pair[1].get('section')),pair[0]))
+    for _,item in ordered_checks:
         observed_status=item.get('status'); final_evidence='—'
         if item.get('rule')=='trust_anchors mapping requires captured transport evidence':
             if later_mapping:
