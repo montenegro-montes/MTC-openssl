@@ -2,7 +2,7 @@
 
 The `bin/base/` launchers provide the entry points for the active MTC/TLS experimental workflow.
 
-They operate only on the current X.509 and MTC implementation. The frozen Compact implementation and historical campaigns are intentionally excluded.
+They operate only on the current X.509 and MTC implementation.
 
 ## `mt-prepare`
 
@@ -10,7 +10,7 @@ They operate only on the current X.509 and MTC implementation. The frozen Compac
 
 It is the prerequisite launcher for the current experimental workflow. Its main responsibility is to make sure that the required Docker images, launcher configuration and N=16 MTC fixtures are available before protocol validation or performance measurements are started.
 
-It does **not** execute the historical campaigns or the frozen Compact implementation.
+It does **not** execute experiment campaigns.
 
 ### Complete local reset
 
@@ -535,4 +535,4 @@ Keeping these responsibilities separate prevents protocol-validation evidence fr
 - `mt-protocol-validation`: validates the active MTC implementation through offline validation, TLS handshakes, packet captures, independent transcript verification, on-wire object validation and negative tests.
 - `bin/performance/mt-handshake-performance`: measures X.509/MTC handshake time and size.
 
-These launchers exclude the frozen Compact implementation and historical campaigns.
+These launchers use the active X.509 and MTC implementation.

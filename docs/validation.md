@@ -41,5 +41,5 @@ These are functional samples only and do not support performance conclusions.
 CSVs and logs are under `artifacts/results/`. The Merkle samples record the hash
 of the specific patch used; DANE exclusion was subsequently added and the full
 suite was repeated. No statistical study has been run and the optional hybrid
-group has not been tested. Compact-certificate size reduction was not implemented
+group has not been tested. Certificate-size reduction outside MTC was not implemented
 in this phase: this stage adds verification and bytes to X.509.

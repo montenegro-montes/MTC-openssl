@@ -66,7 +66,7 @@ cleanup() (
   actual=$(docker inspect --format '{{.Image}}' "$id")
   selected=0
   if printf '%s\n' "$lab_images" | grep -Fx "$actual" >/dev/null; then selected=1; fi
-  case "$ref:$project" in mt-tls-*:*|*:mt|*:mtcompact|*:mtprofile|*:mtclab|*:controlledn16|*:mtscaling|*:mtlatency|*:mtbandwidth|*:mtloss|*:mtcombined|*:mtcapture|*:mtcprotocol-*) selected=1;; esac
+  case "$ref:$project" in mt-tls-*:*|*:mtlatency|*:mtbandwidth|*:mtloss|*:mtcombined|*:certchainscaling|*:mtcprotocol-*) selected=1;; esac
   if [[ "$selected" == 1 ]]; then containers[nc]=$id; nc=$((nc+1)); fi
  done < <(docker ps -aq)
  while IFS= read -r id; do if [[ -n "$id" ]]; then images[ni]=$id; ni=$((ni+1)); fi; done < <(

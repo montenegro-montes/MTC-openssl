@@ -7,9 +7,8 @@ import shutil
 import subprocess
 
 REPO = Path(__file__).resolve().parents[2]
-PROJECTS = {'mt', 'mtcompact', 'mtprofile', 'mtclab', 'controlledn16',
-            'mtscaling', 'mtlatency', 'mtbandwidth', 'mtloss', 'mtcombined',
-            'mtcapture', 'certchainscaling'}
+PROJECTS = {'mtlatency', 'mtbandwidth', 'mtloss', 'mtcombined',
+            'certchainscaling'}
 
 
 def docker(*args):
@@ -18,7 +17,7 @@ def docker(*args):
 
 def owned(labels):
     project = (labels or {}).get('com.docker.compose.project', '')
-    return project in PROJECTS or re.fullmatch(r'pcmab[0-9a-f]{12}', project) is not None
+    return project in PROJECTS
 
 
 def inventory(kind):

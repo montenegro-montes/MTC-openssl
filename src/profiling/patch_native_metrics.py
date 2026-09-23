@@ -1,4 +1,4 @@
-"""Add minimal TCP/TLS timing to the active MTC s_client without Compact."""
+"""Add minimal TCP/TLS timing to the active MTC s_client."""
 from pathlib import Path
 import hashlib, shutil, sys
 

@@ -7,5 +7,4 @@ and cryptographic scaling:
 mt-tls-lab:local -> mt-tls-mtc:local -> mt-tls-capture:local
 ```
 
-Compact, its profiling layer and the former combined measurement image are kept
-under `docker/historical_campaigns/` for historical reproduction only.
+Network measurement images extend `mt-tls-mtc:local` from `docker/network/`.

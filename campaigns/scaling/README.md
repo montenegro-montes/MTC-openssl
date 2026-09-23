@@ -2,8 +2,7 @@
 
 This category contains experiments whose independent variables are
 cryptographic profiles or authentication-structure sizes. It is separate from
-the established baseline, network-condition, packet-capture, and PCMA
-campaigns.
+the validation, performance, network-condition and packet-capture campaigns.
 
 | Directory | Study | Status |
 |---|---|---|

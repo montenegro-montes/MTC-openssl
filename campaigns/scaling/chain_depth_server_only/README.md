@@ -41,7 +41,7 @@ This campaign should reuse logic from:
 - `campaigns/scaling/cert_chain_scaling/server.py`
 - `campaigns/scaling/cert_chain_scaling/measure.py`
 - `src/mtc/prepare.py`
-- `src/mtc/prepare_scaling.py`
+- `src/mtc/prepare.py`
 
 The existing `cert_chain_scaling` campaign already supports the equivalent
 of `ca-server` and `root-intermediate-server` through `depth-2` and `depth-3`.

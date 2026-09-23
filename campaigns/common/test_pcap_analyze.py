@@ -1,7 +1,7 @@
 """Deterministic offline tests; no capture, network, Docker or tshark required."""
 import copy
 import unittest
-from analyze import FIELDS, handshake_metrics
+from pcap_analyze import FIELDS, handshake_metrics
 
 
 def fixture():

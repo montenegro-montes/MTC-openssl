@@ -291,7 +291,7 @@ MTC profile:
 - `mtc-savings.csv`: byte and latency deltas of MTC landmark relative to each X.509 baseline.
 - `mtc-crossover.csv`: first X.509 baseline where MTC becomes byte-efficient.
 - `mtc-savings-table.tex`: LaTeX table with all byte savings.
-- `mtc-crossover-table.tex`: compact LaTeX crossover table.
+- `mtc-crossover-table.tex`: concise LaTeX crossover table.
 - `manifest.json`: provenance for the summary.
 
 ## Byte-level crossover

@@ -1,6 +1,6 @@
 # Internal laboratory scripts
 
-Use the commands in [`bin/historical_campaigns/`](../bin/historical_campaigns/) for routine operation. See the
+Use the commands in [`bin/`](../bin/) for routine operation. See the
 [architecture guide](../docs/architecture.md) for the complete repository map.
 
 | Directory | Files | Execution context |
@@ -14,7 +14,7 @@ The base Dockerfile installs these files under `/opt/lab/`, preserving their
 runtime names. Study-specific runners and analyses belong in `campaigns/`.
 
 `maintenance/reset_lab.py` implements the destructive `mt-prepare reset-all`
-action and remains available to the historical manager. It requires the literal
+action and is invoked by the active preparation launcher. It requires the literal
 confirmation `RESET ALL`, uses Docker Compose
 labels to select laboratory resources and deletes only the fixed local paths
 `artifacts/` and `.mt-state/`. See [campaign management](../campaigns/README.md).

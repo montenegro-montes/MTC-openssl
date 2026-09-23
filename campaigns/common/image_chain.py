@@ -7,10 +7,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SPECS = {
     'lab': ('mt-tls-lab:local', 'docker/base/Dockerfile', None),
-    'compact': ('mt-tls-compact:local', 'docker/historical_campaigns/Dockerfile.compact', 'lab'),
-    'profile': ('mt-tls-profile:local', 'docker/historical_campaigns/Dockerfile.profile', 'compact'),
-    'mtc': ('mt-tls-mtc:local', 'docker/historical_campaigns/Dockerfile.mtc', 'profile'),
-    'measurement': ('mt-tls-measurement:local', 'docker/historical_campaigns/Dockerfile.measurement', 'mtc'),
+    'mtc': ('mt-tls-mtc:local', 'docker/base/Dockerfile.mtc', 'lab'),
     'network-measurement': ('mt-tls-network-measurement:local', 'docker/network/Dockerfile.measurement', 'mtc'),
     'network': ('mt-tls-network:local', 'docker/network/Dockerfile.network', 'network-measurement'),
 }
@@ -39,8 +36,6 @@ def ensure(target='network'):
             reason = 'base image changed'
         if reason:
             command = ['docker', 'build', '-f', dockerfile, '-t', tag]
-            if name == 'measurement':
-                command += ['--build-arg', f'BASE_IMAGE={SPECS[parent_name][0]}']
             command += ['.']
             subprocess.run(command, cwd=REPO, check=True)
             image = inspect(tag)

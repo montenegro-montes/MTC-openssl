@@ -28,15 +28,6 @@
 !campaigns/scaling/
 !campaigns/scaling/mutual_authentication_crossover/
 !campaigns/scaling/mutual_authentication_crossover/patch_mutual_metrics.py
-!campaigns/historical_campaigns/
-!campaigns/historical_campaigns/pcma/
-!campaigns/historical_campaigns/pcma/**
-!campaigns/historical_campaigns/pcma_stage_a2/
-!campaigns/historical_campaigns/pcma_stage_a2/**
-!campaigns/historical_campaigns/pcma_stage_b/
-!campaigns/historical_campaigns/pcma_stage_b/**
-!campaigns/historical_campaigns/combined_network_campaign/
-!campaigns/historical_campaigns/combined_network_campaign/**
 
 !tests/
 !tests/*.c

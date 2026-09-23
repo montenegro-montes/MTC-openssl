@@ -160,7 +160,7 @@ def tests(root):
 
     resolved = ensure("network")
     network = resolved["target"]
-    measurement = resolved["images"]["measurement"]
+    mtc = resolved["images"]["mtc"]
 
     capture_result = subprocess.run(
         ["docker", "image", "inspect", "mt-tls-capture:local"],
@@ -176,10 +176,10 @@ def tests(root):
 
     capture_info = json.loads(capture_result.stdout)[0]
 
-    if not derived_from(capture_info, measurement):
+    if not derived_from(capture_info, mtc):
         raise RuntimeError(
             "mt-tls-capture:local does not derive from the current "
-            "mt-tls-measurement:local image; rebuild the capture image "
+            "mt-tls-mtc:local image; rebuild the capture image "
             "before Native/PCAP validation"
         )
 
@@ -198,10 +198,6 @@ def tests(root):
 
     regressions = [
         (
-            "native_timing",
-            [sys.executable, str(REPO / "src/profiling/test_native_timing.py")],
-        ),
-        (
             "shared_pcap_capture",
             [sys.executable, str(REPO / "campaigns/common/test_pcap_capture.py")],
         ),
@@ -211,26 +207,8 @@ def tests(root):
                 sys.executable,
                 str(
                     REPO
-                    / "campaigns/historical_campaigns/handshake_capture/test_analyze.py"
+                    / "campaigns/common/test_pcap_analyze.py"
                 ),
-            ],
-        ),
-        (
-            "latency_pcap_adapter",
-            [
-                sys.executable,
-                str(
-                    REPO
-                    / "campaigns/historical_campaigns/network_latency/test_pcap_adapter.py"
-                ),
-            ],
-        ),
-        (
-            "profile_timer_runtime",
-            [
-                "docker", "run", "--rm", "--network", "none",
-                network["Id"],
-                "sh", "/opt/profiling/test_timer.sh",
             ],
         ),
     ]

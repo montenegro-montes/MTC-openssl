@@ -6,28 +6,20 @@ cd "$REPO"
 source "$REPO/bin/lib/docker-preflight.sh"
 
 COMPOSE_FILES="
-base:docker/historical_campaigns/compose.yaml
-compact:docker/historical_campaigns/compose.compact.yaml
-profile:docker/historical_campaigns/compose.profile.yaml
-mtc:docker/historical_campaigns/compose.mtc.yaml
-measurement:docker/historical_campaigns/compose.measurement.yaml
-scaling:docker/historical_campaigns/compose.scaling.yaml
 latency:docker/network/compose.latency.yaml
 bandwidth:docker/network/compose.bandwidth.yaml
 loss:docker/network/compose.loss.yaml
 combined:docker/network/compose.combined.yaml
-capture:docker/historical_campaigns/compose.capture.yaml
 "
 
 usage() {
   cat <<'EOF'
 Usage: bin/containers/mt-containers COMMAND [TARGET] [OPTIONS]
 
-Active images are built by bin/containers/mt-install or bin/base/mt-prepare.
-The TARGET commands below operate on frozen historical Compose definitions.
+Images are built by bin/containers/mt-install or bin/base/mt-prepare.
 
 Commands:
-  list                         list active images and historical Compose targets
+  list                         list active images and network Compose targets
   doctor                       check Docker, Compose, disk and project images
   ps [all|TARGET]              show project containers
   build TARGET                 build one Compose target
@@ -46,8 +38,6 @@ Commands:
   menu                         interactive menu
 
 Current network targets: latency bandwidth loss combined
-Historical targets: base compact profile mtc measurement scaling capture
-
 This tool does not delete artifacts or campaign results. Use
 bin/artifacts/mt-archive --clean-artifacts only after archiving results.
 EOF
@@ -55,48 +45,31 @@ EOF
 
 compose_file() {
   case "${1:-}" in
-    base) echo docker/historical_campaigns/compose.yaml ;;
-    compact) echo docker/historical_campaigns/compose.compact.yaml ;;
-    profile) echo docker/historical_campaigns/compose.profile.yaml ;;
-    mtc) echo docker/historical_campaigns/compose.mtc.yaml ;;
-    measurement) echo docker/historical_campaigns/compose.measurement.yaml ;;
-    scaling) echo docker/historical_campaigns/compose.scaling.yaml ;;
     latency) echo docker/network/compose.latency.yaml ;;
     bandwidth) echo docker/network/compose.bandwidth.yaml ;;
     loss) echo docker/network/compose.loss.yaml ;;
     combined) echo docker/network/compose.combined.yaml ;;
-    capture) echo docker/historical_campaigns/compose.capture.yaml ;;
     *) echo "Unknown target: ${1:-<empty>}" >&2; return 2 ;;
   esac
 }
 
 project_name() {
   case "${1:-}" in
-    base) echo mt ;;
-    compact) echo mtcompact ;;
-    profile) echo mtprofile ;;
-    mtc) echo mtclab ;;
-    measurement) echo controlledn16 ;;
-    scaling) echo mtscaling ;;
     latency) echo mtlatency ;;
     bandwidth) echo mtbandwidth ;;
     loss) echo mtloss ;;
     combined) echo mtcombined ;;
-    capture) echo mtcapture ;;
     *) echo "Unknown target: ${1:-<empty>}" >&2; return 2 ;;
   esac
 }
 
-targets() { printf '%s\n' base compact profile mtc measurement scaling latency bandwidth loss combined capture; }
+targets() { printf '%s\n' latency bandwidth loss combined; }
 compose() {
  local f target=$1 action=$2 parent=''
  f=$(compose_file "$target") || return; shift 2
  mt_compose_inputs "$f" "$action" "$@" || return
  if [[ "$action" == build ]]; then
-  case "$target" in
-   compact) parent=mt-tls-lab:local;; profile) parent=mt-tls-compact:local;; mtc) parent=mt-tls-profile:local;;
-   measurement) parent=mt-tls-mtc:local;; capture) parent=mt-tls-measurement:local;; latency|bandwidth|loss|combined) parent=mt-tls-network:local;;
-  esac
+  case "$target" in latency|bandwidth|loss|combined) parent=mt-tls-network:local;; esac
   [[ -z "$parent" ]] || mt_image_required "$parent" || return
  fi
  docker compose -f "$f" "$action" "$@"
@@ -121,14 +94,6 @@ bandwidth    bandwidth-limited campaign
 loss         packet-loss campaign
 combined     combined network profiles
 
-FROZEN HISTORICAL COMPOSE TARGETS
-base         original OpenSSL/PQ/Merkle laboratory
-compact      Compact Merkle fixtures and benchmark
-profile      former detailed timing instrumentation
-mtc          former MTC Compose implementation
-measurement  former controlled N=16 measurement image
-scaling      former Merkle population scaling
-capture      former TLS handshake packet capture
 EOF
 }
 
@@ -238,7 +203,7 @@ menu() {
   while :; do
     cat <<'EOF'
 
-Container manager (historical Compose targets)
+Container manager (current network Compose targets)
   1) doctor       2) ps all       3) images
   4) build        5) up           6) logs
   7) shell        8) down         9) clean all

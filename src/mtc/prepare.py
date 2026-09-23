@@ -1,5 +1,5 @@
 """Create immutable MTC issuance snapshots from an explicit X.509 population."""
-import argparse,json,os,shutil,subprocess,time
+import json,shutil,subprocess,time
 from pathlib import Path
 from core import *
 from crypto_profiles import crypto_profile, PAPER1_PROFILES, TREE_HASH
@@ -15,9 +15,8 @@ def sign(path,data,family):
     finally:tmp.unlink()
 def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
     profile=crypto_profile(family)
-    legacy_population=originals is None
     if not 1<=n<=1024:raise ValueError('Unsupported MTC population')
-    if originals is None and family in PAPER1_PROFILES:raise ValueError('Paper-1 requires an explicit same-profile X.509 population')
+    if originals is None:raise ValueError('MTC requires an explicit same-profile X.509 population')
     begin=time.perf_counter();out.mkdir();caid=profile['ca_id'];ids=list(profile['cosigner_ids'])
     keys=[];public=[]
     for i in range(2):
@@ -27,7 +26,6 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
         keys.append(key)
         public.append(command('pkey','-in',key,'-pubout','-outform','DER'))
         (out/f'cosigner-{i}.spki').write_bytes(public[-1])
-    if originals is None:originals=[Path('/work/certs')/family/'server.pem']+[batch/family/'issued'/f'{i}.pem' for i in range(1,n)]
     if len(originals)!=n:raise ValueError('Population length differs from N')
     certs=[from_pem(p.read_bytes()) for p in originals]
     tbs=[mtc_tbs(c,caid,i) for i,c in enumerate(certs)];entries=[entry(t) for t in tbs]
@@ -68,7 +66,7 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
             'mtc_proof_encoded_bytes':len(outer[2][1])-1,'mtc_signature_bytes':len(ss[0][1]) if ss else 0,
             'mtc_cosignature_bytes':sum(len(s) for _,s in ss[1:]),'mtc_checkpoint_bytes':0,'mtc_landmark_reference_bytes':12,
             'mtc_predistributed_bytes':len(config) if mode=='landmark' else 0}
-    source_metadata=({'compact_batch':str(batch)} if legacy_population else {'source_population':str(batch)})
+    source_metadata={'source_population':str(batch)}
     meta={'draft':DRAFT,'trust_anchor_draft':TA_DRAFT,'status':'MTC-experimental','tree_size':n,'crypto_family':family,'ca_id':caid,
         'cosigner_ids':ids,'cosigner_policy':'CA AND one additional local cosigner; no public transparency claim',
         'subtrees':subtrees,'landmarks':[0,n],'checkpoint':{'tree_size':n,'timestamp':timestamp,'hash':checkpoint.hex()},
@@ -80,12 +78,3 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
     if family in PAPER1_PROFILES:meta.update(profile=family,standard_name=profile['standard_name'],implementation_algorithm=profile['implementation_algorithm'],security_level=profile['security_level'],merkle_hash=TREE_HASH,mtc_modes=['landmark','standalone'])
     if metadata:meta.update(metadata)
     (out/'manifest.json').write_text(json.dumps(meta,indent=2)+'\n');return meta
-if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--batch',type=Path,default=Path('/work/compact/batch16'));p.add_argument('--output',type=Path,required=True)
-    a=p.parse_args();os.umask(0o077)
-    if a.output.exists():p.error('Output exists; choose a new directory')
-    sizes=[json.loads((a.batch/f/'manifest.json').read_text())['leaves'] for f in ['classic','pq']]
-    if sizes[0]!=sizes[1] or not 1<=sizes[0]<=1024:p.error('Mismatched/unsupported population')
-    a.output.mkdir(parents=True)
-    for family in ['classic','pq']:prepare(a.output/family,a.batch,family,sizes[0])
-    print(a.output)

@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 
-EXTRACTOR = Path('/opt/handshake-capture/analyze.py')
+EXTRACTOR = Path('/opt/pcap-core/pcap_analyze.py')
 METRICS = ('tcp_connect_wall_ms', 'tls_from_pcap_wall_ms', 'connection_handshake_wall_ms',
            'connection_handshake_packets', 'connection_handshake_frame_bytes',
            'connection_handshake_ip_bytes', 'connection_handshake_tcp_payload_bytes',

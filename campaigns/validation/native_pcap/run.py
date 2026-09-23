@@ -26,7 +26,7 @@ import gate as full_gate
 
 LATENCY_COMPOSE = [
     "docker", "compose",
-    "-f", str(REPO / "docker/historical_campaigns/compose.network-latency.yaml"),
+    "-f", str(REPO / "docker/network/compose.latency.yaml"),
     "-f", str(REPO / "campaigns/validation/native_pcap/compose.validation.yaml"),
 ]
 
@@ -78,7 +78,7 @@ SCENARIO = "pq"
 
 CONDITIONS = {
     "local": {
-        "compose": "docker/historical_campaigns/compose.network-latency.yaml",
+        "compose": "docker/network/compose.latency.yaml",
         "network_family": "latency",
         "additional_rtt_ms": 0,
         "half_delay_ms": 0,
@@ -87,7 +87,7 @@ CONDITIONS = {
         "failure_aware": False,
     },
     "latency-100": {
-        "compose": "docker/historical_campaigns/compose.network-latency.yaml",
+        "compose": "docker/network/compose.latency.yaml",
         "network_family": "latency",
         "additional_rtt_ms": 100,
         "half_delay_ms": 50,
@@ -96,7 +96,7 @@ CONDITIONS = {
         "failure_aware": False,
     },
     "constrained": {
-        "compose": "docker/historical_campaigns/compose.network-combined.yaml",
+        "compose": "docker/network/compose.combined.yaml",
         "network_family": "combined",
         "profile": "constrained",
         "additional_rtt_ms": 100,
@@ -193,7 +193,7 @@ def compose_for(condition):
 
 def combined_helpers():
     # Import the existing authoritative hierarchy and gates, without executing a campaign.
-    sys.path.insert(0, str(REPO / "campaigns/historical_campaigns/combined_network_campaign"))
+    sys.path.insert(0, str(REPO / "campaigns/network/combined"))
     from network import validate_qdisc, parse_ping, parse_iperf, validate_throughput, section
     from config import PROFILES
     return validate_qdisc, parse_ping, parse_iperf, validate_throughput, section, PROFILES
@@ -511,7 +511,7 @@ def execute_condition(root, condition, mode, measured_rounds, warmup_rounds, gat
 def full_source_hashes():
     files={p for p in Path(__file__).parent.iterdir() if p.is_file()}
     files.update(REPO/relative for relative in ["campaigns/common/pcap_capture.py",
-                 "campaigns/historical_campaigns/handshake_capture/analyze.py",*{c["compose"] for c in CONDITIONS.values()}])
+                 "campaigns/common/pcap_analyze.py",*{c["compose"] for c in CONDITIONS.values()}])
     return {str(p.relative_to(REPO)):hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
 
 

@@ -28,15 +28,15 @@ class ResetTests(unittest.TestCase):
     def docker(self, *args):
         self.calls.append(args)
         if args in [('ps', '-aq'), ('network', 'ls', '-q'), ('volume', 'ls', '-q')]:
-            return 'owned foreign pcma'
+            return 'owned foreign'
         if args[1:2] == ('inspect',):
             rows = []
-            for identity, project in [('owned', 'mt'), ('foreign', 'other-project'), ('pcma', 'pcmab0123456789ab')]:
+            for identity, project in [('owned', 'mtlatency'), ('foreign', 'other-project')]:
                 labels = {'com.docker.compose.project': project}
                 rows.append({'Id': identity, 'Name': identity, 'Labels': labels, 'Config': {'Labels': labels}})
             return json.dumps(rows)
         if args[:2] == ('image', 'ls'):
-            return 'mt-tls-lab:local\nmt-tls-pcma:stage-b-v1\n'
+            return 'mt-tls-lab:local\nmt-tls-mtc:local\n'
         return ''
 
     def run_reset(self, answer='RESET ALL', docker=None):
@@ -64,7 +64,7 @@ class ResetTests(unittest.TestCase):
         removals = [c for c in self.calls if c[1:2] == ('rm',)]
         self.assertEqual(len(removals), 4)
         self.assertTrue(all('foreign' not in c for c in removals))
-        self.assertIn(('container', 'rm', '-f', 'owned', 'pcma'), removals)
+        self.assertIn(('container', 'rm', '-f', 'owned'), removals)
 
     def test_docker_failure_keeps_local_data(self):
         def fail(*args):
@@ -85,14 +85,6 @@ class ResetTests(unittest.TestCase):
         (self.root/'artifacts').symlink_to(outside, target_is_directory=True)
         self.run_reset()
         self.assertTrue((outside/'keep').exists())
-
-    def test_pcma_bind_mounts_resolve_to_repository(self):
-        compose = ROOT/'campaigns/historical_campaigns/pcma_stage_b/compose.yaml'
-        mounts = [line.strip()[2:].split(':')[0] for line in compose.read_text().splitlines()
-                  if line.strip().startswith('- ../')]
-        self.assertEqual([(compose.parent/p).resolve() for p in mounts],
-                         [ROOT/'artifacts', ROOT/'artifacts/results'])
-
 
 if __name__ == '__main__':
     unittest.main()

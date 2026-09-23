@@ -52,7 +52,7 @@ def validate(directory,seed,rtt,runs,warmups,probe):
             if float(row['certificate_verify_bytes'])<=0: raise RuntimeError('CertificateVerify missing')
             if row['scenario'].startswith('mtc-') and 'MTC verification: OK' not in log: raise RuntimeError('MTC fallback/failure')
     save(directory/'validation.json',{'passed':True,'tree_size':16,'seed':seed,'rtt_target_ms':rtt,**probe,
-         'checks':['TLS1.3/X25519/cipher','no client authentication','no resumption','CertificateVerify active','expected Compact/MTC authentication marker','paired randomized rounds']})
+         'checks':['TLS1.3/X25519/cipher','no client authentication','no resumption','CertificateVerify active','expected MTC authentication marker','paired randomized rounds']})
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('root',type=Path);parser.add_argument('--smoke',action='store_true');parser.add_argument('--pcap',action='store_true',help='Opt-in per-observation PCAP capture');args=parser.parse_args()

@@ -177,7 +177,6 @@ python3 campaigns/scaling/cert_chain_scaling/size_analysis.py "$CHAIN_FIXTURES" 
 ```
 
 For historical **two-profile** reproduction only, the
-[original scaling campaign](../../historical_campaigns/scaling_campaign/README.md)
 uses steps `20.scaling-init`, `21.scaling-tests-before`, `22.scaling-generate`
 after its base prerequisites through `07.measurement-image`. Its fixture path is
 recorded in `$SCALING_ROOT/fixture-location.json` (`host` field). Pass

@@ -2,7 +2,7 @@
 
 Referencia fija: [draft-ietf-plants-merkle-tree-certs-05](https://www.ietf.org/archive/id/draft-ietf-plants-merkle-tree-certs-05.txt),
 con [trust-anchor-ids -04](https://www.ietf.org/archive/id/draft-ietf-tls-trust-anchor-ids-04.txt).
-Véase [viabilidad y desviaciones](mtc-feasibility.md). No es una implementación
+The validation boundary is documented in [validation](validation.md). It is not an implementation
 integral de IETF MTC ni una variante del formato compacto anterior.
 
 ## Credencial y autenticación

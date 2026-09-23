@@ -79,7 +79,7 @@ Use exactly:
 
     pq
 
-Native/PCAP validation does not compare X.509, Compact Merkle and MTC authentication
+Native/PCAP validation does not compare X.509 and MTC authentication
 performance. One fixed PQ X.509 scenario is sufficient to validate the timing
 instrumentation.
 
