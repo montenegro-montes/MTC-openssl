@@ -39,7 +39,7 @@ def number(value):
     return '—' if value is None else f'{value:.3f}'
 
 
-def metric_table(section, metric, label, unit):
+def metric_table(section, metric, label, unit, default_key_establishment):
     rows=[]
     for profile, cases in section.items():
         for case, values in cases.items():
@@ -48,15 +48,16 @@ def metric_table(section, metric, label, unit):
             if stats is None and metric+'_median' in values:
                 stats={'n':'—','mean':None,'sample_stdev':None,'median':values[metric+'_median'],'mean_95_ci_low':None,'mean_95_ci_high':None}
             if stats:
+                key_establishment=values.get('key_establishment',default_key_establishment)
                 ci='—' if stats.get('mean_95_ci_low') is None else f"[{stats['mean_95_ci_low']:.3f}, {stats['mean_95_ci_high']:.3f}]"
-                rows.append((profile,case,stats.get('n','—'),number(stats.get('mean')),number(stats.get('sample_stdev')),number(stats.get('median')),ci,unit))
-    return f'<h3>{esc(label)}</h3>'+table(('Profile','Case','n','Mean','Sample SD','Median','95% CI of mean','Unit'),rows)
+                rows.append((profile,case,key_establishment.get('label','—'),key_establishment.get('openssl_group','—'),stats.get('n','—'),number(stats.get('mean')),number(stats.get('sample_stdev')),number(stats.get('median')),ci,unit))
+    return f'<h3>{esc(label)}</h3>'+table(('Profile','Case','Key establishment','OpenSSL group','n','Mean','Sample SD','Median','95% CI of mean','Unit'),rows)
 
 
 def source_tables(summary, source):
     section=summary.get(source,{})
     if not section: return f'<p>{esc(source.upper())} measurements were not requested in this execution.</p>'
-    return ''.join(metric_table(section,*spec) for spec in METRICS[source])
+    return ''.join(metric_table(section,*spec,summary.get('key_establishment',{})) for spec in METRICS[source])
 
 
 def main():

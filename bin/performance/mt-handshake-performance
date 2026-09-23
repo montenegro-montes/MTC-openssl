@@ -354,7 +354,7 @@ prepare_run() {
 measure_native() {
   local output=$1 profile case_name phase count repetition log start end elapsed read written tcp_ms handshake_ms establishment_ms done_count=0 total_count started now eta
   total_count=$(( ${#PROFILES[@]} * ${#ACTIVE_CASES[@]} * (WARMUPS + RUNS) )); started=$(date +%s)
-  printf 'profile,case,phase,repetition,tcp_connect_wall_ms_native,handshake_wall_ms,connection_establishment_wall_ms_native,process_wall_ms,tls_bytes_read,tls_bytes_written,tls_bytes_total\n' > "$output/native.csv"
+  printf 'profile,case,key_establishment,openssl_group,phase,repetition,tcp_connect_wall_ms_native,handshake_wall_ms,connection_establishment_wall_ms_native,process_wall_ms,tls_bytes_read,tls_bytes_written,tls_bytes_total\n' > "$output/native.csv"
   printf '\nNATIVE MEASUREMENTS — 9 profiles × %d authentication cases\n' "${#ACTIVE_CASES[@]}"
   for profile in "${PROFILES[@]}"; do
    for case_name in "${ACTIVE_CASES[@]}"; do
@@ -395,7 +395,7 @@ PYMETRICS
 )
         [[ -n "$tcp_ms" && -n "$handshake_ms" && -n "$establishment_ms" ]] || fail "$profile $case_name native TCP/TLS metrics missing; inspect $log"
         elapsed=$(python3 -c "print(($end-$start)/1000000)")
-        printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$profile" "$case_name" "$phase" "$repetition" "$tcp_ms" "$handshake_ms" "$establishment_ms" "$elapsed" "$read" "$written" "$((read+written))" >> "$output/native.csv"
+        printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$profile" "$case_name" "$KEM_LABEL" "$KEM_GROUP" "$phase" "$repetition" "$tcp_ms" "$handshake_ms" "$establishment_ms" "$elapsed" "$read" "$written" "$((read+written))" >> "$output/native.csv"
         done_count=$((done_count+1)); now=$(date +%s); eta=$(( done_count ? (now-started)*(total_count-done_count)/done_count : 0 ))
         printf '[NATIVE] %d/%d profile=%s case=%s %s=%d tcp=%sms tls=%sms complete=%sms process=%sms tls_bytes=%d elapsed=%ds eta=%ds\n' "$done_count" "$total_count" "$profile" "$case_name" "$phase" "$repetition" "$tcp_ms" "$handshake_ms" "$establishment_ms" "$elapsed" "$((read+written))" "$((now-started))" "$eta"
       done
@@ -496,7 +496,10 @@ for source,key in [('native.csv','native'),('pcap.csv','pcap')]:
   for name in sorted({r['case'] for r in measured if r['profile']==profile}):
    group=[r for r in measured if r['profile']==profile and r['case']==name]
    fields=['tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native','process_wall_ms','tls_bytes_total'] if key=='native' else ['tcp_syn_to_synack_ms','tls_clienthello_to_finished_ms','connection_syn_to_finished_ms','wire_bytes','packet_count']
-   cases[profile][name]={f:describe([float(r[f]) for r in group]) for f in fields}
+   cases[profile][name]={
+    'key_establishment':result['key_establishment'],
+    **{f:describe([float(r[f]) for r in group]) for f in fields},
+   }
  result[key]=cases
 (root/'summary.json').write_text(json.dumps(result,indent=2)+'\n')
 PY
