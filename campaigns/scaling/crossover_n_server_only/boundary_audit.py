@@ -5,6 +5,8 @@ from html import escape
 from pathlib import Path
 
 HERE=Path(__file__).resolve().parent;REPO=HERE.parents[2]
+sys.path.insert(0,str(REPO))
+from campaigns.common.host_info import host_table_rows
 
 def read(path):
     with path.open(newline='') as f:return list(csv.DictReader(f))
@@ -24,7 +26,8 @@ def render(rows,path):
     fields=['profile','x509_depth','predicted_crossover_n','n_before','bytes_before','relation_before','n_at','bytes_at','relation_at','result']
     head=''.join(f'<th>{escape(x.replace("_"," ").title())}</th>' for x in fields)
     body=''.join('<tr>'+''.join(f'<td>{escape(str(r[x]))}</td>' for x in fields)+'</tr>' for r in rows)
-    path.write_text(f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Crossover boundary audit</title><style>body{{font:15px system-ui;max-width:1200px;margin:auto;padding:30px;color:#172b4d}}table{{border-collapse:collapse;width:100%}}th,td{{padding:9px;border-bottom:1px solid #ccd6e0;text-align:left}}th{{background:#edf3f8}}</style></head><body><h1>Empirical crossover boundary audit</h1><p>Each row checks the analytically predicted boundary using real MTC TLS Certificate-message observations at N-1 and N. PASS requires MTC(N-1) &lt; X.509 and MTC(N) &gt;= X.509.</p><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></body></html>''')
+    host_body=''.join(f'<tr><td>{escape(str(item["field"]))}</td><td>{escape(str(item["value"]))}</td></tr>' for item in host_table_rows())
+    path.write_text(f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Crossover boundary audit</title><style>body{{font:15px system-ui;max-width:1200px;margin:auto;padding:30px;color:#172b4d}}table{{border-collapse:collapse;width:100%}}th,td{{padding:9px;border-bottom:1px solid #ccd6e0;text-align:left}}th{{background:#edf3f8}}</style></head><body><h1>Empirical crossover boundary audit</h1><p>Each row checks the analytically predicted boundary using real MTC TLS Certificate-message observations at N-1 and N. PASS requires MTC(N-1) &lt; X.509 and MTC(N) &gt;= X.509.</p><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table><h2>Time and computer</h2><table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>{host_body}</tbody></table></body></html>''')
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--analysis',type=Path,required=True);p.add_argument('--source-fixtures',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--runs',type=int,default=30);p.add_argument('--warmups',type=int,default=5);p.add_argument('--image',default='mt-tls-mtc:local');p.add_argument('--execute',action='store_true');a=p.parse_args()

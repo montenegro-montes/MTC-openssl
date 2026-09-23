@@ -5,6 +5,7 @@ import json
 import math
 from datetime import datetime, timezone
 from pathlib import Path
+from campaigns.common.host_info import host_table_rows
 from .adapters import VERSION, SUMMARY_NAMES, RAW_NAMES, leaves
 
 NOTICE='This HTML report is a derived presentation artifact. JSON/JSONL/CSV experiment outputs remain the canonical scientific records.'
@@ -288,5 +289,5 @@ def render(model):
     raw+=''.join(details(name+' (first 20 source rows)',rows[:20]) for name,rows in list(tables.items())[:100] if Path(name).name not in SUMMARY_NAMES)
     out += [panel('Raw evidence / metadata',raw),panel('Source artifact inventory',table(model['inventory'],limit=len(model['inventory'])))]
     provenance={'report_generator_version':VERSION,'generated_utc':datetime.now(timezone.utc).isoformat(),'source_directory':str(model['source']),'source_artifact_count':len(model['inventory'])}
-    out += [panel('Report provenance',details('Generation record',provenance)),'</main></body></html>']
+    out += [panel('Time and computer',table(host_table_rows())),panel('Report provenance',details('Generation record',provenance)),'</main></body></html>']
     return ''.join(out)

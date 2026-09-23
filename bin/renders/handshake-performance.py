@@ -4,8 +4,8 @@ import argparse
 import datetime as dt
 import html
 import json
-import platform
 from pathlib import Path
+from host_info import collect_host_info, host_rows
 
 
 def esc(value): return html.escape(str(value))
@@ -85,7 +85,7 @@ def main():
       ('Packet-capture TCP, TLS, connection, and size measurements',source_tables(summary,'pcap')),
       ('How to read the statistics','<p>The mean is the arithmetic average. Sample SD describes observation-to-observation dispersion. The median is resistant to isolated long executions. The 95% confidence interval estimates uncertainty around the mean using a two-sided Student t interval; it is not a range containing 95% of individual handshakes.</p>'),
       ('Interpretation limits','<p class="note">Every row reports one profile and authentication case directly, without subtracting a baseline. Native and PCAP measurements use different boundaries and repetition counts and must be interpreted separately. Review raw CSV observations, system load, sample size and capture quality before drawing conclusions. A confidence interval describes sampling uncertainty; it does not establish protocol causality or equivalence.</p>'),
-      ('Execution',table(('Field','Value'),[('KEM selection',args.kem_label),('OpenSSL TLS group',args.kem_group),('KEM configuration ID',args.kem_id),('Start UTC',start),('End UTC',end),('Elapsed seconds',max(0,args.ended_epoch-args.started_epoch)),('Computer',f'{platform.system()} {platform.release()} {platform.machine()}'),('Summary source',args.summary)])),
+      ('Execution',table(('Field','Value'),[('KEM selection',args.kem_label),('OpenSSL TLS group',args.kem_group),('KEM configuration ID',args.kem_id),('Start UTC',start),('End UTC',end),('Elapsed seconds',max(0,args.ended_epoch-args.started_epoch)),('Summary source',args.summary)]+host_rows(collect_host_info()))),
     ]
     body=''.join(f'<section><h2>{esc(title)}</h2>{content}</section>' for title,content in sections)
     page=f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>TLS handshake performance</title><style>body{{font:16px system-ui;background:#f3f6fa;color:#172033;margin:0}}main{{max-width:1250px;margin:auto;padding:28px}}header,section{{background:#fff;border:1px solid #dbe3ed;border-radius:12px;padding:22px;margin:16px 0}}h1{{margin:.2em 0}}h2{{font-size:20px}}h3{{margin-top:28px}}.note{{background:#eef5ff;padding:14px;border-left:5px solid #3974c6}}table{{border-collapse:collapse;width:100%}}th,td{{padding:9px;border-bottom:1px solid #ddd;text-align:left;white-space:nowrap}}th{{background:#edf2f7}}.scroll{{overflow:auto}}</style></head><body><main><header><p>Explained performance report</p><h1>X.509 and MTC TLS handshake performance</h1><p>Absolute timing and size results for simple and mutual authentication.</p></header>{body}</main></body></html>'''

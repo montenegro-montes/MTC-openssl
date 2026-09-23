@@ -4,9 +4,9 @@ import argparse
 import datetime as dt
 import html
 import json
-import platform
 import shlex
 from pathlib import Path
+from host_info import collect_host_info, host_rows
 
 
 IMAGES = (
@@ -97,7 +97,7 @@ def main():
     outcome = "PASS" if passed else "NO PASS"
     started = dt.datetime.fromtimestamp(args.started_epoch, dt.timezone.utc)
     ended = dt.datetime.fromtimestamp(args.ended_epoch, dt.timezone.utc)
-    host = {"system": platform.system(), "release": platform.release(), "machine": platform.machine(), "python": platform.python_version()}
+    host = collect_host_info()
     summary = {
         "campaign": "mt-prepare",
         "action": args.action,
@@ -141,7 +141,7 @@ def main():
         ("Fixture manifest", "present" if summary["fixtures"]["manifest"] else "missing/not required"),
         ("Functional TLS validation", "PASS" if validation_pass else "missing/not required"),
     ]
-    execution_rows = [("Start UTC", summary["execution"]["started_utc"]), ("End UTC", summary["execution"]["ended_utc"]), ("Duration", f'{summary["execution"]["elapsed_seconds"]} s'), ("Computer", f'{host["system"]} {host["release"]} {host["machine"]}'), ("Exit code", args.exit_code)]
+    execution_rows = [("Start UTC", summary["execution"]["started_utc"]), ("End UTC", summary["execution"]["ended_utc"]), ("Duration", f'{summary["execution"]["elapsed_seconds"]} s'), ("Exit code", args.exit_code)]+host_rows(host)
     color = "pass" if outcome == "PASS" else "fail"
     report = f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>MTC/TLS preparation</title><style>body{{font:16px system-ui;background:#f3f6fa;color:#172033;margin:0}}main{{max-width:1050px;margin:auto;padding:28px}}header,section{{background:#fff;border:1px solid #dbe3ed;border-radius:12px;padding:22px;margin:16px 0}}h1{{margin:.2em 0}}h2{{font-size:20px}}.result{{font-size:26px;font-weight:800}}.pass{{color:#087443}}.fail{{color:#b42318}}.note{{background:#eef5ff;padding:14px;border-left:5px solid #3974c6}}table{{border-collapse:collapse;width:100%}}th,td{{padding:10px;border-bottom:1px solid #ddd;text-align:left}}th{{background:#edf2f7}}.scroll{{overflow:auto}}</style></head><body><main><header><p>Explained preparation report</p><h1>mt-prepare: {esc(args.action)} {esc(args.selection)}</h1><p class="result {color}">{outcome}</p><p>{esc(expected)}</p></header><section><h2>What was executed</h2><p>{esc(action_text)}</p>{table(("Stage", "Image", "Purpose", "Result"), rows)}</section><section><h2>Configuration</h2>{table(("Component", "Status"), config_rows)}</section><section><h2>Fixtures and validation</h2>{table(("Check", "Result"), fixture_rows)}<p class="note">Numbered stages prepare images only. Fixture generation and functional TLS validation are performed only with ALL.</p></section><section><h2>What the result means</h2><p><strong>{outcome}</strong>: the command {'finished and produced the outputs required for this case' if passed else 'did not finish successfully or a required output is missing'}.</p><p class="note">Duration measures preparation and may include compilation, cache use, configuration, generation, and validation. It cannot compare X.509 and MTC handshake performance.</p></section><section><h2>Time and computer</h2>{table(("Field", "Value"), execution_rows)}</section></main></body></html>'''
     args.output.parent.mkdir(parents=True, exist_ok=True)
