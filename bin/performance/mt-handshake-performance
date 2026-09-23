@@ -384,7 +384,7 @@ PYMETRICS
 }
 
 measure_pcap() {
-  local output=$1 profile case_name repetition directory pcap keylog log capture_log first last syn synack bytes packets elapsed tcp_elapsed connection_elapsed ready attempt done_count=0 total_count started now eta
+  local output=$1 profile case_name repetition directory pcap keylog log capture_log analysis_log first last syn synack bytes packets elapsed tcp_elapsed connection_elapsed ready attempt done_count=0 total_count started now eta
   total_count=$(( ${#PROFILES[@]} * ${#ACTIVE_CASES[@]} * PCAP_RUNS )); started=$(date +%s)
   printf 'profile,case,repetition,tcp_syn_to_synack_ms,tls_clienthello_to_finished_ms,connection_syn_to_finished_ms,wire_bytes,packet_count\n' > "$output/pcap.csv"
   printf '\nPCAP MEASUREMENTS — 9 profiles × %d authentication cases\n' "${#ACTIVE_CASES[@]}"
@@ -420,17 +420,30 @@ measure_pcap() {
       docker rm "${SERVER}-capture" >/dev/null
       [[ -s "$pcap" && "$(wc -c < "$pcap")" -gt 24 ]] || fail "$case_name PCAP contains no packet records; inspect $capture_log"
       grep -Eq '[1-9][0-9]* packets captured' "$capture_log" || fail "$case_name tcpdump reported zero captured packets; inspect $capture_log"
-      read -r first last < <(docker run --rm --network none -v "$directory:/capture:ro" --entrypoint tshark "$CAPTURE_IMAGE" \
-        -o tls.keylog_file:/capture/keylog.txt -r /capture/handshake.pcap \
-        -Y 'tls.handshake.type == 1 || tls.handshake.type == 20' -T fields -e frame.time_epoch 2>/dev/null | \
-        awk 'NF {if(n==0) first=$1; last=$1; n++} END {print first,last}')
-      read -r syn synack < <(docker run --rm --network none -v "$directory:/capture:ro" --entrypoint tshark "$CAPTURE_IMAGE" \
-        -r /capture/handshake.pcap -Y 'tcp.flags.syn == 1' -T fields -e frame.time_epoch -e tcp.flags.ack 2>/dev/null | \
-        awk 'NF>=2 {if($2==0 && syn=="") syn=$1; if($2==1 && synack=="") synack=$1} END {print syn,synack}')
-      read -r bytes packets < <(docker run --rm --network none -v "$directory:/capture:ro" --entrypoint tshark "$CAPTURE_IMAGE" \
-        -r /capture/handshake.pcap -Y 'tcp.port==4433' -T fields -e frame.time_epoch -e frame.len 2>/dev/null | \
-        awk -v first="$first" -v last="$last" 'NF>=2 && $1>=first && $1<=last {bytes+=$2; n++} END {print bytes,n}')
-      [[ -n "$syn" && -n "$synack" && -n "$first" && -n "$last" && "$packets" -gt 0 ]] || fail "$profile $case_name PCAP handshake could not be decoded"
+      analysis_log="$directory/tshark.tsv"
+      docker run --rm --network none -v "$directory:/capture:ro" --entrypoint tshark "$CAPTURE_IMAGE" \
+        -o tls.keylog_file:/capture/keylog.txt -r /capture/handshake.pcap -Y 'tcp.port == 4433' \
+        -T fields -E separator=/t -E occurrence=a -E aggregator=, \
+        -e frame.time_epoch -e frame.len -e tcp.srcport -e tcp.dstport \
+        -e tcp.flags.syn -e tcp.flags.ack -e tls.handshake.type \
+        >"$analysis_log" 2>"$directory/tshark.stderr" \
+        || fail "$profile $case_name tshark analysis failed; inspect $directory/tshark.stderr"
+      read -r syn synack first last bytes packets < <(awk -F '\t' '
+        function yes(value) { value=tolower(value); return value=="1" || value=="true" }
+        function contains(value, kind) { return ("," value ",") ~ ("," kind ",") }
+        {
+          time[NR]=$1; frame_length[NR]=$2
+          if ($4==4433 && yes($5) && !yes($6) && syn=="") syn=$1
+          if ($3==4433 && yes($5) && yes($6) && synack=="") synack=$1
+          if ($4==4433 && contains($7,1) && first=="") first=$1
+          if ($4==4433 && contains($7,20)) last=$1
+        }
+        END {
+          for (i=1; i<=NR; i++) if (first!="" && last!="" && time[i]>=first && time[i]<=last) { bytes+=frame_length[i]; packets++ }
+          print syn,synack,first,last,bytes,packets
+        }' "$analysis_log")
+      [[ -n "$syn" && -n "$synack" && -n "$first" && -n "$last" && "$packets" -gt 0 ]] \
+        || fail "$profile $case_name PCAP handshake could not be decoded; inspect $analysis_log and $directory/tshark.stderr"
       tcp_elapsed=$(python3 -c "print(($synack-$syn)*1000)")
       elapsed=$(python3 -c "print(($last-$first)*1000)")
       connection_elapsed=$(python3 -c "print(($last-$syn)*1000)")
