@@ -563,21 +563,32 @@ run_retry_matrix() {
 }
 
 status_config() {
-  local config=${1:-$(active_config)}
+  local config=${1:-$(active_config)} mtc_root mutual_root
   if [[ ! -f "$config" ]]; then
     printf 'Configuration: MISSING (%s)\nRun init or select initialization from the menu.\n' "$config"
     return 1
   fi
-  printf 'Configuration: %s\n' "$config"
+  printf 'ACTIVE CONFIGURATION\nConfiguration: %s\n' "$config"
   if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config" || ! grep -q '^MUTUAL_CLIENT_ROOT=' "$config"; then
     echo 'Status: INCOMPLETE (the first measurement will prepare dependencies and configure it automatically).'
   else
     echo 'Status: CONFIGURED'
   fi
-  sed -nE 's/^(KEM|RUNS|WARMUPS|PCAP_RUNS|MTC_ROOT)=/  \1=/p' "$config"
   load_plan_counts "$config"
-  printf 'Key establishment: %s (%s)\n' "$KEM_LABEL" "$KEM_GROUP"
-  printf 'Profiles: %s\nCases: %s\n' "${PROFILES[*]}" "${CASES[*]}"
+  printf 'Key establishment: %s (%s)\nRepetitions: native=%s measured + %s warmups; PCAP=%s\n' \
+    "$KEM_LABEL" "$KEM_GROUP" "$RUNS" "$WARMUPS" "$PCAP_RUNS"
+  mtc_root=$(sed -nE 's/^MTC_ROOT=//p' "$config" | tail -1)
+  mutual_root=$(sed -nE 's/^MUTUAL_CLIENT_ROOT=//p' "$config" | tail -1)
+  if [[ -n "$mtc_root" && "$mtc_root" != *REPLACE* && -f "$REPO/$mtc_root/manifest.json" ]]; then
+    printf 'Server fixtures: READY (%s)\n' "$mtc_root"
+  else
+    echo 'Server fixtures: PENDING (prepared automatically before the first measurement)'
+  fi
+  if [[ -n "$mutual_root" && -f "$REPO/$mutual_root/manifest.json" ]]; then
+    printf 'Matching mutual-client fixtures: READY (%s)\n' "$mutual_root"
+  else
+    echo 'Matching mutual-client fixtures: PENDING (prepared automatically before the first measurement)'
+  fi
 }
 
 menu() {
@@ -585,8 +596,8 @@ menu() {
   while true; do
     printf '\nHandshake performance\n'
     printf ' 1 Create new configuration\n'
-    printf ' 2 Status\n'
-    printf ' 3 Plan\n'
+    printf ' 2 Configuration status\n'
+    printf ' 3 Execution plan\n'
     printf ' 4 Run Native — single authentication (9 profiles × 3 cases)\n'
     printf ' 5 Run Native — mutual authentication (9 profiles × 3 cases)\n'
     printf ' 6 Run PCAP — single authentication (9 profiles × 3 cases)\n'
@@ -641,25 +652,20 @@ case "$command" in
     load_plan_counts "$config"
     output=${3:-$(default_performance_output)}
 
-    echo "Cases: ${CASES[*]}"
-    echo "Profiles (9): ${PROFILES[*]}"
-    echo "Matrix: $(( ${#PROFILES[@]} * ${#CASES[@]} )) profile/authentication scenarios"
-    echo "Single subset: $(( ${#PROFILES[@]} * ${#SINGLE_CASES[@]} )) scenarios (${SINGLE_CASES[*]})"
-    echo "Mutual subset: $(( ${#PROFILES[@]} * ${#MUTUAL_CASES[@]} )) scenarios (${MUTUAL_CASES[*]})"
-    echo "Native observations: $(( ${#PROFILES[@]} * ${#CASES[@]} * (RUNS + WARMUPS) )) (warmups included)"
-    echo "PCAP observations: $(( ${#PROFILES[@]} * ${#CASES[@]} * PCAP_RUNS ))"
-    echo "Native: $RUNS measured repetitions + $WARMUPS warmups per scenario; OpenSSL handshake bytes"
-    echo "PCAP: $PCAP_RUNS independent captures per scenario; ClientHello-to-Finished duration and wire bytes"
-    echo "Retry: 9-profile simple-authentication matrix; 70 transactions/profile, 630 total"
-    echo "Config: $config"
-    echo "Key establishment: $KEM_LABEL ($KEM_GROUP)"
-    echo "Output: $output"
-
-    if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config" || ! grep -q '^MUTUAL_CLIENT_ROOT=' "$config"; then
-      echo 'Configuration status: INCOMPLETE; run-native/run-pcap/run-native-pcap will prepare or reuse dependencies and configure it automatically.'
-    else
-      echo 'Configuration status: no REPLACE placeholders found; file and credential checks occur before execution.'
-    fi
+    printf 'EXECUTION PLAN\nConfiguration: %s\nKey establishment: %s (%s)\n' "$config" "$KEM_LABEL" "$KEM_GROUP"
+    printf 'Signature profiles (9): %s\n' "${PROFILES[*]}"
+    printf 'Mutual authentication: client and server use the same signature profile.\n\n'
+    printf ' 4 Native single:        27 scenarios; %d measured + %d warmups\n' "$((27 * RUNS))" "$((27 * WARMUPS))"
+    printf ' 5 Native mutual:        27 scenarios; %d measured + %d warmups\n' "$((27 * RUNS))" "$((27 * WARMUPS))"
+    printf ' 6 PCAP single:          27 scenarios; %d captures\n' "$((27 * PCAP_RUNS))"
+    printf ' 7 PCAP mutual:          27 scenarios; %d captures\n' "$((27 * PCAP_RUNS))"
+    printf ' 8 Native + PCAP single: options 4 + 6\n'
+    printf ' 9 Native + PCAP mutual: options 5 + 7\n'
+    printf '10 Native + PCAP all:    54 scenarios; %d native observations and %d captures\n' \
+      "$((54 * (RUNS + WARMUPS)))" "$((54 * PCAP_RUNS))"
+    printf '11 Trust Anchor Retry:   9 profiles; 630 transactions (70/profile)\n\n'
+    printf 'Single cases: %s\nMutual cases: %s\n' "${SINGLE_CASES[*]}" "${MUTUAL_CASES[*]}"
+    printf 'Example next output: %s\n' "$output"
     ;;
   run-retry)
     [[ $# -le 3 ]] || fail 'Usage: run-retry [CONFIG] [OUTPUT]'
