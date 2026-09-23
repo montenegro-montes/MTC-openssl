@@ -49,6 +49,27 @@ class RetryTests(unittest.TestCase):
         r, requests = self.execute(group, [completed(group, reason='compatible', ok=True)])
         self.assertEqual((r['final_result'], r['retry_count'], requests), ('PASS', 0, [group]))
 
+    def test_individual_classification(self):
+        for ident in ('32473.101.1.1.1', '32473.101.1.7.129'):
+            self.assertTrue(retry.is_individual_landmark_id(ident))
+        for ident in ('32473.101', '32473.101.2.1.1', '32473.101.2.7.129',
+                      '32473.101.1.0.1', '32473.101.1.1.0'):
+            self.assertFalse(retry.is_individual_landmark_id(ident))
+
+    def test_noninitial_individual_retry_is_not_rewritten_as_group(self):
+        target = '32473.101.1.7.129'
+        seen = []
+        def attempt(ident):
+            seen.append(ident)
+            return retry.classify_attempt(completed(ident, supported=target,
+                reason='compatible' if ident == target else 'trust_anchor_mismatch',
+                ok=ident == target, number=len(seen)), ident)
+        report = retry.transaction(A, target, attempt)
+        self.assertEqual(seen, [A, target])
+        self.assertEqual(report['selected_landmark'], target)
+        self.assertEqual(report['retry_selected_id'], target)
+        self.assertEqual(report['final_result'], 'PASS')
+
     def test_B_retry_success(self):
         r, requests = self.execute(A, [completed(A), completed(B, reason='compatible', ok=True, number=2)])
         self.assertEqual((r['final_result'], r['retry_count'], requests), ('PASS', 1, [A, B]))

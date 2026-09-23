@@ -16,6 +16,16 @@ from verify_tls_transcript import (exact_messages, signed_input, hkdf_expand_lab
 
 
 class SemanticsTests(unittest.TestCase):
+    def test_primary_fixture_group_selects_individual(self):
+        ca = (32473, 101)
+        result = trust_mapping(encode_list([ca + (2, 1, 1)]),
+            encode_list([ca + (1, 1, 1)]), [dict(length=0, data=b'')],
+            '32473.101', 'landmark', 1, 1)
+        self.assertEqual(result['status'], 'PASS_EXPERIMENTAL_CODEPOINT')
+        self.assertTrue(result['group_membership_valid'])
+        self.assertEqual(result['individual_landmark_id'], '32473.101.1.1.1')
+        self.assertEqual(result['landmark_group_id'], '32473.101.2.1.1')
+
     def test_id_binary_example_from_draft_section_3(self):
         self.assertEqual(encode_id((32473, 1)), bytes.fromhex('81fd5901'))
         self.assertEqual(decode_id(bytes.fromhex('81fd5901')), (32473, 1))

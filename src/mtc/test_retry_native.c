@@ -12,6 +12,26 @@ int main(int argc,char **argv) {
     assert(retry_configure(server,argv[1],1,NULL,cert,key));
     assert(retry_configure(client,argv[1],1,"32473.9.1.1.1",NULL,NULL));
     RetryConfig *r=(RetryConfig *)SSL_CTX_get_ex_data(server,retry_ci),*c=(RetryConfig *)SSL_CTX_get_ex_data(client,retry_ci);
+    /* Initial CH group selects the exact landmark. EE still names .1, not .2. */
+    SSL *group_peer=SSL_new(server);assert(group_peer);
+    unsigned char group_list[93];size_t group_len=r->base.trust->request_signal_len;
+    put(group_list,group_len+1,2);group_list[2]=(unsigned char)group_len;
+    memcpy(group_list+3,r->base.trust->request_signal,group_len);
+    assert(parse_one(group_peer,MTC_EXT,SSL_EXT_CLIENT_HELLO,group_list,group_len+3,NULL,0,&alert,&r->base));
+    assert(state(group_peer,MTC_ROLE_SERVER_PRESENT)->matched);
+    assert(add_one(group_peer,MTC_EXT,SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,&out,&out_n,NULL,0,&alert,&r->base)==1);
+    assert(out_n==r->base.n+3&&!memcmp(out+3,r->base.trust->signal,r->base.n));
+    SSL_free(group_peer);
+    /* Component parsing, not a last-three-bytes shortcut. */
+    TLSConfig coordinates={0};unsigned char expected_group[80];size_t expected_len;
+    assert(id_encode("32473.101.1.7.129",coordinates.id,&coordinates.n));
+    assert(initial_group(&coordinates));
+    assert(id_encode("32473.101.2.7.129",expected_group,&expected_len));
+    assert(expected_len==coordinates.n&&!memcmp(expected_group,coordinates.group,expected_len));
+    assert(id_encode("32473.101.2.1.1",coordinates.id,&coordinates.n));
+    assert(!initial_group(&coordinates));
+    assert(id_encode("32473.101",coordinates.id,&coordinates.n));
+    assert(!initial_group(&coordinates));
     s=SSL_new(server);cl=SSL_new(client);assert(s&&cl);
     /* CASE B first attempt: valid incompatible CH, credential-backed EE,
        no confirmation on fallback, explicit client mismatch rejection. */

@@ -525,3 +525,19 @@ does not establish full draft compliance or update the pinned specification.
 Both values occupy a uint16: this migration alone changes no size-model numbers.
 Active extractors accept only the current codepoint; historical captures require
 the matching historical tools, not relabeling or regeneration in place.
+
+## Classification of retained ID literals
+
+Initial landmark CH now supports `.2.<log>.<landmark>` in both laboratory clients;
+EE and retry continue to identify `.1.<log>.<landmark>`. Standalone uses the CA ID.
+The native constructor uses the MCF1 coordinates; the loader still enforces the
+initial single-log, single-landmark subset. No codepoint change accompanies this.
+
+Retained `.1.1.1` in capture/server commands, mutual-auth fixture preflights and
+object-report `landmark_id` names the selected individual for fixed log-1/landmark-1
+fixtures, not the initial CH group. The extractor's explicit `.1.1.1`/`.2.1.1`
+expectations describe that same bounded fixture subset. Literal IDs in tests are
+expected values or mismatched fixtures. `semantics.trust_mapping` already derives
+both forms from its log/landmark arguments; a new test documents CA `32473.101`.
+Historical reports/PCAPs remain unchanged and do not establish validation of the
+new BoringSSL group-advertisement path. No tests were executed for this change.

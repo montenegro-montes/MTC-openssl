@@ -14,7 +14,8 @@ struct mtc_config {
     char caid[80]; Signer signers[2]; unsigned count; int landmark;
     uint64_t log,min,max,number,size,timestamp; unsigned char root[32];
     Subtree subs[2];unsigned nsubs; size_t file_bytes;
-    unsigned char signal[90];size_t signal_len;
+    unsigned char signal[90];size_t signal_len; /* CA or individual landmark */
+    unsigned char request_signal[90];size_t request_signal_len; /* CA or group */
 };
 static double tick(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec*1000.0+t.tv_nsec/1e6;}
 static int take(Slice *s,size_t n,Slice *out){if(n>s->n)return 0;out->p=s->p;out->n=n;s->p+=n;s->n-=n;return 1;}
@@ -51,6 +52,22 @@ static int id_encode(const char *s,unsigned char *out,size_t *n){
         while(k)out[j++]=b[--k];
         p=*end?end+1:end;if(*end&&! *p)return 0;
     }*n=j;return j>0;
+}
+/* Keep the exact anchor for EE/confirmation/retry separate from initial CH. */
+static int config_signals(MTCConfig *c){
+    char id[80];int n;
+    if(!c->landmark){
+        if(!id_encode(c->caid,c->signal,&c->signal_len))return 0;
+        memcpy(c->request_signal,c->signal,c->signal_len);
+        c->request_signal_len=c->signal_len;return 1;
+    }
+    if(!c->log||!c->number||c->log>0xffffffffULL||c->number>0xffffffffULL)return 0;
+    n=snprintf(id,sizeof(id),"%s.1.%llu.%llu",c->caid,
+               (unsigned long long)c->log,(unsigned long long)c->number);
+    if(n<=0||n>=(int)sizeof(id)||!id_encode(id,c->signal,&c->signal_len))return 0;
+    n=snprintf(id,sizeof(id),"%s.2.%llu.%llu",c->caid,
+               (unsigned long long)c->log,(unsigned long long)c->number);
+    return n>0&&n<(int)sizeof(id)&&id_encode(id,c->request_signal,&c->request_signal_len);
 }
 static int ascii(Slice x,char *s){if(!x.n||x.n>=80||memchr(x.p,0,x.n))return 0;memcpy(s,x.p,x.n);s[x.n]=0;unsigned char b[80];size_t n;return id_encode(s,b,&n);}
 static int message(const MTCConfig *c,const Signer *signer,uint64_t start,uint64_t end,const unsigned char root[32],uint64_t timestamp,unsigned char *out,size_t *n){
@@ -113,7 +130,7 @@ MTCConfig *mtc_load(const char *path,int landmark){
     if(strcmp(c->caid,c->signers[0].id)||!strcmp(c->signers[0].id,c->signers[1].id))goto end;
     if(!number(&s,2,&c->log)||c->log!=1||!number(&s,8,&c->min)||!number(&s,8,&c->max)||c->min!=(1ULL<<48)||c->max<c->min||c->max-c->min>=1024)goto end;
     if(!landmark){
-        if(s.n||!id_encode(c->caid,c->signal,&c->signal_len))goto end;
+        if(s.n||!config_signals(c))goto end;
         ok=1;goto end;
     }
     if(!number(&s,4,&c->number)||c->number!=1||!number(&s,6,&c->size)||!c->size||c->size>1024||!number(&s,8,&c->timestamp)||!c->timestamp||c->timestamp>(uint64_t)time(NULL)||!take(&s,32,&x))goto end;
@@ -133,8 +150,7 @@ MTCConfig *mtc_load(const char *path,int landmark){
     /* Trust config is supplied by the operator. Authenticate checkpoint before
        installing its covered landmark subtrees. Standalone ignores cached subtrees. */
     if(landmark){double t=tick();if(!sigcheck(c,sigs,0,c->size,c->root,c->timestamp))goto end;validation=tick()-t;}
-    {char id[80];int n=snprintf(id,sizeof(id),landmark?"%s.1.1.1":"%s",c->caid);
-     if(n<=0||n>=80||!id_encode(id,c->signal,&c->signal_len))goto end;}
+    if(!config_signals(c))goto end;
     ok=1;
 end:
     fclose(f);OPENSSL_free(buf);

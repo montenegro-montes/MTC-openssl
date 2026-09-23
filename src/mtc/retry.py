@@ -53,6 +53,16 @@ def encode_id(ident):
     return bytes(out)
 
 
+def is_individual_landmark_id(ident):
+    """Recognize a canonical CA-prefix.1.log.landmark, never a .2 group.
+
+    This is structural classification only, not proof of CA ownership/trust.
+    The retry target remains bound to the native authenticated config ID.
+    """
+    parts = tuple(map(int, decode_id(encode_id(ident)).split('.')))
+    return len(parts) >= 4 and parts[-3] == 1 and parts[-2] > 0 and parts[-1] > 0
+
+
 def available_ids(hex_data):
     if not isinstance(hex_data, str) or len(hex_data) > 2 * 83:
         raise ValueError('available list exceeds singleton bound')
@@ -140,7 +150,7 @@ def transaction(initial_id, trusted_id, attempt):
                   attempt_count=0, retry_count=0, attempt_1_result=None,
                   attempt_2_result=None, final_result='FAIL',
                   attempt_1_connection_id=None, attempt_2_connection_id=None,
-                  selected_landmark=trusted_id if trusted_id.endswith('.1.1.1') else None,
+                  selected_landmark=trusted_id if is_individual_landmark_id(trusted_id) else None,
                   attempts=[])
     requested = initial_id
     for index in range(MAX_RETRIES + 1):

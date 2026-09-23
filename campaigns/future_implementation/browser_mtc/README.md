@@ -95,9 +95,9 @@ tests, ML-DSA interoperability and landmark mode remain pending.
 ## Extended matrix and historical results 
 
 The client now accepts an optional `standalone|landmark` argument (standalone
-remains the default). Landmark loads and authenticates `trust.bin` and requests
-the exact checkpoint ID from that configuration. There is no group negotiation,
-trust-anchor retry or fallback in this client.
+remains the default). Landmark loads and authenticates `trust.bin`. Initial ClientHello now requests the landmark group
+derived from that configuration; the server selection remains the exact individual
+landmark. There is no trust-anchor retry or fallback in this BoringSSL client.
 
 The smoke runner now accepts `--profile` and `--mode`, and runs four cases:
 valid, wrong hostname, altered proof and missing MTC negotiation. The last
@@ -143,3 +143,35 @@ artifacts/results/browser-mtc-matrix-va6fwuke
 Result:
 12/12 suites PASS
 48/48 TLS cases PASS
+## Individual landmark versus initial landmark group
+
+The active provisional codepoint remains **0xca34**. For CA `32473.101`, log 1,
+last landmark 1, the three distinct signals are:
+
+| Context | ID |
+| --- | --- |
+| Standalone CA anchor | `32473.101` |
+| Selected individual landmark / explicit retry | `32473.101.1.1.1` |
+| Initial landmark ClientHello group | `32473.101.2.1.1` |
+
+Both verifier copies construct `signal` (individual or standalone CA) and
+`request_signal` (initial group or standalone CA) from `caid`, `log`, `number`.
+BoringSSL advertises `request_signal` but still requires the available-anchor
+list to match `signal`, plus the empty CertificateEntry confirmation and proof
+verification. The OpenSSL server maps that group to its corresponding configured
+individual. A group is never used as the selected individual or retry target.
+The smoke runner reads these coordinates from the existing MCF1 configuration;
+its metadata reader does not authenticate it: authentication stays in `mtc_load`.
+
+The memory-BIO probe now accepts an optional `landmark` argument with `trust.bin`
+and checks the initial group. Its standalone default is unchanged.
+New `test_ids.c` covers CA/individual/group construction; `test_trust_ids.py`
+covers the runner reader and non-hardcoded coordinates. Tests are prepared,
+**not executed**. Existing historical BoringSSL handshake results advertised
+individual landmark IDs; they do not validate the new group-advertising path,
+regardless of whether their wire codepoint was 0xffa7 or 0xca34.
+
+This remains an implemented experimental subset of MTC-05 / TAI-04. The loader
+still restricts real configs to log 1 / landmark 1; generic ID formatting does
+not enable evolving landmarks, general group-range selection, multiple active
+logs, or complete draft conformance. Artifacts and certificate sizes are unchanged.

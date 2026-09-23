@@ -85,3 +85,14 @@ consistencia general de actualizaciones, OCSP/CRL ni ecosistema de transparencia
 Se rechazan extensiones de entrada no vacías en este perfil en lugar de fingir
 soporte de extensiones futuras. La semántica X509 de hoja es más rica que la
 credencial compacta mínima, pero no equivale a implementar todas las funciones PKI.
+
+## IDs de negociación inicial y de selección
+
+Para CA `32473.101`, standalone conserva `32473.101`. El grupo inicial es
+`32473.101.2.1.1`; el landmark seleccionado y el retry explícito conservan
+`32473.101.1.1.1`. Los constructores usan caid, log y número de landmark de MCF1,
+sin sustituir globalmente `.1` por `.2`. El servidor reconoce el grupo del
+landmark configurado; el cliente verifica el individual seleccionado.
+La restricción de carga a log 1 / landmark 1 sigue vigente. El codepoint sigue
+siendo `0xca34` provisional. No se afirma full draft conformance ni se han
+ ejecutado las pruebas nuevas de este cambio.

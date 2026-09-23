@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from trust_ids import configured_ids
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
@@ -51,12 +52,16 @@ def main():
     manifest = json.loads((fixture / 'manifest.json').read_text())
     if manifest.get('profile', manifest.get('crypto_family')) != args.profile:
         raise ValueError('Fixture profile mismatch')
-    ca_id = manifest['ca_id'] + ('.1.1.1' if args.mode == 'landmark' else '')
+    ids = configured_ids((fixture / trust_name).read_bytes(), args.mode)
+    if ids['caid'] != manifest['ca_id']:
+        raise ValueError('Trust config / manifest CA mismatch')
+    ca_id = ids['selected_id']  # Server selects the individual, not the CH group.
     parent = REPO / 'artifacts/results'
     parent.mkdir(parents=True, exist_ok=True)
     out = Path(tempfile.mkdtemp(prefix='browser-mtc-tls-', dir=parent))
     print(f'Evidence: {out}', flush=True)
-    summary = {'status': 'running', 'tls_executed': False, 'cases': [], 'profile': args.profile, 'mode': args.mode}
+    summary = {'status': 'running', 'tls_executed': False, 'cases': [], 'profile': args.profile, 'mode': args.mode,
+               'configured_trust_anchor_ids': ids}
     try:
         images = {name: required(['docker', 'image', 'inspect', '--format', '{{.Id}}', tag])
                   for name, tag in [('server', args.server_image), ('client', args.client_image)]}

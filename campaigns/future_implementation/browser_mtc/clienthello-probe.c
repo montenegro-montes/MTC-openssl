@@ -49,15 +49,18 @@ int main(int argc, char **argv) {
     int ok = 0; SSL_CTX *ctx = NULL; SSL *ssl = NULL;
     BIO *input = NULL, *output = NULL; MTCConfig *trust = NULL;
     unsigned char requested[256]; char *wire = NULL;
-    if (argc != 2) { fprintf(stderr, "Usage: clienthello-probe authority.bin\n"); return 2; }
-    trust = mtc_load(argv[1], 0);
-    if (!trust || !trust->signal_len || trust->signal_len > 255) goto end;
-    requested[0] = (unsigned char)trust->signal_len;
-    memcpy(requested + 1, trust->signal, trust->signal_len);
+    int landmark = argc == 3 && !strcmp(argv[2], "landmark");
+    if ((argc != 2 && argc != 3) || (argc == 3 && !landmark && strcmp(argv[2], "standalone"))) {
+        fprintf(stderr, "Usage: clienthello-probe TRUST_BIN [standalone|landmark]\n"); return 2;
+    }
+    trust = mtc_load(argv[1], landmark);
+    if (!trust || !trust->request_signal_len || trust->request_signal_len > 255) goto end;
+    requested[0] = (unsigned char)trust->request_signal_len;
+    memcpy(requested + 1, trust->request_signal, trust->request_signal_len);
     ctx = SSL_CTX_new(TLS_method());
     if (!ctx || !SSL_CTX_set_min_proto_version(ctx, TLS1_3_VERSION) ||
         !SSL_CTX_set_max_proto_version(ctx, TLS1_3_VERSION) ||
-        !SSL_CTX_set1_requested_trust_anchors(ctx, requested, trust->signal_len + 1)) goto end;
+        !SSL_CTX_set1_requested_trust_anchors(ctx, requested, trust->request_signal_len + 1)) goto end;
     SSL_CTX_set_custom_verify(ctx, SSL_VERIFY_PEER, reject_peer);
     ssl = SSL_new(ctx); input = BIO_new(BIO_s_mem()); output = BIO_new(BIO_s_mem());
     if (!ssl || !input || !output) goto end;
@@ -67,7 +70,7 @@ int main(int argc, char **argv) {
     if (ret >= 0 || SSL_get_error(ssl, ret) != SSL_ERROR_WANT_READ) goto end;
     long len = BIO_get_mem_data(SSL_get_wbio(ssl), &wire);
     ok = len > 0 && inspect((const unsigned char *)wire, (size_t)len,
-                           trust->signal, trust->signal_len);
+                           trust->request_signal, trust->request_signal_len);
 end:
     BIO_free(input); BIO_free(output); SSL_free(ssl); SSL_CTX_free(ctx); mtc_free(trust);
     puts(ok ? "PASS: TLS 1.3 ClientHello contains one matching 0xca34 extension; no 0xffa7" : "FAIL: ClientHello probe");

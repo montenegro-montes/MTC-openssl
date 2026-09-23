@@ -82,9 +82,9 @@ int main(int argc, char **argv) {
     }
     signal(SIGPIPE, SIG_IGN); alarm(20);
     client.hostname = argv[2]; client.trust = mtc_load(argv[1], landmark);
-    if (!client.trust || client.trust->signal_len > 255) goto end;
-    requested[0] = (unsigned char)client.trust->signal_len;
-    memcpy(requested + 1, client.trust->signal, client.trust->signal_len);
+    if (!client.trust || client.trust->request_signal_len > 255) goto end;
+    requested[0] = (unsigned char)client.trust->request_signal_len;
+    memcpy(requested + 1, client.trust->request_signal, client.trust->request_signal_len);
     ctx = SSL_CTX_new(TLS_method());
     /* BoringSSL's default verification list omits P-521 and ML-DSA even
        though this revision implements them. Scope this explicit policy to
@@ -98,7 +98,7 @@ int main(int argc, char **argv) {
         !SSL_CTX_set_max_proto_version(ctx, TLS1_3_VERSION) ||
         !SSL_CTX_set_verify_algorithm_prefs(ctx, signature_algorithms,
             sizeof(signature_algorithms) / sizeof(signature_algorithms[0])) ||
-        !SSL_CTX_set1_requested_trust_anchors(ctx, requested, client.trust->signal_len + 1)) goto end;
+        !SSL_CTX_set1_requested_trust_anchors(ctx, requested, client.trust->request_signal_len + 1)) goto end;
     SSL_CTX_set_custom_verify(ctx, SSL_VERIFY_PEER, verify_peer);
     SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
     ssl = SSL_new(ctx);

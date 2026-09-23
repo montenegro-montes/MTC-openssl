@@ -116,3 +116,15 @@ No timing/byte framework is added. Each attempt remains separately owned; a
 future external metric may include connection setup and transition overhead
 without redefining existing single-handshake measurements. This isolated peer
 does not emit existing performance telemetry.
+
+## Landmark ID distinction
+
+`.1.<log>.<landmark>` identifies an individual; `.2.<log>.<landmark>` identifies
+an initial negotiation group. Ordinary landmark ClientHello advertises the group;
+EE/credential binding and an explicit retry keep the individual from authenticated
+configuration. `retry.py` classifies canonical individual suffixes structurally,
+including multi-byte component values, rather than testing `.1.1.1`. This only
+changes report classification, not the exact locally trusted retry-target check.
+A `.2` group is never classified as an individual landmark. The native configuration
+loader remains restricted to log 1 / landmark 1. New group/ID tests have not run;
+all earlier retry evidence retains its original IDs and meaning.

@@ -32,11 +32,18 @@ typedef struct {
 } TLSEndpointState;
 
 static int ci=-1,si=-1;
-/* Restricted initial single-log group. id_encode supplies canonical components;
-   the preceding termination bit ensures .1.1.1 starts at a component boundary. */
+/* Recognize an individual suffix by components, including multi-byte numbers.
+   This maps only the corresponding exact configured landmark, not a range. */
 static int initial_group(TLSConfig *c){
-    if(c->n<4||(c->id[c->n-4]&0x80)||c->id[c->n-3]!=1||c->id[c->n-2]!=1||c->id[c->n-1]!=1)return 0;
-    memcpy(c->group,c->id,c->n);c->group[c->n-3]=2;return 1;
+    size_t offsets[80],count=0;uint64_t values[80],value=0;int first=1;
+    for(size_t i=0;i<c->n;i++){
+        if(first){if(c->id[i]==0x80)return 0;offsets[count]=i;value=0;first=0;}
+        value=(value<<7)|(c->id[i]&127);
+        if(value>0xffffffffULL)return 0;
+        if(!(c->id[i]&128)){values[count++]=value;first=1;}
+    }
+    if(!first||count<4||values[count-3]!=1||!values[count-2]||!values[count-1])return 0;
+    memcpy(c->group,c->id,c->n);c->group[offsets[count-3]]=2;return 1;
 }
 static void tls_config_free(TLSConfig *c){
     if(!c)return;
