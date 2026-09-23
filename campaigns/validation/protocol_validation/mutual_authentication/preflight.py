@@ -23,6 +23,21 @@ TLS_FLAGS = [
     "-ciphersuites", "TLS_AES_256_GCM_SHA384",
 ]
 
+
+def host_cpu_frequency():
+    for name in ("hw.cpufrequency_max", "hw.cpufrequency"):
+        try:
+            value = subprocess.check_output(
+                ["/usr/sbin/sysctl", "-n", name],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        if value.isdigit() and int(value) > 0:
+            return f"{int(value) / 1_000_000_000:.2f} GHz"
+    return "not reported by OS (dynamic frequency)"
+
 PQ_PROVIDER_FLAGS = [
     "-provider-path", "/opt/openssl/lib/ossl-modules",
     "-provider", "default",
@@ -625,6 +640,7 @@ def main():
                 "release": platform.release(),
                 "machine": platform.machine(),
                 "processor": platform.processor(),
+                "cpu_frequency": host_cpu_frequency(),
                 "cpu_count": os.cpu_count(),
                 "python": platform.python_version(),
             },

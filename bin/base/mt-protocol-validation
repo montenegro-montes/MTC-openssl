@@ -226,10 +226,18 @@ run_all() (
   rmdir "$STATE/batch.lock" 2>/dev/null || true
   if [[ -d "$CAP" ]]; then
    python3 - "$CAP/execution.json" "$started_epoch" "$rc" "$PROFILE" "$LEAF" "$FIX" "$KEY" <<'PYEXEC'
-import json,os,platform,sys,time
+import json,os,platform,subprocess,sys,time
 from pathlib import Path
+def sysctl(name):
+    try:return subprocess.check_output(['/usr/sbin/sysctl','-n',name],text=True,stderr=subprocess.DEVNULL).strip()
+    except (OSError,subprocess.CalledProcessError):return ''
+def cpu_frequency():
+    for name in ('hw.cpufrequency_max','hw.cpufrequency'):
+        value=sysctl(name)
+        if value.isdigit() and int(value)>0:return f'{int(value)/1_000_000_000:.2f} GHz'
+    return 'not reported by OS (dynamic frequency)'
 p=Path(sys.argv[1]); finished=int(time.time())
-p.write_text(json.dumps({'status':'PASS' if int(sys.argv[3])==0 else 'NO PASS','configuration':{'profile':sys.argv[4],'leaf':int(sys.argv[5]),'tree_size':16,'fixture_directory':sys.argv[6],'server_key':sys.argv[7],'modes':['landmark','standalone']},'started_unix':int(sys.argv[2]),'finished_unix':finished,'elapsed_seconds':finished-int(sys.argv[2]),'host':{'hostname':platform.node(),'system':platform.system(),'release':platform.release(),'machine':platform.machine(),'processor':platform.processor(),'cpu_count':os.cpu_count(),'python':platform.python_version()}},indent=2)+'\n')
+p.write_text(json.dumps({'status':'PASS' if int(sys.argv[3])==0 else 'NO PASS','configuration':{'profile':sys.argv[4],'leaf':int(sys.argv[5]),'tree_size':16,'fixture_directory':sys.argv[6],'server_key':sys.argv[7],'modes':['landmark','standalone']},'started_unix':int(sys.argv[2]),'finished_unix':finished,'elapsed_seconds':finished-int(sys.argv[2]),'host':{'hostname':platform.node(),'system':platform.system(),'release':platform.release(),'machine':platform.machine(),'processor':sysctl('machdep.cpu.brand_string') or platform.processor(),'cpu_frequency':cpu_frequency(),'cpu_count':os.cpu_count(),'python':platform.python_version()}},indent=2)+'\n')
 PYEXEC
    render_validation_html protocol "$CAP" "$report" || [[ "$rc" != 0 ]] || rc=$?
   fi
@@ -616,6 +624,10 @@ stage_expected_total = sum(item['expected'] for item in stage_summary.values())
 stage_completed_total = sum(item['completed'] for item in stage_summary.values())
 capture_integrity_failures = sum(capture_integrity.values())
 cpu_model = command_output(['sysctl', '-n', 'machdep.cpu.brand_string']) or platform.processor()
+cpu_frequency_raw = command_output(['sysctl', '-n', 'hw.cpufrequency_max']) or command_output(['sysctl', '-n', 'hw.cpufrequency'])
+cpu_frequency = (f'{int(cpu_frequency_raw) / 1_000_000_000:.2f} GHz'
+                 if cpu_frequency_raw.isdigit() and int(cpu_frequency_raw) > 0
+                 else 'not reported by OS (dynamic frequency)')
 
 all_ok = (
     launcher_rc == 0
@@ -652,6 +664,7 @@ summary = {
             'release': platform.release(),
             'machine': platform.machine(),
             'processor': cpu_model,
+            'cpu_frequency': cpu_frequency,
             'cpu_count': os.cpu_count(),
             'python': platform.python_version(),
         },
