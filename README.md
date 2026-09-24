@@ -59,6 +59,52 @@ an invalid command. Detailed launcher documentation is available in
 [`bin/cryptographic_scaling/README.md`](bin/cryptographic_scaling/README.md) and
 [`bin/network/README.md`](bin/network/README.md).
 
+## First installation on a new host
+
+Install host prerequisites before preparing images or running experiments.
+On Debian/Ubuntu:
+
+```sh
+sudo apt-get update
+sudo apt-get install bash git coreutils grep sed gawk python3 python3-venv python3-pip
+git --version
+python3 --version
+```
+
+Python **3.10 or newer** is required. If the distribution provides an older
+version, install a supported Python and select it in `PATH` before continuing.
+Install Docker Engine with the **Compose v2 plugin** using the instructions for
+your distribution, or Docker Desktop on macOS. Start Docker and ensure your user
+can access its daemon. Docker package names depend on the distribution and package
+repository; see [installation details](docs/installation.md).
+
+From the repository root, create and activate the host Python environment:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install -r requirements-host.txt
+bin/base/mt-doctor
+```
+
+Activate `.venv` again in every new shell before using the launchers.
+`requirements-host.txt` installs Matplotlib and its Python dependencies.
+The doctor explicitly checks **Git in PATH**, Python, shell utilities, Matplotlib,
+Docker, Compose and daemon access, and reports missing requirements before work.
+Git is required by the Bash launchers even when the repository was copied rather
+than cloned. Main launchers also run host prerequisite checks automatically.
+
+To check host dependencies without invoking Docker:
+
+```sh
+bin/base/mt-doctor --offline
+```
+
+These checks do not install packages, build images or run experiments. Native
+OpenSSL/MTC, liboqs, build tools and capture tools are supplied by the existing
+Docker images. After the doctor passes, follow the preparation steps below;
+`mt-prepare run ALL` also generates fixtures and runs functional TLS validation.
+
 ## Recommended workflow
 
 ### 1. Prepare shared prerequisites

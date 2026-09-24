@@ -1,10 +1,6 @@
 # Sourced by launchers; never starts Docker or creates resources.
 mt_docker_ready() {
- command -v docker >/dev/null 2>&1 || { echo 'ERROR: Docker is not installed or is not available in PATH.' >&2; return 1; }
- docker info >/dev/null 2>&1 || {
-  echo 'ERROR: Cannot connect to the Docker daemon. Start Docker Desktop and wait until it is ready; also check the active Docker context. The stage has not started.' >&2
-  return 1
- }
+ bash "${REPO:?}/bin/base/mt-doctor" --core --quiet || return
 }
 mt_compose_ready() {
  mt_docker_ready || return
@@ -45,3 +41,15 @@ mt_compose_inputs() {
    fi;;
  esac
 }
+
+# Fail before launcher configuration/output writes. Help remains available on a
+# fresh machine. Container-only operations do not require the plotting stack.
+case "${1:-menu}" in
+ help|--help|-h|list|show) ;;
+ *)
+  case "${0##*/}:${1:-menu}" in
+   mt-install:*|mt-containers:*|*:clean|*:reset-all)
+    bash "${REPO:?}/bin/base/mt-doctor" --offline --core --quiet || return 1;;
+   *) bash "${REPO:?}/bin/base/mt-doctor" --offline --quiet || return 1;;
+  esac;;
+esac
