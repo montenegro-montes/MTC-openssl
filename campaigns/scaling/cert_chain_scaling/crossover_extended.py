@@ -94,6 +94,13 @@ def empirical(inputs,root,profile,depth,fixture_hash,static,mtc_provenance):
 
 def run(a):
     require(not a.output.exists(),'Output exists; choose a fresh directory')
+    missing = [str(a.baseline / name) for name in ('chain_sizes.csv', 'mtc_sizes.csv')
+               if not (a.baseline / name).is_file()]
+    if missing:
+        raise SystemExit('Missing N=16 baseline: ' + ', '.join(missing)
+                         + '. Run bin/cryptographic_scaling/mt-cert-scaling run 80 first '
+                         'or supply --baseline pointing to its complete matching output. '
+                         'Preserve any incomplete output; do not overwrite it.')
     inputs=Inputs();breakdowns=[];anchors={};provenance={};validation=[]
     gate=inputs.json(a.mtc_validation)
     expected={(name,mode) for name in PROFILES for mode in ('landmark','standalone')}
