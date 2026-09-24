@@ -12,7 +12,7 @@ STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 
 DEFAULT_STEPS=(10.environment 20.x509-generate 30.x509-validate 40.mtc-build 50.mtc-n16 60.mtc-validate 80.crossover 85.crossover-html 90.audit)
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 configure_kem() { case "${1:-1}" in 1|x25519) KEM=x25519;KEM_LABEL=X25519;KEM_GROUP=X25519;KEM_SLUG=x25519;; 2|x25519-mlkem512) KEM=x25519-mlkem512;KEM_LABEL=X25519+ML-KEM512;KEM_GROUP=x25519_mlkem512;KEM_SLUG=x25519-mlkem512;; 3|mlkem512) KEM=mlkem512;KEM_LABEL=ML-KEM-512;KEM_GROUP=mlkem512;KEM_SLUG=mlkem512;; *) fail 'KEM must be 1/x25519, 2/x25519-mlkem512 or 3/mlkem512.';; esac; export KEM KEM_LABEL KEM_GROUP KEM_SLUG MTC_KEM_ID="$KEM" MTC_KEM_LABEL="$KEM_LABEL" MTC_TLS_GROUP="$KEM_GROUP"; }
-select_kem() { local value; printf 'Key establishment:\n  1 X25519\n  2 X25519+ML-KEM512\n  3 ML-KEM-512\n' >&2; read -r -p '> ' value || value=1; configure_kem "${value:-1}"; }
+select_kem() { local value; printf 'Key establishment:\n  1 X25519 (default)\n  2 X25519+ML-KEM512\n  3 ML-KEM-512\n' >&2; read -r -p '> ' value || value=1; configure_kem "${value:-1}"; }
 usage() {
  cat <<'HELP'
 Usage: bin/cryptographic_scaling/mt-cert-scaling [COMMAND]
