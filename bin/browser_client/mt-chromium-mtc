@@ -162,7 +162,7 @@ Import exact preserved custom commits (do not replay git am):
 Verify exact commits, Chromium's BoringSSL gitlink, and authoritative source trees:
   Chromium: $CHROMIUM_PATCHED_TREE
   BoringSSL: $BORINGSSL_PATCHED_TREE
-Explicit source interface: reconstruct-source plan|status|run STEP --dest ABSOLUTE_PATH
+Explicit source interface: reconstruct-source plan|status|run STEP [--dest ABSOLUTE_PATH]
 Stages 100–160 reconstruct only these two source repositories and pinned depot_tools.
 Other Chromium DEPS, toolchains and build configuration require later explicit work.
 Later build: separately authorized, not implemented here; no packages or gclient sync.
@@ -181,18 +181,26 @@ def git(path, *args):
 repo=Path(sys.argv[1]); root=repo/'campaigns/browser_client/chromium_mtc'
 v=dict(line.split('=',1) for line in (root/'versions/chromium-mtc.env').read_text().splitlines() if line and not line.startswith('#'))
 steps=['100.verify-reconstruction-inputs','110.prepare-depot-tools','120.prepare-chromium-base','130.prepare-boringssl-base','140.import-preserved-commits','150.checkout-patched-source','160.verify-source-trees']
-args=sys.argv[2:]; action=args.pop(0) if args else 'plan'
+args=sys.argv[2:]
+destination=Path.home()/'chromium-mtc-rebuild'
+if '--dest' in args:
+ require(args.count('--dest')==1,'Supply --dest only once')
+ offset=args.index('--dest')
+ require(offset+1<len(args),'Use --dest ABSOLUTE_PATH')
+ destination=Path(args[offset+1])
+ require(destination.is_absolute(),'An absolute --dest is required')
+ del args[offset:offset+2]
+dest=destination.resolve()
+action=args.pop(0) if args else 'plan'
 require(action in ('plan','status','run'), 'Expected plan, status or run')
 step=None
 if action=='run':
  require(bool(args), 'Step required')
  requested=args.pop(0); matches=[s for s in steps if requested in (s,s.split('.')[0])]
  require(len(matches)==1,'Unknown reconstruction step'); step=matches[0]
-require(not args or (len(args)==2 and args[0]=='--dest'),'Use --dest ABSOLUTE_PATH')
+require(not args,'Unexpected arguments; use plan|status|run STEP [--dest ABSOLUTE_PATH]')
 if action=='plan':
- print('\n'.join(steps)); print('Explicit run only; steps 110–130 fetch pinned upstream repositories. No build, sync or installation.'); print('Destination: '+(args[1] if args else '(required for run/status)')); sys.exit(0)
-require(bool(args) and Path(args[1]).is_absolute(),'An absolute --dest is required')
-dest=Path(args[1]).resolve()
+ print('\n'.join(steps)); print('Explicit run only; steps 110–130 fetch pinned upstream repositories. No build, sync or installation.'); print('Destination: '+str(dest)); sys.exit(0)
 protected=[Path.home()/'Desktop/chromium-mtc', repo, Path.home()/'Desktop/depot_tools']
 for p in protected:
  p=p.resolve(); require(dest!=p and p not in dest.parents and dest not in p.parents,'Destination overlaps a protected checkout')
@@ -201,8 +209,9 @@ identity={'destination':str(dest),'versions':v,'workflow':'chromium-mtc-source-v
 if dest.exists():
  require(dest.is_dir(),'Destination is not a directory')
  if any(dest.iterdir()):
-  require(marker.is_file() and not marker.is_symlink() and json.loads(marker.read_text())==identity,'Refusing non-empty unexpected destination')
+  require(marker.is_file() and not marker.is_symlink() and json.loads(marker.read_text())==identity,'Refusing non-empty destination without matching workflow ownership marker: '+str(marker))
 if action=='status':
+ print('Destination: '+str(dest))
  for s in steps: print(('RECORDED ' if (state/(s+'.done')).is_file() else 'PENDING ')+s)
  print('Markers record prior success; run 160 explicitly to reverify source.'); sys.exit(0)
 
@@ -275,7 +284,7 @@ finally: lock.rmdir()
 PY
 }
 case "${1:-help}" in
- help|--help|-h) echo 'Usage: mt-chromium-mtc init|status|plan|doctor|reconstruct-plan|reconstruct-source plan|status|run STEP --dest PATH|show STEP|run STEP|resume|cleanup';;
+ help|--help|-h) echo 'Usage: mt-chromium-mtc init|status|plan|doctor|reconstruct-plan|reconstruct-source plan|status|run STEP [--dest PATH]|show STEP|run STEP|resume|cleanup';;
  doctor) doctor;;
  reconstruct-plan) reconstruct_plan;;
  reconstruct-source) shift; reconstruct_source "$@";;

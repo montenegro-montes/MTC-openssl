@@ -233,15 +233,18 @@ git -C /path/to/chromium bundle verify /absolute/path/to/source-bundles/chromium
 git -C /path/to/boringssl bundle verify /absolute/path/to/source-bundles/boringssl-mtc.bundle
 ```
 
-The separate source interface requires an explicit destination for execution:
+The separate source interface defaults to `$HOME/chromium-mtc-rebuild`.
+Use optional `--dest ABSOLUTE_PATH` before or after the subcommand to override it:
 
 ```sh
 bin/browser_client/mt-chromium-mtc reconstruct-plan
 bin/browser_client/mt-chromium-mtc reconstruct-source plan
-bin/browser_client/mt-chromium-mtc reconstruct-source status --dest /srv/mtc-source
+bin/browser_client/mt-chromium-mtc reconstruct-source status
 # Future server only: explicitly run each step in order; 110–130 download sources.
-bin/browser_client/mt-chromium-mtc reconstruct-source run 100 --dest /srv/mtc-source
-# Then individually run 110, 120, 130, 140, 150, 160 with the same --dest.
+bin/browser_client/mt-chromium-mtc reconstruct-source run 100
+# Then individually run 110, 120, 130, 140, 150, 160.
+# Optional override (also accepted after run 100):
+bin/browser_client/mt-chromium-mtc reconstruct-source --dest /srv/mtc-source plan
 ```
 
 | Step | Operation |
@@ -254,7 +257,13 @@ bin/browser_client/mt-chromium-mtc reconstruct-source run 100 --dest /srv/mtc-so
 | 150.checkout-patched-source | Checkout preserved commits and verify source. |
 | 160.verify-source-trees | Recheck exact HEADs, tree hashes, clean source and BoringSSL gitlink. |
 
-Destination ownership records bind the canonical path and version metadata.
+The first run of step 100 creates an absent destination automatically and writes
+`.mtc-source-owner.json`, identifying the `chromium-mtc-source-v1` workflow and
+binding the canonical path and version metadata. An empty directory can also be
+claimed; an existing matching owned destination is reused. A non-empty directory
+without a matching ownership marker is refused and never deleted. Unrelated
+content is never overwritten. `plan` and `status` do not create the destination;
+both print the resolved default or override path.
 Unexpected non-empty destinations, symlink source paths, and overlaps with MT,
 `~/Desktop/chromium-mtc` or `~/Desktop/depot_tools` are rejected. Each step requires
 all earlier completion markers and uses a separate destination lock. Existing
