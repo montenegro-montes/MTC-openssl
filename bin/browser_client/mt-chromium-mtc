@@ -419,6 +419,19 @@ def no_compilation():
 def run(command,cwd):
  print('RUN (cwd='+str(cwd)+'): '+shlex.join(command),flush=True)
  subprocess.run(command,cwd=cwd,env=env,check=True)
+def check_dependencies():
+ # Keep upstream diagnostics available without flooding the terminal.
+ log=state/'linux-dependencies-check.log'
+ require(not log.is_symlink(),'Symlink dependency log rejected')
+ with log.open('w') as output:
+  result=subprocess.run(check,cwd=src,env=env,stdout=output,stderr=subprocess.STDOUT)
+ if result.returncode:
+  command=['bin/browser_client/mt-chromium-mtc','prepare-build','install-deps']
+  if dest!=(Path.home()/'chromium-mtc-rebuild').resolve(): command+=['--dest',str(dest)]
+  raise SystemExit('ERROR: Linux build dependency check failed.\n'
+                   'Run: '+shlex.join(command)+'\n'
+                   'Details: '+str(log))
+ print('PASS Linux build dependencies')
 def invalidate(index):
  for s in steps[index:]:
   p=record_path(s)
@@ -436,11 +449,11 @@ try:
  state.mkdir(exist_ok=True); verify_sources()
  if action=='install-deps':
   prerequisites(3); verify_layout(); invalidate(3)
-  run(install,src); run(check,src); verify_sources()
+  run(install,src); check_dependencies(); verify_sources()
   save(state/'dependency-install.json',{'timestamp':now(),'command':install,'context':context})
   print('Installation checked; run 200, 210 and 220 explicitly.'); sys.exit(0)
  if namespace=='build':
-  prerequisites(len(steps)); verify_layout(); verify_output(); run(check,src); verify_sources()
+  prerequisites(len(steps)); verify_layout(); verify_output(); check_dependencies(); verify_sources()
   attempt={'timestamp':now(),'command':build,'status':'started'}; save(state/'build-attempt.json',attempt)
   try:
    run(build,src); verify_sources(); exact_file(out/'args.gn',gn_args)
@@ -458,7 +471,7 @@ try:
   # No reset/force/delete flags. BoringSSL is excluded, never restored by overwriting it.
   try: run(sync,dest)
   finally: verify_sources()
- if index==3: run(check,src)
+ if index==3: check_dependencies()
  if index==4:
   no_compilation()
   output_owner=state/'output-owner.json'; output_identity={'path':str(out),'args':gn_args}
