@@ -123,8 +123,56 @@ PY
  esac
  date -u +%Y-%m-%dT%H:%M:%SZ > "$STATE/$step.done"
 }
+doctor() {
+ local os tool
+ os=$(uname -s)
+ printf 'OS: %s\nArchitecture: %s\n' "$os" "$(uname -m)"
+ case "$os" in
+  Darwin)
+   if command -v sw_vers >/dev/null; then sw_vers; else echo 'MISSING sw_vers'; fi
+   if command -v xcode-select >/dev/null; then xcode-select -p || echo 'MISSING active developer directory'; else echo 'MISSING xcode-select'; fi
+   tools=(clang python3 git docker);;
+  Linux)
+   if [[ -f /etc/os-release ]]; then cat /etc/os-release; else echo 'MISSING /etc/os-release'; fi
+   tools=(git python3 curl bash tar xz unzip clang ninja docker);;
+  *) tools=(git python3 docker);;
+ esac
+ # Presence checks only: do not invoke wrappers that may bootstrap tools.
+ for tool in "${tools[@]}" gclient gn autoninja; do
+  if command -v "$tool" >/dev/null; then printf 'PRESENT %s: %s\n' "$tool" "$(command -v "$tool")"; else echo "MISSING $tool"; fi
+ done
+ echo 'Free disk space (repository filesystem):'
+ df -h "$REPO" || echo 'Disk space unavailable'
+ return 0
+}
+reconstruct_plan() (
+ source "$REPO/campaigns/browser_client/chromium_mtc/versions/chromium-mtc.env"
+ cat <<PLAN
+PRINT ONLY — no reconstruction commands executed.
+1. depot_tools pinned commit: $DEPOT_TOOLS_COMMIT
+2. Chromium pinned base commit: $CHROMIUM_BASE_COMMIT
+3. Chromium version: $CHROMIUM_VERSION
+4. BoringSSL pinned base commit: $BORINGSSL_BASE_COMMIT
+5. Verify patches/SHA256SUMS from campaigns/browser_client/chromium_mtc.
+6. Apply patches/boringssl/0001-Add-experimental-Plants-05-landmark-verification.patch.
+7. Apply Chromium patches in order:
+   patches/chromium/0001-Add-Plants-05-MTC-interoperability-test.patch
+   patches/chromium/0002-Point-Chromium-at-Plants-05-BoringSSL.patch
+   patches/chromium/0003-Add-dynamic-Plants-05-browser-trust-configuration.patch
+8. Verify resulting source against recorded patched source trees:
+   Chromium: $CHROMIUM_PATCHED_COMMIT
+   BoringSSL: $BORINGSSL_PATCHED_COMMIT
+   Compare source trees; replayed commits may have different IDs.
+9. Configure build with explicitly recorded Linux GN args; when appropriate,
+   explicitly run Chromium's build/install-build-deps.sh for prerequisites.
+10. Explicit build step, separately authorized; not implemented here.
+BUILD WILL NEVER RUN IMPLICITLY VIA resume.
+PLAN
+)
 case "${1:-help}" in
- help|--help|-h) echo 'Usage: mt-chromium-mtc init|status|plan|show STEP|run STEP|resume|cleanup';;
+ help|--help|-h) echo 'Usage: mt-chromium-mtc init|status|plan|doctor|reconstruct-plan|show STEP|run STEP|resume|cleanup';;
+ doctor) doctor;;
+ reconstruct-plan) reconstruct_plan;;
  init) init;;
  plan) printf '%s\n' "${STEPS[@]}"; echo 'Existing Chromium/validated fixture only. No build, pull or automatic generation.';;
  show) step=$(step_name "${2:?Step required}"); echo "$step"; sed -n '/^run_step()/,/^case "${1:-help}"/p' "$0"; [[ "$step" != 60.* ]] || sed -n '/^start_server()/,/^run_step()/p' "$0";;

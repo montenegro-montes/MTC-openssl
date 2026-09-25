@@ -223,3 +223,17 @@ No build stage may run implicitly. A missing build must report the problem and
 stop, never start a long compilation automatically. Future provenance will
 include Chromium/BoringSSL base commits, depot_tools revision, `git format-patch`
 patches, GN args and SHA-256 records. These stages are not implemented here.
+
+## Read-only reconstruction preparation
+
+`bin/browser_client/mt-chromium-mtc doctor` prints OS, architecture, local tool
+presence and available disk space. Missing tools are reported, never installed;
+optional gclient/gn/autoninja absence does not fail the command. Tool wrappers
+are not executed, avoiding implicit bootstrapping.
+
+`bin/browser_client/mt-chromium-mtc reconstruct-plan` reads
+`versions/chromium-mtc.env` and only prints the ordered source, patch verification,
+configuration and explicit build plan. Linux prerequisites should use Chromium's
+own `build/install-build-deps.sh` when appropriate, in a future explicit step.
+No fetching, syncing, patching, installation or build is implemented by these
+commands. BUILD WILL NEVER RUN IMPLICITLY VIA resume.
