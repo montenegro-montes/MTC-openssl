@@ -213,27 +213,65 @@ No browser is launched and no browser profiles are created. Cleanup removes
 only the container labelled with this workflow state directory; it preserves
 logs, all artifacts and the pre-existing hosts entry.
 
-## Future stages
+## Deterministic source reconstruction
 
-- SOURCE: fetch/check pinned Chromium; apply BoringSSL patches; apply Chromium patches.
-- BUILD: detect builds; optional component-debug build; optional release/monolithic build.
-- VALIDATION: MTC positive browser test; no-trust; bad-merkle; bad-serial; X.509 positive.
+`reconstruct-plan` prints upstream pins, preserved custom commits and exact Git
+source tree hashes from `versions/chromium-mtc.env`. Tree hashes are authoritative
+for source content; commit IDs additionally preserve history and Chromium's exact
+BoringSSL gitlink. The readable format-patches remain unchanged, but reconstruction
+imports incremental bundles instead of replaying `git am` (which can change IDs).
 
-No build stage may run implicitly. A missing build must report the problem and
-stop, never start a long compilation automatically. Future provenance will
-include Chromium/BoringSSL base commits, depot_tools revision, `git format-patch`
-patches, GN args and SHA-256 records. These stages are not implemented here.
+Both bundles require the corresponding upstream base commit and its reachable
+objects. They contain only custom history, not the complete upstream repository.
+Verify integrity from this campaign directory:
 
-## Read-only reconstruction preparation
+```sh
+shasum -a 256 -c patches/SHA256SUMS
+shasum -a 256 -c source-bundles/SHA256SUMS
+# Run in repositories already containing the respective base histories:
+git -C /path/to/chromium bundle verify /absolute/path/to/source-bundles/chromium-mtc.bundle
+git -C /path/to/boringssl bundle verify /absolute/path/to/source-bundles/boringssl-mtc.bundle
+```
 
-`bin/browser_client/mt-chromium-mtc doctor` prints OS, architecture, local tool
-presence and available disk space. Missing tools are reported, never installed;
-optional gclient/gn/autoninja absence does not fail the command. Tool wrappers
-are not executed, avoiding implicit bootstrapping.
+The separate source interface requires an explicit destination for execution:
 
-`bin/browser_client/mt-chromium-mtc reconstruct-plan` reads
-`versions/chromium-mtc.env` and only prints the ordered source, patch verification,
-configuration and explicit build plan. Linux prerequisites should use Chromium's
-own `build/install-build-deps.sh` when appropriate, in a future explicit step.
-No fetching, syncing, patching, installation or build is implemented by these
-commands. BUILD WILL NEVER RUN IMPLICITLY VIA resume.
+```sh
+bin/browser_client/mt-chromium-mtc reconstruct-plan
+bin/browser_client/mt-chromium-mtc reconstruct-source plan
+bin/browser_client/mt-chromium-mtc reconstruct-source status --dest /srv/mtc-source
+# Future server only: explicitly run each step in order; 110–130 download sources.
+bin/browser_client/mt-chromium-mtc reconstruct-source run 100 --dest /srv/mtc-source
+# Then individually run 110, 120, 130, 140, 150, 160 with the same --dest.
+```
+
+| Step | Operation |
+| --- | --- |
+| 100.verify-reconstruction-inputs | Verify patch/bundle SHA-256 and advertised commit tips; claim empty destination. |
+| 110.prepare-depot-tools | Fetch and checkout pinned depot_tools; do not invoke its wrappers. |
+| 120.prepare-chromium-base | Fetch upstream Chromium base history, checkout and verify base tree. |
+| 130.prepare-boringssl-base | Fetch upstream BoringSSL base history, checkout and verify base tree. |
+| 140.import-preserved-commits | Verify bundle prerequisites, import exact objects and verify patched trees. |
+| 150.checkout-patched-source | Checkout preserved commits and verify source. |
+| 160.verify-source-trees | Recheck exact HEADs, tree hashes, clean source and BoringSSL gitlink. |
+
+Destination ownership records bind the canonical path and version metadata.
+Unexpected non-empty destinations, symlink source paths, and overlaps with MT,
+`~/Desktop/chromium-mtc` or `~/Desktop/depot_tools` are rejected. Each step requires
+all earlier completion markers and uses a separate destination lock. Existing
+source repositories must match the expected state; no forced checkout or cleanup
+is performed. Interrupted fetch/checkouts may require manual inspection before
+retrying. Status reports recorded completion, not fresh validation; explicitly
+run 160 to revalidate. Input checks run before every source execution.
+
+Normal `resume` retains only the existing positive interoperability steps 00–60;
+it cannot reach any reconstruction stage. Source stages have no resume command.
+There is no build, package installation, gclient sync, hook execution, or automatic
+DEPS/toolchain download. This reconstructs the pinned Chromium and BoringSSL Git
+content plus depot_tools, **not a build-ready full Chromium dependency checkout**.
+Fetching the upstream histories and checking out sources can be expensive and is
+reserved for explicit future execution. Other DEPS, Linux GN configuration,
+prerequisites, build and browser validation require separately authorized work.
+
+`doctor` prints OS, architecture, tool presence and free space without invoking
+wrappers or installing tools. `reconstruct-plan`, source `plan` and source `status`
+perform no reconstruction, download or build.

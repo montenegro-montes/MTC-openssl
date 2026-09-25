@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Existing-build positive interoperability only; never builds or pulls images.
+# Existing-build interoperability plus explicit source reconstruction; never builds.
 set -euo pipefail
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$REPO"
@@ -149,30 +149,136 @@ reconstruct_plan() (
  source "$REPO/campaigns/browser_client/chromium_mtc/versions/chromium-mtc.env"
  cat <<PLAN
 PRINT ONLY — no reconstruction commands executed.
-1. depot_tools pinned commit: $DEPOT_TOOLS_COMMIT
-2. Chromium pinned base commit: $CHROMIUM_BASE_COMMIT
-3. Chromium version: $CHROMIUM_VERSION
-4. BoringSSL pinned base commit: $BORINGSSL_BASE_COMMIT
-5. Verify patches/SHA256SUMS from campaigns/browser_client/chromium_mtc.
-6. Apply patches/boringssl/0001-Add-experimental-Plants-05-landmark-verification.patch.
-7. Apply Chromium patches in order:
-   patches/chromium/0001-Add-Plants-05-MTC-interoperability-test.patch
-   patches/chromium/0002-Point-Chromium-at-Plants-05-BoringSSL.patch
-   patches/chromium/0003-Add-dynamic-Plants-05-browser-trust-configuration.patch
-8. Verify resulting source against recorded patched source trees:
-   Chromium: $CHROMIUM_PATCHED_COMMIT
-   BoringSSL: $BORINGSSL_PATCHED_COMMIT
-   Compare source trees; replayed commits may have different IDs.
-9. Configure build with explicitly recorded Linux GN args; when appropriate,
-   explicitly run Chromium's build/install-build-deps.sh for prerequisites.
-10. Explicit build step, separately authorized; not implemented here.
-BUILD WILL NEVER RUN IMPLICITLY VIA resume.
+Upstream pinned bases:
+  depot_tools: $DEPOT_TOOLS_COMMIT
+  Chromium $CHROMIUM_VERSION: $CHROMIUM_BASE_COMMIT
+  Chromium base tree: $CHROMIUM_BASE_TREE
+  BoringSSL: $BORINGSSL_BASE_COMMIT
+  BoringSSL base tree: $BORINGSSL_BASE_TREE
+Verify patches/SHA256SUMS and source-bundles/SHA256SUMS from the campaign directory.
+Import exact preserved custom commits (do not replay git am):
+  source-bundles/chromium-mtc.bundle -> $CHROMIUM_PATCHED_COMMIT
+  source-bundles/boringssl-mtc.bundle -> $BORINGSSL_PATCHED_COMMIT
+Verify exact commits, Chromium's BoringSSL gitlink, and authoritative source trees:
+  Chromium: $CHROMIUM_PATCHED_TREE
+  BoringSSL: $BORINGSSL_PATCHED_TREE
+Explicit source interface: reconstruct-source plan|status|run STEP --dest ABSOLUTE_PATH
+Stages 100–160 reconstruct only these two source repositories and pinned depot_tools.
+Other Chromium DEPS, toolchains and build configuration require later explicit work.
+Later build: separately authorized, not implemented here; no packages or gclient sync.
+Normal resume cannot execute reconstruction or build stages.
 PLAN
 )
+reconstruct_source() {
+ python3 - "$REPO" "$@" <<'PY'
+import hashlib, json, os, re, subprocess, sys
+from pathlib import Path
+
+def require(ok, message):
+ if not ok: raise SystemExit('ERROR: '+message)
+def git(path, *args):
+ return subprocess.check_output(['git','-c','core.hooksPath=/dev/null','-c','submodule.recurse=false','-C',str(path),*args], text=True).strip()
+repo=Path(sys.argv[1]); root=repo/'campaigns/browser_client/chromium_mtc'
+v=dict(line.split('=',1) for line in (root/'versions/chromium-mtc.env').read_text().splitlines() if line and not line.startswith('#'))
+steps=['100.verify-reconstruction-inputs','110.prepare-depot-tools','120.prepare-chromium-base','130.prepare-boringssl-base','140.import-preserved-commits','150.checkout-patched-source','160.verify-source-trees']
+args=sys.argv[2:]; action=args.pop(0) if args else 'plan'
+require(action in ('plan','status','run'), 'Expected plan, status or run')
+step=None
+if action=='run':
+ require(bool(args), 'Step required')
+ requested=args.pop(0); matches=[s for s in steps if requested in (s,s.split('.')[0])]
+ require(len(matches)==1,'Unknown reconstruction step'); step=matches[0]
+require(not args or (len(args)==2 and args[0]=='--dest'),'Use --dest ABSOLUTE_PATH')
+if action=='plan':
+ print('\n'.join(steps)); print('Explicit run only; steps 110–130 fetch pinned upstream repositories. No build, sync or installation.'); print('Destination: '+(args[1] if args else '(required for run/status)')); sys.exit(0)
+require(bool(args) and Path(args[1]).is_absolute(),'An absolute --dest is required')
+dest=Path(args[1]).resolve()
+protected=[Path.home()/'Desktop/chromium-mtc', repo, Path.home()/'Desktop/depot_tools']
+for p in protected:
+ p=p.resolve(); require(dest!=p and p not in dest.parents and dest not in p.parents,'Destination overlaps a protected checkout')
+marker=dest/'.mtc-source-owner.json'; state=dest/'.mtc-source-state'
+identity={'destination':str(dest),'versions':v,'workflow':'chromium-mtc-source-v1'}
+if dest.exists():
+ require(dest.is_dir(),'Destination is not a directory')
+ if any(dest.iterdir()):
+  require(marker.is_file() and not marker.is_symlink() and json.loads(marker.read_text())==identity,'Refusing non-empty unexpected destination')
+if action=='status':
+ for s in steps: print(('RECORDED ' if (state/(s+'.done')).is_file() else 'PENDING ')+s)
+ print('Markers record prior success; run 160 explicitly to reverify source.'); sys.exit(0)
+
+def inputs():
+ for manifest in ('patches/SHA256SUMS','source-bundles/SHA256SUMS'):
+  for line in (root/manifest).read_text().splitlines():
+   digest,name=line.split(None,1); f=root/name.strip()
+   require(hashlib.sha256(f.read_bytes()).hexdigest()==digest,'SHA-256 mismatch: '+name)
+ for label in ('CHROMIUM','BORINGSSL'):
+  for suffix in ('BASE_COMMIT','PATCHED_COMMIT','BASE_TREE','PATCHED_TREE'):
+   require(re.fullmatch('[0-9a-f]{40}',v[label+'_'+suffix]) is not None,'Invalid pin')
+  bundle=root/'source-bundles'/(label.lower()+'-mtc.bundle')
+  require(git(repo,'bundle','list-heads',str(bundle))==v[label+'_PATCHED_COMMIT']+' HEAD','Unexpected bundle tip')
+ print('PASS patch/bundle SHA-256 and preserved tips')
+inputs()
+require(step==steps[0] or marker.is_file(),'Run 100 first')
+dest.mkdir(parents=True,exist_ok=True)
+if not marker.exists(): marker.write_text(json.dumps(identity,sort_keys=True)+'\n')
+require(not state.is_symlink(),'Symlink state rejected'); state.mkdir(exist_ok=True)
+lock=state/'lock'
+try: lock.mkdir()
+except FileExistsError: raise SystemExit('ERROR: Reconstruction locked; inspect before retrying')
+try:
+ index=steps.index(step)
+ for previous in steps[:index]: require((state/(previous+'.done')).is_file(),'Run '+previous+' first')
+ # A failed rerun must not leave success markers for this or dependent steps.
+ for pending in steps[index:]:
+  recorded=state/(pending+'.done')
+  if recorded.exists(): recorded.unlink()
+ # Reject symlink traversal and foreign repositories before any Git mutations.
+ src=dest/'src'; boring=src/'third_party/boringssl/src'; depot=dest/'depot_tools'
+ for path in (src,boring,depot):
+  require(path.resolve()==path,'Symlink source path rejected')
+  if (path/'.git').exists():
+   require((path/'.git').is_dir() and not (path/'.git').is_symlink(),'External Git directory rejected')
+   require(Path(git(path,'rev-parse','--show-toplevel')).resolve()==path,'Unexpected Git worktree')
+ def verify(path, commit, tree=None):
+  require(git(path,'rev-parse','HEAD')==commit,'HEAD mismatch: '+str(path))
+  if tree: require(git(path,'show','-s','--format=%T','HEAD')==tree,'Tree mismatch: '+str(path))
+ def clean(path):
+  require(not git(path,'status','--porcelain','--untracked-files=all','--ignore-submodules=all'),'Dirty source: '+str(path))
+ def prepare(path,url,commit,tree=None):
+  if (path/'.git').exists():
+   verify(path,commit,tree); clean(path); return
+  require(not path.exists() or not any(path.iterdir()),'Unexpected non-empty source: '+str(path))
+  path.mkdir(parents=True,exist_ok=True); git(path,'init')
+  git(path,'fetch','--no-tags',url,commit)
+  git(path,'checkout','--detach',commit)
+  verify(path,commit,tree)
+ if index==1: prepare(depot,'https://chromium.googlesource.com/chromium/tools/depot_tools.git',v['DEPOT_TOOLS_COMMIT'])
+ if index==2: prepare(src,'https://chromium.googlesource.com/chromium/src.git',v['CHROMIUM_BASE_COMMIT'],v['CHROMIUM_BASE_TREE'])
+ if index==3: prepare(boring,'https://boringssl.googlesource.com/boringssl',v['BORINGSSL_BASE_COMMIT'],v['BORINGSSL_BASE_TREE'])
+ if index==4:
+  for label,path in [('CHROMIUM',src),('BORINGSSL',boring)]:
+   bundle=root/'source-bundles'/(label.lower()+'-mtc.bundle')
+   require(git(path,'show','-s','--format=%T',v[label+'_BASE_COMMIT'])==v[label+'_BASE_TREE'],'Base tree mismatch')
+   git(path,'bundle','verify',str(bundle)); git(path,'fetch','--no-tags',str(bundle),'HEAD')
+   require(git(path,'show','-s','--format=%T',v[label+'_PATCHED_COMMIT'])==v[label+'_PATCHED_TREE'],'Imported tree mismatch')
+ if index==5:
+  for label,path in [('CHROMIUM',src),('BORINGSSL',boring)]:
+   clean(path); git(path,'checkout','--detach',v[label+'_PATCHED_COMMIT'])
+ if index in (5,6):
+  verify(depot,v['DEPOT_TOOLS_COMMIT']); clean(depot)
+  for label,path in [('CHROMIUM',src),('BORINGSSL',boring)]:
+   verify(path,v[label+'_PATCHED_COMMIT'],v[label+'_PATCHED_TREE']); clean(path)
+  require(git(src,'ls-tree','HEAD','third_party/boringssl/src')=='160000 commit '+v['BORINGSSL_PATCHED_COMMIT']+'\tthird_party/boringssl/src','BoringSSL gitlink mismatch')
+  print('PASS exact commits, authoritative trees, clean tracked content and BoringSSL gitlink')
+ (state/(step+'.done')).write_text('PASS\n'); print('PASS '+step)
+finally: lock.rmdir()
+PY
+}
 case "${1:-help}" in
- help|--help|-h) echo 'Usage: mt-chromium-mtc init|status|plan|doctor|reconstruct-plan|show STEP|run STEP|resume|cleanup';;
+ help|--help|-h) echo 'Usage: mt-chromium-mtc init|status|plan|doctor|reconstruct-plan|reconstruct-source plan|status|run STEP --dest PATH|show STEP|run STEP|resume|cleanup';;
  doctor) doctor;;
  reconstruct-plan) reconstruct_plan;;
+ reconstruct-source) shift; reconstruct_source "$@";;
  init) init;;
  plan) printf '%s\n' "${STEPS[@]}"; echo 'Existing Chromium/validated fixture only. No build, pull or automatic generation.';;
  show) step=$(step_name "${2:?Step required}"); echo "$step"; sed -n '/^run_step()/,/^case "${1:-help}"/p' "$0"; [[ "$step" != 60.* ]] || sed -n '/^start_server()/,/^run_step()/p' "$0";;
