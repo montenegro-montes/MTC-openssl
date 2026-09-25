@@ -1,4 +1,4 @@
-FROM mt-tls-mtc:local
+FROM mt-tls-mtc-profile:local
 
 COPY \
   campaigns/scaling/mutual_authentication_crossover/patch_mutual_metrics.py \

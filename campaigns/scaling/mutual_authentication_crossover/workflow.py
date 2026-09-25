@@ -47,6 +47,7 @@ def main():
     if not (args.simple_crossover / "crossover.csv").is_file():
         raise SystemExit("simple crossover.csv is required")
     env = os.environ.copy()
+    call([sys.executable, "campaigns/common/image_chain.py", "mutual"], env)
     env["MUTUAL_CROSSOVER_SERVER_FIXTURES"] = str(args.server_fixtures.resolve())
     env["MUTUAL_CROSSOVER_FIXTURES"] = str(args.fixtures.resolve())
     call([sys.executable, "campaigns/scaling/chain_depth_server_only/generate_fixtures.py",
@@ -61,8 +62,6 @@ def main():
               "--count", 1024], env)
     call([sys.executable, HERE / "generate_cosigners.py", "--output", args.fixtures], env)
     call([sys.executable, HERE / "prepare_all.py"], env)
-    call(["docker", "build", "-f", HERE / "Dockerfile.mutual_metrics",
-          "-t", "mt-tls-mtc-mutual:local", "."], env)
     for profile in PROFILES:
         call([sys.executable, HERE / "preflight.py", "--profile", profile, "--n", 16,
               "--root", args.results.parent / f"{args.results.name}-preflight-{profile}"], env)

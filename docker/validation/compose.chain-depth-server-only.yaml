@@ -1,7 +1,7 @@
 name: chaindepthserveronly
 
 x-common: &common
-  image: ${CHAIN_DEPTH_IMAGE:-mt-tls-measurement:local}
+  image: ${CHAIN_DEPTH_IMAGE:-mt-tls-mtc-profile:local}
   volumes:
     - ../..:/repo:ro
     - ${CHAIN_DEPTH_FIXTURES:?Set CHAIN_DEPTH_FIXTURES}:/fixtures:ro

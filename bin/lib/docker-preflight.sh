@@ -6,6 +6,27 @@ mt_compose_ready() {
  mt_docker_ready || return
  docker compose version >/dev/null 2>&1 || { echo 'ERROR: Docker Compose is not available (docker compose).' >&2; return 1; }
 }
+# Called only from explicit execution paths, never status/show/plan.
+mt_profile_ready() {
+ mt_compose_ready || return
+ local selected=${MTC_PROFILE_IMAGE:-mt-tls-mtc-profile:local}
+ if [[ "$selected" == mt-tls-mtc-profile:local ]]; then
+  python3 "$REPO/campaigns/common/image_chain.py" profile || return
+ else
+  mt_image_required "$selected" || return
+ fi
+}
+mt_image_matches_parent() {
+ local child=$1 parent=$2
+ docker image inspect "$child" "$parent" 2>/dev/null | python3 -c '
+import json,sys
+try:
+ child,parent=json.load(sys.stdin)
+ p=parent["RootFS"]["Layers"]
+ sys.exit(0 if child["RootFS"]["Layers"][:len(p)]==p else 1)
+except (ValueError,KeyError,TypeError): sys.exit(1)
+'
+}
 mt_image_required() {
  docker image inspect "$1" >/dev/null 2>&1 || {
   printf 'ERROR: Required image is not available: %s. Prepare that image before retrying the action.\n' "$1" >&2
@@ -45,7 +66,7 @@ mt_compose_inputs() {
 # Fail before launcher configuration/output writes. Help remains available on a
 # fresh machine. Container-only operations do not require the plotting stack.
 case "${1:-menu}" in
- help|--help|-h|list|show) ;;
+ help|--help|-h|list|show|build-plan) ;;
  *)
   case "${0##*/}:${1:-menu}" in
    mt-install:*|mt-containers:*|*:clean|*:reset-all)

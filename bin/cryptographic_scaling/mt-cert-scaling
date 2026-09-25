@@ -148,11 +148,15 @@ plan() {
      --output "$ADVANCED_ROOT");;
   110.*) OUT=$TLS_ROOT
    CMD=(bash -c 'set -euo pipefail
-python3 "$1/run.py" --fixtures "$2" --output "$3" --campaigns 5 --repetitions 30 --warmups 5 --full-matrix --environment "$4" --dry-run
-python3 "$1/run.py" --fixtures "$2" --output "$3" --campaigns 5 --repetitions 30 --warmups 5 --full-matrix --environment "$4" --execute
+mkdir -p "$(dirname "$3")"
+capabilities=$(mktemp -d "${3}-capabilities-XXXXXX")
+python3 "$1/inspect_environment.py" --image "$4" --fixtures "$2" --output "$capabilities/environment.json"
+image=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"image_id\"])" "$capabilities/environment.json")
+python3 "$1/run.py" --fixtures "$2" --output "$3" --campaigns 5 --repetitions 30 --warmups 5 --full-matrix --image "$image" --environment "$capabilities/environment.json" --dry-run
+python3 "$1/run.py" --fixtures "$2" --output "$3" --campaigns 5 --repetitions 30 --warmups 5 --full-matrix --image "$image" --environment "$capabilities/environment.json" --execute
 python3 "$1/analyze.py" "$3"
 python3 "$1/plots.py" "$5" --measurements "$3" --output "$3/plots"
-"$6" "$3" --output "$7"' _ "$CHAIN" "$CHAIN_FIXTURES" "$TLS_ROOT" "$ENVIRONMENT" "$STATIC_ROOT" "$REPO/bin/artifacts/mt-report" "artifacts/reports/${TLS_ROOT##*/}/report.html");;
+"$6" "$3" --output "$7"' _ "$CHAIN" "$CHAIN_FIXTURES" "$TLS_ROOT" "${MTC_PROFILE_IMAGE:-mt-tls-mtc-profile:local}" "$STATIC_ROOT" "$REPO/bin/artifacts/mt-report" "artifacts/reports/${TLS_ROOT##*/}/report.html");;
   102.*) OUT=$BOUNDARY_ROOT; CMD=(python3 campaigns/scaling/crossover_n_server_only/boundary_audit.py --analysis "$ADVANCED_ROOT" --source-fixtures "$MTC_ALL" --output "$BOUNDARY_ROOT" --execute);;
   105.*) OUT="artifacts/reports/${ADVANCED_ROOT##*/}/report.html"
    CMD=(python3 bin/renders/crossover-advanced.py --analysis "$ADVANCED_ROOT" --audit "$BOUNDARY_ROOT" --output "$OUT");;
@@ -202,14 +206,14 @@ require_static_baseline() {
  done
 }
 preflight() {
+ [[ -z "$OUT" || ! -e "$OUT" ]] || fail "Output already exists: $OUT. It will not be overwritten or resumed. Check status or use set with a fresh path."
  case "$STEP" in
-  10.*|20.*|30.*|90.*) mt_images_required mt-tls-mtc:local || return 1;;
+  10.*|20.*|30.*|90.*) mt_profile_ready || return 1;;
   40.*) mt_compose_ready || return 1;;
-  102.*|110.*|120.*) mt_compose_ready && mt_image_required mt-tls-mtc:local || return 1;;
-  124.*) mt_compose_ready && mt_images_required mt-tls-mtc:local mt-tls-mtc-mutual:local || return 1;;
+  102.*|110.*) mt_profile_ready || return 1;;
+  120.*|124.*) mt_compose_ready || return 1; python3 campaigns/common/image_chain.py mutual || return 1;;
   50.*|60.*|95.*) mt_images_required mt-tls-mtc:local || return 1;;
  esac
- [[ -z "$OUT" || ! -e "$OUT" ]] || fail "Output already exists: $OUT. It will not be overwritten or resumed. Check status or use set with a fresh path."
  case "$STEP" in
   102.*) require_path "$ADVANCED_ROOT/crossover_extended.csv"; require_path "$MTC_ALL/manifest.json";;
   122.*) require_path "$MUTUAL_ANALYSIS/x509-baselines.csv"; require_path "$MUTUAL_FIXTURES/server-mtc/batch16"; require_path "$MUTUAL_FIXTURES/client-mtc/batch16";;
@@ -225,7 +229,7 @@ preflight() {
     ;;
   85.*) require_path "$STATIC_ROOT/analysis.json"; require_path "$STATIC_ROOT/crossover.csv"; require_path "$STATIC_ROOT/plots";;
   110.*)
-    require_path "$ENVIRONMENT"; require_path "$CHAIN_FIXTURES"; require_path "$CHAIN_VALID"
+    require_path "$CHAIN_FIXTURES"; require_path "$CHAIN_VALID"
     require_path "$STATIC_ROOT/analysis.json"
     [[ ! -e "artifacts/reports/${TLS_ROOT##*/}/report.html" ]] || fail 'TLS depth-validation HTML output already exists.'
     python3 -c 'import matplotlib' || fail 'matplotlib is required for TLS plots.'

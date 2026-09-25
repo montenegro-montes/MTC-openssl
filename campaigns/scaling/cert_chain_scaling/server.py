@@ -2,7 +2,7 @@
 """Single X.509 endpoint for one selected immutable chain."""
 import os,signal,subprocess
 from pathlib import Path
-OPENSSL="/opt/measurement/openssl.sh";fixture=Path(os.environ["CERT_FIXTURE"]);results=Path(os.environ["SERVER_METRICS"]);results.mkdir(parents=True,exist_ok=True)
+OPENSSL="/opt/mtc/openssl.sh";fixture=Path(os.environ["CERT_FIXTURE"]);results=Path(os.environ["SERVER_METRICS"]);results.mkdir(parents=True,exist_ok=True)
 args=[OPENSSL,"s_server","-accept","4433","-cert",str(fixture/"server.pem"),"-key",str(fixture/"server.key")]
 if (fixture/"intermediates.pem").stat().st_size:args += ["-cert_chain",str(fixture/"intermediates.pem")]
 args += ["-www","-tls1_3","-groups",os.environ.get("MTC_TLS_GROUP","X25519"),"-ciphersuites","TLS_AES_256_GCM_SHA384","-no_ticket","-lab_metrics"]

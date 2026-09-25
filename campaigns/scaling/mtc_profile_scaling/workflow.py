@@ -61,6 +61,7 @@ def gate(report,fixtures,image_id):
     data=read(report)
     wanted={(name,mode) for name in PAPER1_PROFILES for mode in ('landmark','standalone')}
     rows=data.get('cells',[])
+    if data.get('server_hostname','server')!='server':raise ValueError('Campaign gate requires the default server hostname')
     if not data.get('passed') or len(rows)!=18 or {(x['profile'],x['mtc_mode']) for x in rows}!=wanted:
         raise ValueError('N=16 gate must contain all nine profiles and both modes')
     if any(x.get('tree_size')!=16 or x.get('handshakes')!=1 or x.get('success') is not True for x in rows):
@@ -71,7 +72,14 @@ def gate(report,fixtures,image_id):
     return data
 
 
-def populate(directory,name,count):
+def server_hostname(value):
+    labels=value.split('.')
+    if len(value)>253 or any(not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?', label) for label in labels):
+        raise argparse.ArgumentTypeError('Expected a DNS hostname (for example server.test)')
+    return value
+
+
+def populate(directory,name,count,server_hostname='server'):
     p=PAPER1_PROFILES[name];directory.mkdir(parents=True,exist_ok=True)
     digest=['-'+p['digest']] if p['digest'] else []
     ca_key=directory/'ca.key';ca=directory/'ca.pem'
@@ -82,7 +90,7 @@ def populate(directory,name,count):
     for i in range(count):
         key=directory/f'{i}.key';cert=directory/f'{i}.pem'
         if cert.exists():continue  # Only a copied, gate-validated N=16 population.
-        prepare.keygen(key,name);csr=directory/f'{i}.csr';ext=directory/f'{i}.cnf';dns='server' if i==0 else f'member-{i}.lab'
+        prepare.keygen(key,name);csr=directory/f'{i}.csr';ext=directory/f'{i}.cnf';dns=server_hostname if i==0 else f'member-{i}.lab'
         prepare.command('req','-new','-key',key,'-subj','/CN='+dns,'-out',csr,*digest)
         ext.write_text(f'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:{dns}\n')
         prepare.command('x509','-req','-in',csr,'-CA',ca,'-CAkey',ca_key,'-set_serial',str(i+1),'-days','30','-extfile',ext,'-out',cert,*digest)
@@ -92,21 +100,22 @@ def populate(directory,name,count):
 
 def generate(args):
     require_current_mtc_image()
-    sizes=sorted(set(args.sizes));prov=provenance()
+    sizes=sorted(set(args.sizes));prov=provenance();profiles=args.profile or list(PAPER1_PROFILES)
+    hostname_meta={'server_hostname':args.server_hostname} if args.server_hostname!='server' else {}
     if sizes!=[16] or args.seed_fixtures:gate(args.validated_n16,args.seed_fixtures,prov['image_id'])
     os.umask(0o077);args.output.mkdir(parents=True,exist_ok=False)
     population=args.output/'population'
     if args.seed_fixtures:shutil.copytree(args.seed_fixtures/'population',population)
-    for name in PAPER1_PROFILES:
-        populate(population/name,name,max(sizes))
+    for name in profiles:
+        populate(population/name,name,max(sizes),args.server_hostname)
         for n in sizes:
             out=args.output/f'batch{n}'/'mtc'/name;out.parent.mkdir(parents=True,exist_ok=True)
             keys=([args.seed_fixtures/'batch16/mtc'/name/f'cosigner-{i}.key' for i in range(2)] if args.seed_fixtures else None)
             meta=prepare.prepare(out,population,name,n,originals=[population/name/f'{i}.pem' for i in range(n)],
-                                 signer_keys=keys,metadata={'provenance':prov,'population':'Paper-1 independent same-algorithm X.509 population'})
+                                 signer_keys=keys,metadata={'provenance':prov,'population':'Paper-1 independent same-algorithm X.509 population',**hostname_meta})
             # Separate file so the generated manifest itself is covered as evidence.
             dump(out/'fixture-sha256.json',hashes(out))
-    dump(args.output/'manifest.json',dict(schema=1,profiles=list(PAPER1_PROFILES),sizes=sizes,provenance=prov,
+    dump(args.output/'manifest.json',dict(schema=1,profiles=profiles,sizes=sizes,provenance=prov,**hostname_meta,
         modes=['landmark','standalone'],status='PREPARED_NOT_TLS_VALIDATED',
         independence='Issuance CA and MTC cosigners are distinct keys of the same signature profile'))
 
@@ -130,7 +139,7 @@ def check_fixture(directory,name,n):
     return meta
 
 
-def tls_once(directory,population,name,mode,output):
+def tls_once(directory,population,name,mode,output,server_hostname='server'):
     p=PAPER1_PROFILES[name];output.mkdir(parents=True,exist_ok=False)
     # Reserve an ephemeral port without making a probe connection/handshake.
     with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
@@ -138,7 +147,7 @@ def tls_once(directory,population,name,mode,output):
     common=['-tls1_3','-groups','X25519','-ciphersuites','TLS_AES_256_GCM_SHA384']
     server=[TLS_OPENSSL,'s_server','-accept',f'127.0.0.1:{port}','-cert',str(directory/f'{mode}-0000.pem'),
             '-key',str(population/'0.key'),'-mtc_id',ident,'-num_tickets','0','-www','-naccept','1',*common]
-    client=[TLS_OPENSSL,'s_client','-connect',f'127.0.0.1:{port}','-servername','server','-verify_hostname','server',
+    client=[TLS_OPENSSL,'s_client','-connect',f'127.0.0.1:{port}','-servername',server_hostname,'-verify_hostname',server_hostname,
             '-verify_return_error','-mtc_trust',str(directory/('trust.bin' if mode=='landmark' else 'authority.bin')),
             '-no_ticket','-ign_eof',*common]+(['-mtc_landmark'] if mode=='landmark' else [])
     dump(output/'commands.json',{'server':server,'client':client})
@@ -168,6 +177,8 @@ def validate(args):
     if args.tree_size!=16:raise ValueError('Only the first N=16 functional gate is prepared')
     # Refuse stale binaries even when repository source is bind-mounted.
     require_current_mtc_image()
+    if read(args.fixtures/'manifest.json').get('server_hostname','server')!=args.server_hostname:
+        raise ValueError('Fixture hostname differs from --server-hostname; use matching immutable fixtures')
     args.output.mkdir(parents=True,exist_ok=False);before=hashes(args.fixtures);cells=[]
     binary=args.output/'verify-profile'
     checked(['cc','-std=c11','-D_POSIX_C_SOURCE=200809L','-I/opt/openssl/include','-I'+str(REPO/'src/mtc'),
@@ -194,19 +205,20 @@ def validate(args):
         for mode in modes:
             for name in profiles:
                 p=PAPER1_PROFILES[name];directory=args.fixtures/'batch16/mtc'/name
-                tls_once(directory,args.fixtures/'population'/name,name,mode,args.output/(name+'-'+mode))
+                tls_once(directory,args.fixtures/'population'/name,name,mode,args.output/(name+'-'+mode),args.server_hostname)
                 cells.append(dict(profile=name,standard_name=p['standard_name'],implementation_algorithm=p['implementation_algorithm'],
                     security_level=p['security_level'],tree_size=16,mtc_mode=mode,draft=DRAFT,success=True,handshakes=1,
                     fixture_hash=sha(directory/'manifest.json'),**{k:prov[k] for k in ('git_commit','openssl_version','liboqs_version','oqs_provider_commit','image_id')}))
         if before!=hashes(args.fixtures):raise ValueError('Fixtures changed during validation')
         dump(args.output/'validation.json',dict(passed=True,cells=cells,fixture_hashes=before,provenance=prov,
+             **({'server_hostname':args.server_hostname} if args.server_hostname!='server' else {}),
              status='FUNCTIONAL_VALIDATION_ONLY_NOT_PERFORMANCE',checks=['parsing','signer and leaf key policy','signature generation/verification','MTC authentication','TLS 1.3/X25519','no resumption']))
     except BaseException as error:
         dump(args.output/'failure.json',dict(passed=False,error=str(error),completed_cells=cells,provenance=prov))
         raise
 
 
-def main():
+def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['generate','validate']);parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--fixtures',type=Path);parser.add_argument('--sizes',type=int,nargs='+',choices=TREE_SIZES,default=[16])
@@ -214,17 +226,23 @@ def main():
     parser.add_argument('--profile',action='append',choices=PAPER1_PROFILES);parser.add_argument('--mode',action='append',choices=['landmark','standalone'])
     parser.add_argument('--tree-size',type=int,choices=TREE_SIZES,default=16)
     parser.add_argument('--image',default='mt-tls-mtc:local');parser.add_argument('--execute',action='store_true');parser.add_argument('--inside',action='store_true',help=argparse.SUPPRESS)
-    args=parser.parse_args()
+    parser.add_argument('--server-hostname',type=server_hostname,default='server',help='Leaf-0 CN/SAN and validation hostname; requires new fixtures')
+    args=parser.parse_args(argv)
     if args.output.exists():parser.error('Output exists; choose a new immutable path')
     if args.action=='validate' and not args.fixtures:parser.error('--fixtures is required')
-    if args.action=='generate' and (args.profile or args.mode):parser.error('Generation prepares all nine profiles and both modes')
+    if args.action=='generate' and args.mode:parser.error('Generation prepares both modes')
+    if args.action=='generate' and args.profile and (set(args.sizes)!={16} or args.seed_fixtures):
+        parser.error('Profile selection is only supported for fresh N=16 fixtures')
+    if args.action=='generate' and args.seed_fixtures and args.server_hostname!='server':
+        parser.error('Alternate hostname requires fresh N=16 fixtures without --seed-fixtures')
+    if len(args.profile or [])!=len(set(args.profile or [])):parser.error('Duplicate profiles are not allowed')
     if args.action=='generate' and (set(args.sizes)!={16} or args.seed_fixtures):
         if not args.validated_n16 or not args.seed_fixtures:parser.error('Other sizes require --validated-n16 and --seed-fixtures')
     if args.action=='validate' and (args.tree_size!=16 or len(args.profile or [])!=len(set(args.profile or [])) or len(args.mode or [])!=len(set(args.mode or []))):
         parser.error('Validation is N=16 only; duplicate selections are not allowed')
     if not args.execute:
         print('PREPARATION ONLY:',args.action,'N='+str(args.sizes if args.action=='generate' else 16),
-              'profiles='+str(args.profile or list(PAPER1_PROFILES)), 'modes='+str(args.mode or ['landmark','standalone']))
+              'profiles='+str(args.profile or list(PAPER1_PROFILES)), 'server_hostname='+args.server_hostname, 'modes='+str(args.mode or ['landmark','standalone']))
         return
     if args.inside:
         (generate if args.action=='generate' else validate)(args);return
@@ -240,6 +258,7 @@ def main():
         if path:
             if not path.exists():parser.error('Missing input: '+str(path))
             command+=['-v',str(path.resolve())+':'+mount+':ro'];inner += [flag,mount]
+    inner+=['--server-hostname',args.server_hostname]
     if args.action=='generate':inner+=['--sizes',*map(str,args.sizes)]
     for flag,values in [('--profile',args.profile),('--mode',args.mode)]:
         for value in values or []:inner += [flag,value]

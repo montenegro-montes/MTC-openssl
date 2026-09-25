@@ -58,3 +58,46 @@ when the observed MTC Certificate message is smaller than the X.509 reference at
 `N-1` and greater than or equal to it at `N`. The launcher exposes this as stage
 `102.crossover-boundary-audit`; it remains outside the default workflow because
 it creates fixtures and performs TLS handshakes.
+
+## Required instrumentation and startup failures
+
+This runner requires the legacy `PROFILE_METRICS` schema on both TLS endpoints:
+Certificate-message sizes, client random, CPU/component times and server JSON.
+The current base `mt-tls-mtc:local` Dockerfile installs only client-side
+`NATIVE_METRICS`; it cannot run this measurement workflow as-is. Removing the
+server's `-lab_metrics` option is not a fix: the client and server data would
+still be absent. Build the separate `mt-tls-mtc-profile:local` image described below. It is the
+default for both runners; `--image` can select another compatible image and the
+boundary runner forwards that selection.
+
+Execution checks server option support and binary metric markers before creating
+results (and before boundary fixture generation). This is a capability screen,
+not runtime validation of the metric schema. Startup logs are saved per cell as
+`server-compose.log` before Compose cleanup. Previously deleted container logs
+cannot be reconstructed from a generic Compose exit code. Preserve failed output
+roots and use new output paths for any subsequent authorized execution.
+
+### Build the compatible image and retry stage 102
+
+The compatible image now has an explicit, separate build recipe using restored
+TLS profiling (without Compact):
+
+```sh
+bin/base/mt-prepare run 4
+bin/cryptographic_scaling/mt-cert-scaling set BOUNDARY_ROOT \
+  "artifacts/results/mtc-crossover-boundary-audit-profile-$(date -u +%Y%m%dT%H%M%SZ)"
+bin/cryptographic_scaling/mt-cert-scaling run 102
+```
+
+The runner selects `mt-tls-mtc-profile:local` by default; the base MTC image stays
+unchanged. Existing failed output directories are preserved. Setting a path
+archives previous launcher status files, as in the existing launcher behavior.
+Stage 102 will explicitly prepare its boundary fixtures and execute measurements.
+See [profiling provenance and limits](../../../src/profiling/README.profile.md).
+These preparation changes have not been built or exercised in Docker/TLS yet.
+
+Installation integration: `mt-prepare run ALL` and `mt-install run ALL` prepare
+profiling and mutual-profiling images automatically. Stages 4 and 5 can prepare
+images without fixture generation. Default boundary execution restores missing
+profile ancestors before the capability check; custom image references are
+never replaced. Network measurement images also derive from profiling.

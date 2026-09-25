@@ -82,11 +82,8 @@ confirm() {
 }
 
 list_targets() {
+  "$REPO/bin/containers/mt-install" list
   cat <<'EOF'
-ACTIVE IMAGE CHAIN (use mt-install or mt-prepare)
-mt-tls-lab:local      base TLS/X.509 environment
-mt-tls-mtc:local      experimental MTC implementation
-mt-tls-capture:local  packet capture and protocol inspection
 
 CURRENT NETWORK COMPOSE TARGETS
 latency      fixed-delay campaign

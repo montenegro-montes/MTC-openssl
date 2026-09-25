@@ -1,7 +1,7 @@
 name: chaindepthmtc
 
 x-common: &common
-  image: ${CHAIN_DEPTH_MTC_IMAGE:-mt-tls-mtc:local}
+  image: ${CHAIN_DEPTH_MTC_IMAGE:-mt-tls-mtc-profile:local}
   volumes:
     - ../..:/repo:ro
     - ${MTC_ROOT:-/tmp/mtc-missing}:/mtc:ro

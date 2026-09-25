@@ -7,6 +7,8 @@ from pathlib import Path
 HERE=Path(__file__).resolve().parent;REPO=HERE.parents[2]
 sys.path.insert(0,str(REPO))
 from campaigns.common.host_info import host_table_rows
+from run_mtc_by_n import MTC_IMAGE, require_profile_metrics
+from campaigns.common.image_chain import ensure
 
 def read(path):
     with path.open(newline='') as f:return list(csv.DictReader(f))
@@ -30,13 +32,17 @@ def render(rows,path):
     path.write_text(f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Crossover boundary audit</title><style>body{{font:15px system-ui;max-width:1200px;margin:auto;padding:30px;color:#172b4d}}table{{border-collapse:collapse;width:100%}}th,td{{padding:9px;border-bottom:1px solid #ccd6e0;text-align:left}}th{{background:#edf3f8}}</style></head><body><h1>Empirical crossover boundary audit</h1><p>Each row checks the analytically predicted boundary using real MTC TLS Certificate-message observations at N-1 and N. PASS requires MTC(N-1) &lt; X.509 and MTC(N) &gt;= X.509.</p><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table><h2>Time and computer</h2><table><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>{host_body}</tbody></table></body></html>''')
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--analysis',type=Path,required=True);p.add_argument('--source-fixtures',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--runs',type=int,default=30);p.add_argument('--warmups',type=int,default=5);p.add_argument('--image',default='mt-tls-mtc:local');p.add_argument('--execute',action='store_true');a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--analysis',type=Path,required=True);p.add_argument('--source-fixtures',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--runs',type=int,default=30);p.add_argument('--warmups',type=int,default=5);p.add_argument('--image',default=MTC_IMAGE);p.add_argument('--execute',action='store_true');a=p.parse_args()
     analytical,chosen=targets(a.analysis)
     plan={'profiles':chosen,'boundary_definition':'N-1 smaller; N greater than or equal to X.509','runs':a.runs,'warmups':a.warmups,'output':str(a.output)}
     print(json.dumps(plan,indent=2))
     if not a.execute:return
     if a.output.exists():p.error('output exists')
     if not chosen:raise SystemExit('no D=2 analytical crossover can be audited inside N<=256')
+    if a.image == 'mt-tls-mtc-profile:local':
+        a.image=ensure('profile')['target']['Id']
+    a.image=json.loads(subprocess.check_output(['docker','image','inspect',a.image],text=True))[0]['Id']
+    require_profile_metrics(a.image)
     a.output.mkdir(parents=True);(a.output/'plan.json').write_text(json.dumps(plan,indent=2)+'\n')
     fixtures=a.output/'fixtures';raw=a.output/'raw'
     def container(path):
@@ -45,7 +51,7 @@ def main():
     if source_in is None or analysis_in is None:raise SystemExit('inputs must be below the repository root')
     call(['docker','run','--rm','-e','PYTHONPATH=/repo/src/mtc','-v',f'{REPO}:/repo:ro','-v',f'{a.output.resolve()}:/output','-w','/repo','--entrypoint','python3',a.image,'campaigns/scaling/crossover_n_server_only/generate_boundary_fixtures.py','--source',source_in,'--analysis',analysis_in,'--output','/output/fixtures'])
     for profile,sizes in chosen.items():
-        cmd=[sys.executable,HERE/'run_mtc_by_n.py','--mtc-root',fixtures,'--output',raw/profile,'--profile',profile,'--runs',a.runs,'--warmups',a.warmups,'--execute']
+        cmd=[sys.executable,HERE/'run_mtc_by_n.py','--mtc-root',fixtures,'--output',raw/profile,'--profile',profile,'--runs',a.runs,'--warmups',a.warmups,'--image',a.image,'--execute']
         for n in sizes:cmd.extend(['--tree-size',n])
         call(cmd)
     measured={}

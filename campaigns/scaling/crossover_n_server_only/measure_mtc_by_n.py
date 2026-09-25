@@ -102,6 +102,12 @@ def main() -> None:
                 server_metric_paths[0].read_text()
             )
 
+            if (client.get("profile_valid") != 1 or server.get("profile_valid") != 1
+                    or client.get("side") != "client" or server.get("side") != "server"
+                    or server.get("client_random") != client_random
+                    or client.get("certificate_message_bytes", 0) <= 0
+                    or client.get("components", {}).get("peer_auth", {}).get("calls", 0) < 1):
+                raise RuntimeError("invalid or incomplete endpoint profiling evidence")
             if client["reused"] or server["reused"]:
                 raise RuntimeError("session reuse detected")
             if client["certificate_message_bytes"] != server["certificate_message_bytes"]:

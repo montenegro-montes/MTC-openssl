@@ -1,0 +1,10 @@
+**
+!docker/
+!docker/validation/
+!docker/validation/Dockerfile.profile
+!src/
+!src/profiling/
+!src/profiling/profile.c
+!src/profiling/profile.h
+!src/profiling/metrics.c
+!src/profiling/patch_profile_metrics.py

@@ -8,7 +8,10 @@ REPO = Path(__file__).resolve().parents[2]
 SPECS = {
     'lab': ('mt-tls-lab:local', 'docker/base/Dockerfile', None),
     'mtc': ('mt-tls-mtc:local', 'docker/base/Dockerfile.mtc', 'lab'),
-    'network-measurement': ('mt-tls-network-measurement:local', 'docker/network/Dockerfile.measurement', 'mtc'),
+    'capture': ('mt-tls-capture:local', 'docker/base/Dockerfile.capture', 'mtc'),
+    'profile': ('mt-tls-mtc-profile:local', 'docker/validation/Dockerfile.profile', 'mtc'),
+    'mutual': ('mt-tls-mtc-mutual:local', 'campaigns/scaling/mutual_authentication_crossover/Dockerfile.mutual_metrics', 'profile'),
+    'network-measurement': ('mt-tls-network-measurement:local', 'docker/network/Dockerfile.measurement', 'profile'),
     'network': ('mt-tls-network:local', 'docker/network/Dockerfile.network', 'network-measurement'),
 }
 

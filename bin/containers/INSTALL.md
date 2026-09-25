@@ -11,7 +11,9 @@ bin/containers/mt-install run --count 3
 bin/containers/mt-install run ALL
 ```
 
-Active stages: 1 base TLS/X.509, 2 experimental MTC, 3 packet capture. A stage
+Active stages: 1 base TLS/X.509, 2 experimental MTC, 3 packet capture,
+4 endpoint profiling, 5 mutual-authentication profiling, 6 network measurement,
+7 network tools. Both installers use `bin/lib/image-catalog.sh`. A stage
 number rebuilds that image; count/ALL build only missing images
 in dependency order and stop on failure. Existing images are not proof of source
 freshness or passed scientific tests. Logs go to `.mt-state/install/`. A lock
@@ -22,8 +24,8 @@ manually removing it.
 Docker must already be running. Builds check their local parent images first;
 the base build may download its Debian parent. No fixtures or campaigns are run.
 The menu's Start services option delegates to `mt-containers`, whose Compose
-targets are frozen historical infrastructure. It is not part of active MTC/X.509
-preparation or the current validation and performance batteries.
+targets are the current network campaigns. Installation builds images; campaign
+launchers create their service containers when explicitly executed.
 
 ```sh
 # Preview and confirm deletion of lab containers and mt-tls-* images:
@@ -58,4 +60,6 @@ and build cache remain. Unrelated tags on shared images are preserved.
 
 `--yes` explicitly bypasses confirmation. Host fixtures, results and launcher
 state remain unchanged; this is an image reset, not a campaign data reset.
-Rebuild the required images with `mt-prepare run ALL` or `mt-install` afterward.
+Prepare all images without TLS or fixture generation with `bin/base/mt-prepare run 7`
+or `bin/containers/mt-install run ALL`. `mt-prepare run ALL` additionally generates
+and validates N=16 fixtures using TLS.

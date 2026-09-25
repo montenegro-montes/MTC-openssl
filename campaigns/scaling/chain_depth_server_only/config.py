@@ -85,6 +85,6 @@ TLS = {
 }
 
 TREE_SIZE = 16
-IMAGE = "mt-tls-measurement:local"
+IMAGE = os.environ.get("MTC_PROFILE_IMAGE", "mt-tls-mtc-profile:local")
 MTC_PROFILE_MAP = {name: name for name in PAPER1_PROFILES}
 LEGACY_MTC_PROFILE_MAP = dict(LEGACY_PROFILE_MAP)

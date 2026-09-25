@@ -185,8 +185,8 @@ bin/browser_client/mt-chromium-mtc cleanup
 `show STEP` displays implementation/commands; `run STEP` executes one step.
 Steps: 00 preflight, 10 existing Chromium detection, 20 fixture selection,
 30 validation-evidence verification, 40 anchor export/check, 50 hostname check,
-60 positive server start. `resume` rechecks these inexpensive steps and reuses
-an already running owned server. Stopped/foreign containers require inspection;
+60 positive server start. `resume` skips every stage with an existing `.done` marker. Use `run STEP`
+to explicitly recheck a completed stage; `status` checks container state. Stopped/foreign containers require inspection;
 they are never silently replaced. No retries of TLS samples occur.
 
 Paths persist in `.mt-state/chromium-mtc/paths.env`; no inherited terminal

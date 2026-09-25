@@ -1,4 +1,4 @@
-FROM mt-tls-mtc:local
+FROM mt-tls-mtc-profile:local
 COPY campaigns/network/common/server.py campaigns/network/common/measure.py /opt/measurement/
 COPY campaigns/common/pcap_capture.py /opt/measurement/pcap_capture.py
 WORKDIR /work

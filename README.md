@@ -43,12 +43,12 @@ subcommand opens its interactive menu when available.
 
 | Command | Responsibility |
 |---|---|
-| `bin/base/mt-prepare` | Prepare the base, MTC and capture images; initialize launcher paths; generate and functionally validate the shared N=16 fixtures |
+| `bin/base/mt-prepare` | Prepare base, MTC, capture and profiling images; initialize launcher paths; generate and functionally validate the shared N=16 fixtures |
 | `bin/base/mt-protocol-validation` | Validate draft vectors, MTC objects, captured TLS transcripts, negative cases, mutual authentication and Trust Anchor Retry |
 | `bin/performance/mt-handshake-performance` | Measure native and PCAP timing and transmitted sizes for server-only, mutual and retry cases |
 | `bin/cryptographic_scaling/mt-cert-scaling` | Generate/validate fixtures and run N=16, advanced, boundary and mutual-authentication crossover studies plus D=2–5 TLS scaling |
 | `bin/network/mt-network` | Run latency, bandwidth, loss and combined-network studies in `single` or `mutual` mode |
-| `bin/containers/mt-install` | Build or inspect the three shared base images without running campaigns |
+| `bin/containers/mt-install` | Build or inspect the five shared images without running campaigns |
 | `bin/containers/mt-containers` | Manage the current network Compose targets and network image chain |
 | `bin/artifacts/mt-report` | Inspect generated result/report directories |
 
@@ -120,16 +120,33 @@ bin/base/mt-prepare run ALL
 mt-tls-lab:local
     └── mt-tls-mtc:local
         ├── mt-tls-capture:local
-        └── mt-tls-network-measurement:local
-            └── mt-tls-network:local
+        └── mt-tls-mtc-profile:local
+            ├── mt-tls-mtc-mutual:local
+            └── mt-tls-network-measurement:local
+                └── mt-tls-network:local
 ```
 
-The first three images are managed directly by `mt-prepare`. The network images
+The five base/capture/profiling images are managed directly by `mt-prepare`. The network images
 are prepared when network or Native/PCAP validation needs them. `run ALL` also
 initializes missing scaling/protocol paths and ensures that the N=16 fixtures
 have functional TLS validation evidence. Existing images and output directories
 are reused only through their corresponding gates; their presence alone does not
 prove a successful experiment.
+
+For an existing installation, prepare the new profiling images without generating
+fixtures or executing TLS:
+
+```sh
+bin/base/mt-prepare run 5
+```
+
+Stages 1–3 retain their numbers; stage 4 builds endpoint profiling and stage 5
+builds mutual profiling. `bin/containers/mt-install run ALL` prepares all five
+images without fixture generation. Explicit scaling/network execution restores
+missing profiling image dependencies automatically; status/show/plans do not build.
+Existing images with a changed parent are rebuilt during preparation. After
+editing profiling source, use `bin/base/mt-prepare rebuild 4`, then `run 5` to
+refresh its mutual child. Custom `MTC_PROFILE_IMAGE` references must already exist.
 
 ### 2. Validate the protocol
 

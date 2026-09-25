@@ -131,3 +131,12 @@ does not establish full draft compliance or update the pinned specification.
 Both values occupy a uint16: this migration alone changes no size-model numbers.
 Active extractors accept only the current codepoint; historical captures require
 the matching historical tools, not relabeling or regeneration in place.
+
+## Optional leaf-0 hostname
+
+`--server-hostname` defaults to `server` and applies to leaf 0's CN/DNS SAN and
+validation SNI/hostname. Other leaves retain `member-N.lab`. A nondefault hostname
+requires fresh N=16 output without `--seed-fixtures`; existing certificates are
+skipped, not reissued. `--profile` optionally selects fresh N=16 generation.
+Browser-specific commands live in
+[`future_implementation/chromium_mtc`](../../future_implementation/chromium_mtc/README.md).

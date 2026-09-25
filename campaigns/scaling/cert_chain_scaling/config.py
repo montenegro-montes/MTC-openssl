@@ -13,6 +13,6 @@ DEPTHS = (2, 3, 4, 5)
 TREE_SIZES = (1, 4, 16, 64, 256)
 TLS = {"version": "TLSv1.3", "group": os.environ.get("MTC_TLS_GROUP", "X25519"), "cipher": "TLS_AES_256_GCM_SHA384",
        "tickets": False, "resumption": False, "zero_rtt": False, "client_authentication": False}
-IMAGE = "mt-tls-mtc:local"
+IMAGE = os.environ.get("MTC_PROFILE_IMAGE", "mt-tls-mtc-profile:local")
 MTC_PROFILE_MAP = {name:name for name in PAPER1_PROFILES}
 LEGACY_MTC_PROFILE_MAP = dict(LEGACY_PROFILE_MAP)

@@ -38,8 +38,11 @@ PY
 }
 owned() { [[ "$(docker inspect -f '{{index .Config.Labels "mtc.workflow"}}' "$CONTAINER")" == "$STATE" ]]; }
 start_server() {
+ local prerequisite
+ for prerequisite in "${STEPS[@]:0:6}"; do
+  [[ -f "$STATE/$prerequisite.done" ]] || fail "Run $prerequisite first."
+ done
  check_fixture
- [[ -f "$STATE/40.export-mtc-anchor.done" && -f "$STATE/50.configure-hostname.done" ]] || fail 'Run steps 40 and 50 first.'
  local image result id
  image=$(cat "$STATE/image-id")
  docker image inspect "$image" >/dev/null
@@ -107,10 +110,10 @@ print('PASS anchor:',out)
 PY
  ;;
   50.*) python3 - "$HOSTNAME_LAB" <<'PY'
-import socket,sys
+import shlex,socket,sys
 from pathlib import Path
 host=sys.argv[1];matches=[line.split('#')[0].split() for line in Path('/etc/hosts').read_text().splitlines()]
-assert any(p and p[0]=='127.0.0.1' and host in p[1:] for p in matches), 'Add manually to /etc/hosts: 127.0.0.1 '+host
+assert any(p and p[0]=='127.0.0.1' and host in p[1:] for p in matches), "Run manually: printf '%s\\n' " + shlex.quote('127.0.0.1 '+host) + ' | sudo tee -a /etc/hosts'
 assert all(p[0]=='127.0.0.1' for p in matches if host in p[1:]), 'Conflicting hosts entry'
 assert {a[4][0] for a in socket.getaddrinfo(host,4433)}=={'127.0.0.1'}, 'Resolution differs from loopback'
 print('PASS existing hosts entry; not owned or modified by this workflow')
@@ -132,7 +135,7 @@ case "${1:-help}" in
  run|resume|cleanup) load; mkdir "$STATE/lock" 2>/dev/null || fail 'Workflow locked; inspect before retrying.'; trap 'rmdir "$STATE/lock"' EXIT
   case "$1" in
    run) run_step "$(step_name "${2:?Step required}")";;
-   resume) for step in "${STEPS[@]}"; do run_step "$step"; done;;
+   resume) for step in "${STEPS[@]}"; do if [[ -f "$STATE/$step.done" ]]; then echo "SKIP $step"; else run_step "$step"; fi; done;;
    cleanup) if docker container inspect "$CONTAINER" >/dev/null 2>&1; then owned || fail 'Foreign container preserved'; docker rm -f "$CONTAINER"; fi
     rm -f "$STATE/60.start-mtc-positive-server.done" "$STATE/container-id"
     echo 'Artifacts and existing hosts entry preserved. No browser profiles are created by this workflow.';;

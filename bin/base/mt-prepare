@@ -7,8 +7,7 @@ cd "$REPO"
 source "$REPO/bin/lib/docker-preflight.sh"
 STATE="$REPO/.mt-state/cryptographic-setup"
 REPORTER="$REPO/bin/renders/prepare.py"
-IMAGES=(mt-tls-lab:local mt-tls-mtc:local mt-tls-capture:local)
-FILES=(Dockerfile Dockerfile.mtc Dockerfile.capture)
+source "$REPO/bin/lib/image-catalog.sh"
 fail() { echo "ERROR: $*" >&2; exit 1; }
 configure_paths() {
  local launcher config command
@@ -94,8 +93,8 @@ python_ready() {
 }
 
 prepare() (
- local selection=$1 rebuild=$2 last=2 start=0 i log rc parent
- [[ "$selection" == ALL || "$selection" =~ ^[1-3]$ ]] || fail 'Select stage 1..3 or ALL.'
+ local selection=$1 rebuild=$2 last=6 start=0 i log rc parent
+ [[ "$selection" == ALL || "$selection" =~ ^[1-7]$ ]] || fail 'Select stage 1..7 or ALL.'
  # run N prepares missing ancestors too; rebuild N rebuilds N after preparing ancestors.
  if [[ "$selection" != ALL ]]; then last=$((selection-1)); fi
  mt_compose_ready || exit 1
@@ -105,24 +104,24 @@ prepare() (
  trap 'rmdir "$STATE/lock" 2>/dev/null || true' EXIT
  for ((i=start;i<=last;i++)); do
   if [[ "$rebuild" == no || ( "$selection" != ALL && "$i" != "$last" ) ]]; then
-   if docker image inspect "${IMAGES[i]}" >/dev/null 2>&1; then
+   if docker image inspect "${IMAGES[i]}" >/dev/null 2>&1 && { (( PARENTS[i] < 0 )) || mt_image_matches_parent "${IMAGES[i]}" "${IMAGES[${PARENTS[i]}]}"; }; then
     printf 'REUSE %s\n' "${IMAGES[i]}"
-    printf '%s\t%s\t%s\t%s\n' "$((i+1))" "${IMAGES[i]}" reused "docker/base/${FILES[i]}" >> "${MT_PREPARE_EVENTS:-/dev/null}"
+    printf '%s\t%s\t%s\t%s\n' "$((i+1))" "${IMAGES[i]}" reused "${FILES[i]}" >> "${MT_PREPARE_EVENTS:-/dev/null}"
     continue
    fi
   fi
-  if ((i)); then parent=${IMAGES[i-1]}; mt_image_required "$parent" || exit 1; fi
+  if (( PARENTS[i] >= 0 )); then parent=${IMAGES[${PARENTS[i]}]}; mt_image_required "$parent" || exit 1; fi
   log="$STATE/stage-$((i+1))-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
   printf 'BUILD %s\nLog: %s\n' "${IMAGES[i]}" "$log"
   set +e
-  docker build -f "docker/base/${FILES[i]}" -t "${IMAGES[i]}" . 2>&1 | tee "$log"
+  docker build -f "${FILES[i]}" -t "${IMAGES[i]}" . 2>&1 | tee "$log"
   local codes=("${PIPESTATUS[@]}")
   set -e
   rc=${codes[0]}; [[ "$rc" != 0 ]] || rc=${codes[1]}
   if [[ "$rc" == 0 ]]; then
-   printf '%s\t%s\t%s\t%s\n' "$((i+1))" "${IMAGES[i]}" built "docker/base/${FILES[i]}" >> "${MT_PREPARE_EVENTS:-/dev/null}"
+   printf '%s\t%s\t%s\t%s\n' "$((i+1))" "${IMAGES[i]}" built "${FILES[i]}" >> "${MT_PREPARE_EVENTS:-/dev/null}"
   else
-   printf '%s\t%s\t%s\t%s\n' "$((i+1))" "${IMAGES[i]}" failed "docker/base/${FILES[i]}" >> "${MT_PREPARE_EVENTS:-/dev/null}"
+   printf '%s\t%s\t%s\t%s\n' "$((i+1))" "${IMAGES[i]}" failed "${FILES[i]}" >> "${MT_PREPARE_EVENTS:-/dev/null}"
    exit "$rc"
   fi
  done
@@ -150,9 +149,9 @@ menu() {
 case "${1:-menu}" in
  menu) menu;; list) list;; init) report_action init none configure;;
  run|rebuild) [[ "$#" == 2 ]] || fail 'Usage: run N|ALL or rebuild N|ALL'; action=$1; flag=no; [[ "$1" != rebuild ]] || flag=yes; report_action "$action" "$2" prepare "$2" "$flag";;
- show) [[ "${2:-}" =~ ^[1-3]$ ]] || fail 'Stage required: 1..3'; i=$(($2-1)); printf 'docker build -f %q -t %q .\n' "docker/base/${FILES[i]}" "${IMAGES[i]}";;
+ show) [[ "${2:-}" =~ ^[1-7]$ ]] || fail 'Stage required: 1..7'; i=$(($2-1)); printf 'docker build -f %q -t %q .\n' "${FILES[i]}" "${IMAGES[i]}";;
  status) mt_compose_ready || exit 1; python_ready; for image in "${IMAGES[@]}"; do if docker image inspect "$image" >/dev/null 2>&1; then echo "AVAILABLE $image"; else echo "MISSING $image"; fi; done;;
  reset-all) [[ "$#" == 1 ]] || fail 'reset-all requires interactive confirmation; no options accepted.'; mt_docker_ready || exit 1; python3 "$REPO/scripts/maintenance/reset_lab.py";;
- help|--help|-h) echo 'Usage: mt-prepare [menu|init|list|status|show N|run N|run ALL|rebuild N|rebuild ALL|reset-all]'; echo 'Prepares the base, MTC and capture images. Existing images are reused; rebuild is explicit. run/rebuild initialize missing launcher paths after successful preparation; ALL also generates and validates N=16 fixtures using functional TLS; init configures paths without Docker. init/run/rebuild write a specific JSON summary and an explained HTML report below artifacts/results and artifacts/reports. reset-all requires the literal confirmation RESET ALL and deletes artifacts, launcher state and laboratory Docker resources without creating a backup.';;
+ help|--help|-h) echo 'Usage: mt-prepare [menu|init|list|status|show N|run N|run ALL|rebuild N|rebuild ALL|reset-all]'; echo 'Prepares base, MTC, capture, endpoint-profiling, mutual-profiling and network images. Existing images are reused; rebuild is explicit. run/rebuild initialize missing launcher paths after successful preparation; ALL also generates and validates N=16 fixtures using functional TLS; init configures paths without Docker. init/run/rebuild write a specific JSON summary and an explained HTML report below artifacts/results and artifacts/reports. reset-all requires the literal confirmation RESET ALL and deletes artifacts, launcher state and laboratory Docker resources without creating a backup.';;
  *) fail 'Unknown command; use help.';;
 esac

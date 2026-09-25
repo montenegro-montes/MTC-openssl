@@ -18,7 +18,7 @@ COMPOSE = [
     str(REPO / "docker/validation/compose.chain-depth-mtc.yaml"),
 ]
 
-MTC_IMAGE = "mt-tls-mtc:local"
+MTC_IMAGE = os.environ.get("MTC_PROFILE_IMAGE", "mt-tls-mtc-profile:local")
 CHAIN_PROFILE = "mtc-landmark"
 
 

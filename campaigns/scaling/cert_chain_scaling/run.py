@@ -14,7 +14,7 @@ from inspect_environment import inspect
 from result_state import cell_name, digest, validate_complete, validate_fixture
 
 REPO=Path(__file__).resolve().parents[3]
-COMPOSE=['docker','compose','-f',str(REPO/'docker/cryptographic_scaling/compose.cert-chain-scaling.yaml')]
+COMPOSE=['docker','compose','-f',str(REPO/'docker/validation/compose.cert-chain-scaling.yaml')]
 
 
 def write_json(path,data):

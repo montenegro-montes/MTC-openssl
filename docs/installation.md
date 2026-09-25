@@ -68,3 +68,20 @@ bin/base/mt-prepare run ALL
 validation.** It is separate from dependency checking and should be invoked only
 when ready for that work. Existing fixtures from another machine are not assumed
 to be valid merely because their files exist.
+
+## Profiling images on a clean installation
+
+`mt-prepare run ALL` and `mt-install run ALL` include stages 4 and 5:
+`mt-tls-mtc-profile:local` and `mt-tls-mtc-mutual:local`. The former supplies
+`PROFILE_METRICS` on both endpoints; the base MTC image remains separate.
+Use `bin/base/mt-prepare run 5` to add these images to an existing installation
+without generating fixtures or running TLS. Network images derive from profiling
+and are prepared by their existing execution workflow.
+
+The scaling launcher prepares required image dependencies before stages 10/20/30,
+90, 102, 110, 120 and 124. Direct boundary execution also prepares the default
+profile image; a custom `--image` or `MTC_PROFILE_IMAGE` is checked, not built.
+Status/show/plans do not build. Missing images and changed parents are handled;
+source edits require an explicit rebuild. Existing immutable fixture/evidence
+checks still apply, so old capability manifests may require a fresh campaign
+configuration when switching from an uninstrumented image.

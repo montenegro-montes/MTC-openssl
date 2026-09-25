@@ -26,12 +26,16 @@ campaign directory.
 
 ### Docker images
 
-The launcher manages three Docker images:
+The launcher manages seven Docker images:
 
 ```text
 Stage 1   mt-tls-lab:local       docker/base/Dockerfile
 Stage 2   mt-tls-mtc:local       docker/base/Dockerfile.mtc
 Stage 3   mt-tls-capture:local   docker/base/Dockerfile.capture
+Stage 4   mt-tls-mtc-profile:local docker/validation/Dockerfile.profile
+Stage 5   mt-tls-mtc-mutual:local campaigns/scaling/mutual_authentication_crossover/Dockerfile.mutual_metrics
+Stage 6   mt-tls-network-measurement:local docker/network/Dockerfile.measurement
+Stage 7   mt-tls-network:local docker/network/Dockerfile.network
 ```
 
 Their roles are:
@@ -40,7 +44,7 @@ Their roles are:
 - `mt-tls-mtc:local`: MTC-enabled TLS environment used to generate and validate MTC objects and perform MTC handshakes.
 - `mt-tls-capture:local`: independent environment used for packet-capture and protocol-inspection tasks.
 
-The images are prepared sequentially because later stages depend on the preceding environment being available.
+Capture and endpoint profiling both derive from MTC; mutual profiling derives from endpoint profiling. Stage numbers 1–3 are unchanged. `run 7` prepares all images and launcher paths only, without fixture generation or TLS.
 
 Existing images are reused by default.
 
@@ -81,9 +85,9 @@ reuses existing prerequisite images when possible but rebuilds the selected stag
 bin/base/mt-prepare rebuild ALL
 ```
 
-rebuilds all three images.
+rebuilds all five images.
 
-This prevents an ordinary experiment launch from silently rebuilding the experimental environment.
+Explicit scaling/network execution may restore missing images or refresh changed parents through the shared image chain. Status/show/plans never build. Source edits require an explicit rebuild; existing evidence is never relabeled.
 
 ### Launcher configuration
 
@@ -118,7 +122,7 @@ bin/base/mt-prepare run ALL
 
 does more than prepare Docker images.
 
-After preparing the three images, it prepares the N=16 MTC fixtures used by the active protocol experiments.
+After preparing the five images, it prepares the N=16 MTC fixtures used by the active protocol experiments.
 
 The fixture preparation is delegated to:
 

@@ -13,6 +13,10 @@ IMAGES = (
     (1, "mt-tls-lab:local", "Base TLS/X.509 environment and cryptographic tools"),
     (2, "mt-tls-mtc:local", "Experimental MTC TLS implementation"),
     (3, "mt-tls-capture:local", "Packet capture and protocol inspection tools"),
+    (4, "mt-tls-mtc-profile:local", "Client/server endpoint and component metrics"),
+    (5, "mt-tls-mtc-mutual:local", "Directional mutual-authentication metrics"),
+    (6, "mt-tls-network-measurement:local", "Network endpoint measurement tools"),
+    (7, "mt-tls-network:local", "Network campaign tools"),
 )
 
 
@@ -86,7 +90,7 @@ def main():
     expected = {
         "init": "Initialize or preserve launcher configuration; do not build images or generate fixtures.",
         "run": "Prepare the image chain through the requested stage, reusing existing images.",
-        "rebuild": "Rebuild the requested stage; with ALL, rebuild all three images.",
+        "rebuild": "Rebuild the requested stage; with ALL, rebuild all seven images.",
     }[args.action]
     if args.selection == "ALL":
         expected += " Then prepare the N=16 MTC fixtures and check their functional TLS validation."
