@@ -319,7 +319,7 @@ bin/browser_client/mt-chromium-mtc prepare-build run 220
 | 180.prepare-chromium-checkout-layout | Write a matching `.gclient` in the reconstruction root; refuse conflicting configuration. Never replace `src`. |
 | 190.sync-pinned-deps | Run pinned `depot_tools/gclient sync --nohooks --noprehooks` from the reconstruction root. Downloads dependencies without running hooks. |
 | 200.check-linux-build-dependencies | Run `src/build/install-build-deps.sh --quick-check`; fail on missing packages without installing anything. |
-| 210.configure-linux-release | Run pinned `gclient runhooks`, then `gn gen out/mtc-release` from `src`. Hooks download/setup toolchains; GN generates build files, without compiling Chromium. |
+| 210.configure-linux-release | Initialize pinned depot_tools with `ensure_bootstrap`, verify its Python, then run `gclient runhooks` and `gn gen out/mtc-release` from `src`. Hooks download/setup toolchains; GN generates build files, without compiling Chromium. |
 | 220.verify-build-configuration | Reverify source, layout, exact args, generated `build.ninja` hash and absence of recorded build attempts/known compilation artifacts. |
 
 The `.gclient` is exactly:
@@ -416,3 +416,13 @@ Normal `resume` remains limited to interoperability stages 00–60. Reconstructi
 100–160 is unchanged. Neither reconstruction nor preparation can dispatch
 compilation. `build plan/status` cannot build, and missing output never triggers
 an automatic build.
+
+
+Stage 210 explicitly runs `depot_tools/ensure_bootstrap` before hooks/GN. With
+`DEPOT_TOOLS_UPDATE=0`, running gclient alone does not initialize the hermetic
+Python required by the GN wrapper. `ensure_bootstrap` downloads bootstrap tools
+without updating the depot_tools Git revision; the driver verifies that revision
+again and checks `python3_bin_reldir.txt` and the Python executable. This runs only
+on explicit stage 210, never from plan/status/resume. External command failures
+stop with a concise error rather than a Python traceback. A Git-version
+recommendation is separate from a missing bootstrap and is left visible.

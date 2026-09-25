@@ -330,6 +330,7 @@ target_os = ['linux']
 target_os_only = True
 """
 sync=[str(depot/'gclient'),'sync','--nohooks','--noprehooks']
+bootstrap=[str(depot/'ensure_bootstrap')]
 hooks=[str(depot/'gclient'),'runhooks']
 check=[str(src/'build/install-build-deps.sh'),'--quick-check']
 install=[str(src/'build/install-build-deps.sh')]
@@ -343,7 +344,7 @@ if action=='plan':
   print('190 (cwd='+str(dest)+'): '+shlex.join(sync))
   print('200 (check only): '+shlex.join(check))
   print('Optional explicit installation: prepare-build install-deps')
-  print('210 (cwd='+str(src)+'): '+shlex.join(hooks)+' && '+shlex.join(gen))
+  print('210 (cwd='+str(src)+'): '+shlex.join(bootstrap)+' && '+shlex.join(hooks)+' && '+shlex.join(gen))
   print('GN args:\n'+gn_args.rstrip())
   print('220: verify source, layout, GN args/build.ninja and no recorded compilation/artifacts.')
  else:
@@ -386,7 +387,7 @@ os_release=dict(line.split('=',1) for line in Path('/etc/os-release').read_text(
 require(os_release.get('ID','').strip('"')=='ubuntu' and os_release.get('VERSION_ID','').strip('"')=='24.04','Execution requires Ubuntu 24.04')
 require(owner.is_file() and source_done.is_file(),'Complete reconstruct-source through 160 first')
 require(not any(c.isspace() for c in str(dest)),'Chromium checkout path must not contain whitespace')
-env=dict(os.environ,DEPOT_TOOLS_UPDATE='0',PATH=str(depot)+os.pathsep+os.environ.get('PATH',''))
+env=dict(os.environ,DEPOT_TOOLS_UPDATE='0',DEPOT_TOOLS_DIR=str(depot),DEPOT_TOOLS_BOOTSTRAP_PYTHON3='1',PATH=str(depot)+os.pathsep+os.environ.get('PATH',''))
 def git(path,*args):
  return subprocess.check_output(['git','-c','core.hooksPath=/dev/null','-C',str(path),*args],text=True).strip()
 def verify_sources():
@@ -418,7 +419,12 @@ def no_compilation():
   require(not (out/name).exists(),'Compilation artifact already exists: '+name)
 def run(command,cwd):
  print('RUN (cwd='+str(cwd)+'): '+shlex.join(command),flush=True)
- subprocess.run(command,cwd=cwd,env=env,check=True)
+ try:
+  subprocess.run(command,cwd=cwd,env=env,check=True)
+ except subprocess.CalledProcessError as error:
+  raise SystemExit('ERROR: Command failed (exit '+str(error.returncode)+'): '+shlex.join(command)+'\nReview the diagnostic above, then retry the explicit stage.') from None
+ except OSError as error:
+  raise SystemExit('ERROR: Cannot execute '+shlex.join(command)+': '+str(error)) from None
 def check_dependencies():
  # Keep upstream diagnostics available without flooding the terminal.
  log=state/'linux-dependencies-check.log'
@@ -480,6 +486,10 @@ try:
   out.mkdir(parents=True,exist_ok=True); write_new_or_exact(out/'args.gn',gn_args)
   save(output_owner,output_identity)
   try:
+   require(not (depot/'.bleeding_edge').exists(),'Unexpected depot_tools bleeding-edge bootstrap configuration')
+   run(bootstrap,depot); verify_sources()
+   require((depot/'python3_bin_reldir.txt').is_file(),'depot_tools bootstrap incomplete: python3_bin_reldir.txt missing; retry 210')
+   run([str(depot/'python-bin/python3'),'--version'],depot)
    run(hooks,src); verify_sources(); run(gen,src)
   finally: verify_sources()
   exact_file(out/'args.gn',gn_args); no_compilation()
