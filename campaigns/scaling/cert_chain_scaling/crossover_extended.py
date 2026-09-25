@@ -18,6 +18,59 @@ from core import certificate_parts, DRAFT
 from crypto_profiles import PAPER1_PROFILES, TREE_SIZES
 
 
+EFFECTIVE_THRESHOLDS_PCT = (1, 5, 10)
+
+
+def effective_crossover(tbs, x509_bytes, pct):
+    """Largest integer N preserving at least pct percent X.509 byte saving.
+
+    Required condition:
+
+        (X509 - MTC(N)) / X509 >= pct / 100
+
+    Because message sizes are integer bytes, this is equivalent to:
+
+        MTC(N) <= floor(X509 * (100 - pct) / 100)
+
+    The existing crossover() helper finds the first integer N for which
+    MTC(N) >= target. Searching target=max_mtc_bytes+1 therefore gives
+    the first N that violates the requested practical margin.
+    """
+
+    require(
+        isinstance(pct, int) and 0 < pct < 100,
+        'invalid effective crossover percentage'
+    )
+
+    max_mtc_bytes = x509_bytes * (100 - pct) // 100
+    failure = crossover(tbs, max_mtc_bytes + 1)
+
+    if failure['status'] == 'CROSSED':
+        first_fail_n = failure['crossover_N']
+
+        if first_fail_n == 1:
+            return dict(
+                status='NO_N_WITH_REQUIRED_MARGIN',
+                max_advantage_N='',
+                first_fail_N=1,
+                max_mtc_bytes=max_mtc_bytes,
+            )
+
+        return dict(
+            status='CROSSED',
+            max_advantage_N=first_fail_n - 1,
+            first_fail_N=first_fail_n,
+            max_mtc_bytes=max_mtc_bytes,
+        )
+
+    return dict(
+        status='PRESERVED_THROUGH_PROTOCOL_RANGE',
+        max_advantage_N=MAXIMUM_SUPPORTED_N,
+        first_fail_N='',
+        max_mtc_bytes=max_mtc_bytes,
+    )
+
+
 class Inputs:
     def __init__(self):
         self.hashes = {}
@@ -154,8 +207,13 @@ def run(a):
                                    static_x509_bytes=static,**reference))
             target=reference['selected_reference_bytes'];cross=crossover(tbs,target)
             operational=crossover(tbs,target,IMPLEMENTATION_LIMIT)
+
+            effective={
+                pct: effective_crossover(tbs,target,pct)
+                for pct in EFFECTIVE_THRESHOLDS_PCT
+            }
             if cross['status'] == 'CROSSED':
-                cross['crossover_relation'] = '='
+                cross['crossover_relation'] = '>='
                 cross['crossover_bound_N'] = cross['crossover_N']
                 cross['crossover_display'] = str(cross['crossover_N'])
             else:
@@ -173,6 +231,21 @@ def run(a):
                 x509_depth=depth,
                 x509_bytes=target,
                 **cross,
+
+                effective_1pct_max_N=effective[1]['max_advantage_N'],
+                effective_1pct_first_fail_N=effective[1]['first_fail_N'],
+                effective_1pct_max_mtc_bytes=effective[1]['max_mtc_bytes'],
+                effective_1pct_status=effective[1]['status'],
+
+                effective_5pct_max_N=effective[5]['max_advantage_N'],
+                effective_5pct_first_fail_N=effective[5]['first_fail_N'],
+                effective_5pct_max_mtc_bytes=effective[5]['max_mtc_bytes'],
+                effective_5pct_status=effective[5]['status'],
+
+                effective_10pct_max_N=effective[10]['max_advantage_N'],
+                effective_10pct_first_fail_N=effective[10]['first_fail_N'],
+                effective_10pct_max_mtc_bytes=effective[10]['max_mtc_bytes'],
+                effective_10pct_status=effective[10]['status'],
                 maximum_supported_N=MAXIMUM_SUPPORTED_N,
                 implementation_limit=IMPLEMENTATION_LIMIT,
                 implementation_crossover_N=operational['crossover_N'],
@@ -195,7 +268,7 @@ def run(a):
         file=Path(__file__).with_name(name);source_hashes[str(file.relative_to(REPO))]=hashlib.sha256(inputs.read(file)).hexdigest()
     for name in ('core.py','tls.c','mtc.c','crypto_profiles.py'):
         file=REPO/'src/mtc'/name;source_hashes[str(file.relative_to(REPO))]=hashlib.sha256(inputs.read(file)).hexdigest()
-    metadata=dict(schema=1,result_domain='CERTIFICATE_SIZE_CROSSOVER',draft=DRAFT,merkle_hash='SHA-256',
+    metadata=dict(schema=2,result_domain='CERTIFICATE_SIZE_CROSSOVER',draft=DRAFT,merkle_hash='SHA-256',
                   boundary='TLS Certificate handshake header + body; excludes CertificateVerify, records, latency and CPU; MTC includes empty trust_anchors confirmation',
                   leaf_index=0,log_number=1,landmark_policy='initial cover(0,N), first covering subtree; not a population-wide maximum/average credential size',
                   maximum_supported_N=MAXIMUM_SUPPORTED_N,draft_limit=1<<48,draft_limit_definition='index space permits 2^48 entries; full-landmark end=2^48 cannot fit uint48',
@@ -203,6 +276,12 @@ def run(a):
                   limiting_field='MTCProof.end uint48; local landmark size uint48',
                   limiting_reason='Complete initial landmark cover requires exclusive end=N. Largest wire value is 2^48-1; final uint48 leaf index cannot be covered with end=2^48. Native loader separately limits N to 1024.',
                   model='k(N)=max(0,ceil(log2(N))-1); proof=18+32*k. DER=TLV(TBS||ALG||TLV_BITSTRING(0||proof)); TLS=DER+17. All integer populations; fixed log=1/index=0 TBS. No tree is allocated.',
+                  effective_crossover_thresholds_percent=list(EFFECTIVE_THRESHOLDS_PCT),
+                  effective_crossover_definition=(
+                      'largest integer N for which '
+                      '(X509_bytes - MTC_bytes(N)) / X509_bytes '
+                      'is at least the configured threshold'
+                  ),
                   source_hashes=source_hashes,draft_source_hashes=input_drafts,fixture_provenance=provenance,
                   input_hashes=inputs.hashes,existing_n16_validation=str(a.mtc_validation),measured_anchor_count=len(anchors),reference_validation=validation,
                   limitations=['Synthetic N16 MTC population and X509 chain fixtures are separate issuance fixtures, not paired transformations of identical certificates.',
@@ -292,6 +371,26 @@ locations are the quantitative result.
     for name in PROFILES:
         rows=[r for r in crossings if r['algorithm']==name]
         text+='| '+name+' | '+' | '.join(str(r['crossover_N']) if r['crossover_N'] else '> '+str(MAXIMUM_SUPPORTED_N) for r in rows)+' |\n'
+
+    text+='\n## Effective crossover margins\n\n'
+    text+='N*τ is the largest integer N for which MTC retains at least τ percent fewer Certificate-message bytes than the selected X.509 reference.\n\n'
+    text+='| Algorithm | Depth | N* | N*1% | N*5% | N*10% |\n'
+    text+='|---|---:|---:|---:|---:|---:|\n'
+    for r in crossings:
+        nstar=(str(r['crossover_N']) if r['crossover_N']
+               else '> '+str(MAXIMUM_SUPPORTED_N))
+        values=[]
+        for pct in EFFECTIVE_THRESHOLDS_PCT:
+            status=r[f'effective_{pct}pct_status']
+            if status == 'NO_N_WITH_REQUIRED_MARGIN':
+                value='none'
+            elif status == 'PRESERVED_THROUGH_PROTOCOL_RANGE':
+                value='>= '+str(MAXIMUM_SUPPORTED_N)
+            else:
+                value=str(r[f'effective_{pct}pct_max_N'])
+            values.append(value)
+        text+=f"| {r['algorithm']} | {r['x509_depth']} | {nstar} | " + ' | '.join(values) + ' |\n'
+
     text+='\nAll numbers refer to Certificate messages only. D=3 is emphasized in the plots.\n'
     return text
 
