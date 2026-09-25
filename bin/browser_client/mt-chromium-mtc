@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# Existing-build positive interoperability only; never builds or pulls images.
+set -euo pipefail
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+cd "$REPO"
+STATE="$REPO/.mt-state/chromium-mtc"
+STEPS=(00.preflight 10.detect-existing-chromium 20.select-or-generate-mtc-fixture 30.validate-mtc-fixture 40.export-mtc-anchor 50.configure-hostname 60.start-mtc-positive-server)
+fail() { echo "ERROR: $*" >&2; exit 1; }
+load() { [[ -f "$STATE/paths.env" ]] || fail 'Run init first.'; source "$STATE/paths.env"; }
+init() {
+ mkdir -p "$STATE"
+ [[ ! -e "$STATE/paths.env" ]] || { echo 'Existing configuration preserved.'; return; }
+ local fixture="$REPO/artifacts/mtc/browser-server-mtc-example-com-ecdsa-p256-n16-20260925T082751Z-24938"
+ (set -o noclobber; printf 'CHROMIUM_SRC=%q\nFIXTURE=%q\nVALIDATION=%q\nANCHOR=%q\nHOSTNAME_LAB=%q\nCONTAINER=%q\n' \
+ "$HOME/Desktop/chromium-mtc/src" "$fixture" "$fixture-validation/validation.json" "$fixture-chromium.json" server.mtc.example.com mtc-browser-server > "$STATE/paths.env")
+}
+step_name() {
+ local s
+ for s in "${STEPS[@]}"; do if [[ "$1" == "$s" || "$1" == "${s%%.*}" ]]; then echo "$s"; return; fi; done
+ fail "Unknown step: $1"
+}
+check_fixture() {
+ python3 - "$FIXTURE" "$VALIDATION" "$HOSTNAME_LAB" "$STATE" <<'PY'
+import hashlib,json,sys
+from pathlib import Path
+root,validation,hostname,state=Path(sys.argv[1]),Path(sys.argv[2]),sys.argv[3],Path(sys.argv[4])
+d=json.loads(validation.read_text())
+assert d['passed'] and d['server_hostname']==hostname, 'Validation/hostname mismatch'
+assert any(c['profile']=='ecdsa-p256' and c['tree_size']==16 and c['mtc_mode']=='landmark' and c['success'] for c in d['cells'])
+actual={str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.rglob('*')) if p.is_file()}
+assert actual==d['fixture_hashes'], 'Fixture differs from validated evidence'
+assert json.loads((root/'manifest.json').read_text())['server_hostname']==hostname
+image=d['provenance']['image_id']
+assert image.startswith('sha256:')
+(state/'image-id').write_text(image+'\n')
+print('PASS existing fixture hashes, hostname and ECDSA-P256/N=16 landmark evidence')
+PY
+}
+owned() { [[ "$(docker inspect -f '{{index .Config.Labels "mtc.workflow"}}' "$CONTAINER")" == "$STATE" ]]; }
+start_server() {
+ check_fixture
+ [[ -f "$STATE/40.export-mtc-anchor.done" && -f "$STATE/50.configure-hostname.done" ]] || fail 'Run steps 40 and 50 first.'
+ local image result id
+ image=$(cat "$STATE/image-id")
+ docker image inspect "$image" >/dev/null
+ if docker container inspect "$CONTAINER" >/dev/null 2>&1; then
+  owned || fail 'Container name belongs to another workflow; preserved.'
+  [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER")" == true ]] || fail 'Owned container stopped; inspect logs and cleanup before restarting.'
+  echo "Already running: $CONTAINER"; return
+ fi
+ result=$(mktemp -d "$REPO/artifacts/results/chromium-mtc-validation-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")
+ printf '%s\n' "$result" > "$STATE/result-dir"
+ id=$(docker run -d --pull never --name "$CONTAINER" --label "mtc.workflow=$STATE" \
+  -p 127.0.0.1:4433:4433 -v "$FIXTURE:/fixtures:ro" -v "$result:/results" \
+  --entrypoint /bin/sh "$image" -c 'exec /opt/mtc/openssl.sh s_server -accept 4433 -tls1_3 -groups X25519 -ciphersuites TLS_AES_256_GCM_SHA384 -num_tickets 0 -www -state -msg -cert /fixtures/batch16/mtc/ecdsa-p256/landmark-0000.pem -key /fixtures/population/ecdsa-p256/0.key -mtc_id 32473.101.1.1.1 > /results/server.log 2>&1')
+ printf '%s\n' "$id" > "$STATE/container-id"
+ # No probe handshake: wait only for OpenSSL's listening marker.
+ for ((n=0;n<20;n++)); do
+  [[ "$(docker inspect -f '{{.State.Running}}' "$id")" == true ]] || fail "Server exited; inspect $result/server.log"
+  if grep -q '^ACCEPT' "$result/server.log" 2>/dev/null; then echo "RUNNING $CONTAINER; log: $result/server.log"; return; fi
+  sleep 0.25
+ done
+ fail "Readiness not confirmed; container preserved. Inspect $result/server.log"
+}
+run_step() {
+ local step=$1
+ case "$step" in
+  00.*) for cmd in python3 git docker; do command -v "$cmd" >/dev/null || fail "Missing $cmd"; done; docker info >/dev/null;;
+  10.*) python3 - "$CHROMIUM_SRC" "$STATE" <<'PY'
+import hashlib,json,os,re,subprocess,sys
+from pathlib import Path
+src,state=map(Path,sys.argv[1:]);exe=src/'out/mtc/Chromium.app/Contents/MacOS/Chromium'
+assert exe.is_file() and os.access(exe,os.X_OK), 'Existing Chromium missing; no build will be attempted'
+args=(src/'out/mtc/args.gn').read_text()
+def commit(p):return subprocess.check_output(['git','-C',str(p),'rev-parse','HEAD'],text=True).strip()
+def flag(k):
+ m=re.search(r'^\s*'+k+r'\s*=\s*(true|false)\s*(?:#.*)?$',args,re.M)
+ if m:return m.group(1)=='true'
+ ninja=src/'out/mtc/obj/base/base.ninja'
+ if k=='is_component_build' and ninja.is_file():return '-DCOMPONENT_BUILD' in ninja.read_text().splitlines()[0]
+ return 'not explicit in args.gn'
+h=hashlib.sha256()
+with exe.open('rb') as f:
+ for b in iter(lambda:f.read(1024*1024),b''):h.update(b)
+d=dict(executable=str(exe),chromium_commit=commit(src),boringssl_commit=commit(src/'third_party/boringssl/src'),is_component_build=flag('is_component_build'),is_debug=flag('is_debug'),sha256=h.hexdigest())
+(state/'chromium.json').write_text(json.dumps(d,indent=2)+'\n');print(json.dumps(d,indent=2))
+PY
+ ;;
+  20.*) [[ -d "$FIXTURE" ]] || fail 'Known fixture missing. Generate explicitly with fixtures.py into a fresh timestamped output, then update paths.env.'; check_fixture;;
+  30.*) check_fixture;;
+  40.*) check_fixture
+   python3 - "$REPO" "$FIXTURE" "$ANCHOR" <<'PY'
+import hashlib,json,sys
+from pathlib import Path
+repo,fixture,out=map(Path,sys.argv[1:]);sys.path.insert(0,str(repo/'campaigns/browser_client/chromium_mtc'))
+from export_chromium_anchor import parse_landmark
+trust=fixture/'batch16/mtc/ecdsa-p256/trust.bin';raw=trust.read_bytes();expected=parse_landmark(raw)
+assert expected['landmark']['requested_trust_anchor_id']=='32473.101.2.1.1'
+assert expected['landmark']['selected_trust_anchor_id']=='32473.101.1.1.1'
+if out.exists():
+ data=json.loads(out.read_text());assert all(data.get(k)==v for k,v in expected.items()), 'Existing anchor mismatch'
+ assert data['source']['trust_file_sha256']==hashlib.sha256(raw).hexdigest()
+else:
+ import subprocess
+ subprocess.run([sys.executable,str(repo/'campaigns/browser_client/chromium_mtc/export_chromium_anchor.py'),'--trust',str(trust),'--output',str(out)],check=True)
+print('PASS anchor:',out)
+PY
+ ;;
+  50.*) python3 - "$HOSTNAME_LAB" <<'PY'
+import socket,sys
+from pathlib import Path
+host=sys.argv[1];matches=[line.split('#')[0].split() for line in Path('/etc/hosts').read_text().splitlines()]
+assert any(p and p[0]=='127.0.0.1' and host in p[1:] for p in matches), 'Add manually to /etc/hosts: 127.0.0.1 '+host
+assert all(p[0]=='127.0.0.1' for p in matches if host in p[1:]), 'Conflicting hosts entry'
+assert {a[4][0] for a in socket.getaddrinfo(host,4433)}=={'127.0.0.1'}, 'Resolution differs from loopback'
+print('PASS existing hosts entry; not owned or modified by this workflow')
+PY
+ ;;
+  60.*) start_server;;
+ esac
+ date -u +%Y-%m-%dT%H:%M:%SZ > "$STATE/$step.done"
+}
+case "${1:-help}" in
+ help|--help|-h) echo 'Usage: mt-chromium-mtc init|status|plan|show STEP|run STEP|resume|cleanup';;
+ init) init;;
+ plan) printf '%s\n' "${STEPS[@]}"; echo 'Existing Chromium/validated fixture only. No build, pull or automatic generation.';;
+ show) step=$(step_name "${2:?Step required}"); echo "$step"; sed -n '/^run_step()/,/^case "${1:-help}"/p' "$0"; [[ "$step" != 60.* ]] || sed -n '/^start_server()/,/^run_step()/p' "$0";;
+ status) if [[ ! -f "$STATE/paths.env" ]]; then echo 'NOT INITIALIZED'; exit; fi; load
+  for step in "${STEPS[@]}"; do if [[ -f "$STATE/$step.done" ]]; then echo "RECORDED $step"; else echo "PENDING $step"; fi; done
+  [[ ! -f "$STATE/result-dir" ]] || cat "$STATE/result-dir"
+  docker container inspect -f '{{.Name}} running={{.State.Running}} image={{.Image}}' "$CONTAINER" 2>/dev/null || echo 'Container unavailable (absent or Docker inaccessible)';;
+ run|resume|cleanup) load; mkdir "$STATE/lock" 2>/dev/null || fail 'Workflow locked; inspect before retrying.'; trap 'rmdir "$STATE/lock"' EXIT
+  case "$1" in
+   run) run_step "$(step_name "${2:?Step required}")";;
+   resume) for step in "${STEPS[@]}"; do run_step "$step"; done;;
+   cleanup) if docker container inspect "$CONTAINER" >/dev/null 2>&1; then owned || fail 'Foreign container preserved'; docker rm -f "$CONTAINER"; fi
+    rm -f "$STATE/60.start-mtc-positive-server.done" "$STATE/container-id"
+    echo 'Artifacts and existing hosts entry preserved. No browser profiles are created by this workflow.';;
+  esac;;
+ *) fail 'Unknown command; use help';;
+esac

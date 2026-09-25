@@ -14,7 +14,7 @@ git diff --check
 git diff -- src/mtc campaigns/validation/protocol_validation docs campaigns/scaling bin/renders/protocol-validation.py
 git status --short
 git grep -n -i '0xffa7\|0xca34\|BORINGSSL_LAB_MTC_WIRE' -- src campaigns docs bin
-rg -n '0xffa7|0xca34|BORINGSSL_LAB_MTC_WIRE|lab-wire.patch' campaigns/future_implementation
+rg -n '0xffa7|0xca34|BORINGSSL_LAB_MTC_WIRE|lab-wire.patch' campaigns/browser_client
 ```
 
 `git diff` and `git grep` do not cover untracked files. Inspect the browser port
@@ -107,12 +107,12 @@ Dockerfile checks the native header and does not apply any codepoint patch.
 
 ```bash
 docker build --progress=plain \
-  -f campaigns/future_implementation/browser_mtc/Dockerfile.wire \
+  -f campaigns/browser_client/boringssl_mtc_client/Dockerfile.wire \
   -t mt-browser-boringssl:ca34 \
-  campaigns/future_implementation/browser_mtc
+  campaigns/browser_client/boringssl_mtc_client
 
 docker run --rm --network none \
-  -v "$PWD/campaigns/future_implementation/browser_mtc:/work/port:ro" \
+  -v "$PWD/campaigns/browser_client/boringssl_mtc_client:/work/port:ro" \
   -v "$PWD/artifacts/mtc/n16-x25519-20260923T134045Z/batch16/mtc/ecdsa-p256:/work/fixtures:ro" \
   mt-browser-boringssl:ca34 \
   sh /work/port/test-clienthello.sh /work/fixtures/authority.bin
@@ -125,7 +125,7 @@ Expected: `PASS: TLS 1.3 ClientHello contains one matching 0xca34 extension; no 
 First run one profile/mode, with its four existing positive/negative cases:
 
 ```bash
-python3 campaigns/future_implementation/browser_mtc/run-tls-smoke.py \
+python3 campaigns/browser_client/boringssl_mtc_client/run-tls-smoke.py \
   --execute --profile ecdsa-p256 --mode standalone \
   --server-image mt-tls-mtc:ca34 --client-image mt-browser-boringssl:ca34
 ```
@@ -133,7 +133,7 @@ python3 campaigns/future_implementation/browser_mtc/run-tls-smoke.py \
 Only if it passes, run all six profiles, two modes and four cases (48 total):
 
 ```bash
-python3 campaigns/future_implementation/browser_mtc/run-tls-matrix.py \
+python3 campaigns/browser_client/boringssl_mtc_client/run-tls-matrix.py \
   --execute --server-image mt-tls-mtc:ca34 --client-image mt-browser-boringssl:ca34
 ```
 

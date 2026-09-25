@@ -1,0 +1,580 @@
+From f68d4a21039bb7f22f85e1b73abf13c89ad26d1e Mon Sep 17 00:00:00 2001
+From: Jose Antonio Montenegro Montes <jmmontes@uma.es>
+Date: Thu, 24 Sep 2026 12:24:41 +0200
+Subject: [PATCH 3/3] Add dynamic Plants-05 browser trust configuration
+
+---
+ .../browser/ssl/ssl_config_service_manager.cc |  27 ++
+ net/BUILD.gn                                  |   2 +
+ net/base/features.cc                          |   4 +
+ net/base/features.h                           |   4 +
+ net/base/switches.h                           |   1 +
+ net/cert/internal/trust_store_chrome.cc       |  73 +++++
+ net/cert/mtc_plants05_lab_config.cc           | 278 ++++++++++++++++++
+ net/cert/mtc_plants05_lab_config.h            |  64 ++++
+ 8 files changed, 453 insertions(+)
+ create mode 100644 net/cert/mtc_plants05_lab_config.cc
+ create mode 100644 net/cert/mtc_plants05_lab_config.h
+
+diff --git a/chrome/browser/ssl/ssl_config_service_manager.cc b/chrome/browser/ssl/ssl_config_service_manager.cc
+index 322bc5c1d4213b452e17f897bbff37ccc2451a08..d9863dc97d03c0d7809658a836a738fa8f7c8ab1 100644
+--- a/chrome/browser/ssl/ssl_config_service_manager.cc
++++ b/chrome/browser/ssl/ssl_config_service_manager.cc
+@@ -16,6 +16,7 @@
+ #include "base/functional/bind.h"
+ #include "base/location.h"
+ #include "base/strings/string_util.h"
++#include "base/time/time.h"
+ #include "base/values.h"
+ #include "build/build_config.h"
+ #include "chrome/common/chrome_features.h"
+@@ -31,6 +32,7 @@
+ #include "mojo/public/cpp/bindings/remote_set.h"
+ #include "net/base/features.h"
+ #include "net/cert/cert_verifier.h"
++#include "net/cert/mtc_plants05_lab_config.h"
+ #include "net/cert/x509_util.h"
+ #include "net/ssl/ssl_cipher_suite_names.h"
+ #include "net/ssl/ssl_config_service.h"
+@@ -219,6 +221,31 @@ void SSLConfigServiceManager::InitializeTrustAnchorIDs(
+     trust_anchor_ids_ = net::x509_util::EncodeTlsRequestedTrustAnchorIDList(
+         std::move(trust_anchor_ids));
+   }
++  // In the controlled Plants-05 laboratory, advertise only the landmark
++  // group ID from the operator-supplied trust configuration. Keeping this
++  // separate from CRS metadata prevents the experimental anchor from becoming
++  // production trust configuration.
++  if (base::FeatureList::IsEnabled(net::features::kMtcPlants05Lab)) {
++    std::optional<net::MtcPlants05LabConfig> config =
++        net::LoadMtcPlants05LabConfigFromCommandLine();
++    if (!config) {
++      LOG(ERROR) << "MTC Plants-05 lab enabled without a valid trust config";
++      time_bound_trust_anchor_ids_ = std::nullopt;
++      return;
++    }
++
++    std::vector<std::vector<uint8_t>> trust_anchor_ids;
++    trust_anchor_ids.push_back(
++        net::x509_util::CreateMtcLandmarkGroupTrustAnchorID(
++            config->ca_id, config->log_number, config->landmark_number));
++
++    time_bound_trust_anchor_ids_ = net::TimeBoundTrustAnchorIDs{
++        .max_usable_time = base::Time::Max(),
++        .trust_anchor_ids = net::x509_util::EncodeTlsRequestedTrustAnchorIDList(
++            std::move(trust_anchor_ids))};
++    return;
++  }
++
+   if (mtc_landmark_info) {
+     std::vector<std::vector<uint8_t>> trust_anchor_ids;
+     base::Extend(trust_anchor_ids, classic_trust_anchor_ids);
+diff --git a/net/BUILD.gn b/net/BUILD.gn
+index 79c03cb98007e6eb991e76a2183c20fe0096fc23..72d158be3737dc22fb35409690ba52a584e5a3eb 100644
+--- a/net/BUILD.gn
++++ b/net/BUILD.gn
+@@ -369,6 +369,8 @@ component("net") {
+     "cert/merkle_consistency_proof.h",
+     "cert/merkle_tree_leaf.cc",
+     "cert/merkle_tree_leaf.h",
++    "cert/mtc_plants05_lab_config.cc",
++    "cert/mtc_plants05_lab_config.h",
+     "cert/multi_log_ct_verifier.cc",
+     "cert/multi_log_ct_verifier.h",
+     "cert/multi_threaded_cert_verifier.cc",
+diff --git a/net/base/features.cc b/net/base/features.cc
+index fc5b1bab455d0a637b0827b5e42e29071227d05a..212a2a14b26272039deec34492e751f7a18f916b 100644
+--- a/net/base/features.cc
++++ b/net/base/features.cc
+@@ -750,6 +750,10 @@ BASE_FEATURE(kTLSTrustAnchorIDs, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ BASE_FEATURE(kNonMtcTrustAnchorIDs, base::FEATURE_ENABLED_BY_DEFAULT);
+ 
++// Enables the controlled Plants-05 MTC interoperability laboratory.
++// This must remain disabled by default and is not production CRS policy.
++BASE_FEATURE(kMtcPlants05Lab, base::FEATURE_DISABLED_BY_DEFAULT);
++
+ #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+ BASE_FEATURE(kVerifyMTCs, base::FEATURE_DISABLED_BY_DEFAULT);
+ #endif
+diff --git a/net/base/features.h b/net/base/features.h
+index 58a2623a745e37138137040d618ab8ee0ebe489a..288b9e0aeed2f044db047cd16e4012beb2d28041 100644
+--- a/net/base/features.h
++++ b/net/base/features.h
+@@ -788,6 +788,10 @@ NET_EXPORT BASE_DECLARE_FEATURE(kTLSTrustAnchorIDs);
+ // Controls whether TLS Trust Anchor IDs that are not for MTCs are sent.
+ NET_EXPORT BASE_DECLARE_FEATURE(kNonMtcTrustAnchorIDs);
+ 
++// Enables the controlled Plants-05 MTC interoperability laboratory.
++// Disabled by default; not intended for production trust configuration.
++NET_EXPORT BASE_DECLARE_FEATURE(kMtcPlants05Lab);
++
+ #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+ // Enables support for Merkle Tree Certificates. `kTLSTrustAnchorIDs` must also
+ // be enabled for this to be useful.
+diff --git a/net/base/switches.h b/net/base/switches.h
+index 6c919002d24e908de5da85757c5e432cc9624fb1..c433a38c96489ddd979a72118f848347f45a01d9 100644
+--- a/net/base/switches.h
++++ b/net/base/switches.h
+@@ -10,6 +10,7 @@
+ namespace net::switches {
+ 
+ inline constexpr char kLogNetLog[] = "log-net-log";
++inline constexpr char kMtcPlants05Trust[] = "mtc-plants05-trust";
+ inline constexpr char kUnsafelyTreatInsecureOriginAsSecure[] =
+     "unsafely-treat-insecure-origin-as-secure";
+ 
+diff --git a/net/cert/internal/trust_store_chrome.cc b/net/cert/internal/trust_store_chrome.cc
+index ec15ce5062b07a9c425abb0de8936ec69b3e43c1..0483da279424073a06f4f9c4d2f783dba334fd5e 100644
+--- a/net/cert/internal/trust_store_chrome.cc
++++ b/net/cert/internal/trust_store_chrome.cc
+@@ -21,6 +21,7 @@
+ #include "crypto/openssl_util.h"
+ #include "crypto/sha2.h"
+ #include "net/base/features.h"
++#include "net/cert/mtc_plants05_lab_config.h"
+ #include "net/cert/root_store_proto_lite/root_store.pb.h"
+ #include "net/cert/root_store_proto_lite/signer_set.pb.h"
+ #include "net/cert/time_conversions.h"
+@@ -59,6 +60,27 @@ SignerSignatureAlgorithmToBsslSignatureAlgorithm(
+   }
+ }
+ 
++std::optional<bssl::SignatureAlgorithm>
++MtcPlants05LabSignatureAlgorithmToBsslSignatureAlgorithm(
++    MtcPlants05LabSignatureAlgorithm signature_algorithm) {
++  switch (signature_algorithm) {
++    case MtcPlants05LabSignatureAlgorithm::kEcdsaSha256:
++      return bssl::SignatureAlgorithm::kEcdsaSha256;
++    case MtcPlants05LabSignatureAlgorithm::kEcdsaSha384:
++      return bssl::SignatureAlgorithm::kEcdsaSha384;
++    case MtcPlants05LabSignatureAlgorithm::kEcdsaSha512:
++      return bssl::SignatureAlgorithm::kEcdsaSha512;
++    case MtcPlants05LabSignatureAlgorithm::kMldsa44:
++      return bssl::SignatureAlgorithm::kMldsa44;
++    case MtcPlants05LabSignatureAlgorithm::kMldsa65:
++      return bssl::SignatureAlgorithm::kMldsa65;
++    case MtcPlants05LabSignatureAlgorithm::kMldsa87:
++      return bssl::SignatureAlgorithm::kMldsa87;
++  }
++
++  return std::nullopt;
++}
++
+ }  // namespace
+ 
+ ChromeRootCertConstraints::ChromeRootCertConstraints() = default;
+@@ -473,6 +495,57 @@ TrustStoreChrome::TrustStoreChrome(
+     }
+   }
+ 
++  // MTC Plants-05 lab trust anchor configuration is deliberately loaded
++  // separately from Chrome Root Store signer and metadata state.
++  if (base::FeatureList::IsEnabled(net::features::kMtcPlants05Lab)) {
++    std::optional<MtcPlants05LabConfig> config =
++        LoadMtcPlants05LabConfigFromCommandLine();
++
++    if (!config) {
++      LOG(ERROR) << "MTC Plants-05 lab enabled without a valid trust config";
++    } else {
++      std::optional<bssl::SignatureAlgorithm> signature_algorithm =
++          MtcPlants05LabSignatureAlgorithmToBsslSignatureAlgorithm(
++              config->signature_algorithm);
++
++      if (!signature_algorithm) {
++        LOG(ERROR) << "Unsupported MTC Plants-05 lab signature algorithm";
++      } else {
++        auto ca_key = x509_util::CreateCryptoBuffer(config->ca_spki_der);
++
++        if (!ca_key) {
++          LOG(ERROR) << "Unable to create MTC Plants-05 CA key buffer";
++        } else {
++          std::vector<bssl::TrustedSubtree> subtrees;
++          subtrees.reserve(config->trusted_subtrees.size());
++
++          for (const auto& source_subtree : config->trusted_subtrees) {
++            bssl::TrustedSubtree subtree;
++            subtree.range.start = source_subtree.start;
++            subtree.range.end = source_subtree.end;
++            base::span(subtree.hash).copy_from(source_subtree.hash);
++            subtrees.push_back(std::move(subtree));
++          }
++
++          std::vector<bssl::LogTrustedSubtrees> trusted_subtrees;
++          trusted_subtrees.emplace_back(config->log_number,
++                                        std::move(subtrees));
++
++          auto mtc_anchor = std::make_shared<const bssl::MTCAnchor>(
++              bssl::MTCAnchor::kPlants05, bssl::MakeSpan(config->ca_id),
++              *signature_algorithm, std::move(ca_key), config->min_serial,
++              config->max_serial, std::move(trusted_subtrees));
++
++          if (!mtc_anchor->IsValid()) {
++            LOG(ERROR) << "Invalid MTC Plants-05 lab trust anchor";
++          } else if (!trust_store_.AddMTCTrustAnchor(std::move(mtc_anchor))) {
++            LOG(ERROR) << "Unable to install MTC Plants-05 lab trust anchor";
++          }
++        }
++      }
++    }
++  }
++
+   disable_mtc_mirroring_requirements_ =
+       root_store_data.disable_mtc_mirroring_requirements();
+ 
+diff --git a/net/cert/mtc_plants05_lab_config.cc b/net/cert/mtc_plants05_lab_config.cc
+new file mode 100644
+index 0000000000000000000000000000000000000000..1365d242126f9a0f4c7d50733404c31d5562db47
+--- /dev/null
++++ b/net/cert/mtc_plants05_lab_config.cc
+@@ -0,0 +1,278 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "net/cert/mtc_plants05_lab_config.h"
++
++#include <limits>
++#include <string>
++#include <string_view>
++#include <utility>
++
++#include "base/base64.h"
++#include "base/command_line.h"
++#include "base/files/file_util.h"
++#include "base/json/json_reader.h"
++#include "base/logging.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/threading/thread_restrictions.h"
++#include "base/values.h"
++#include "net/base/switches.h"
++
++namespace net {
++
++namespace {
++
++bool ParseUint64Hex(std::string_view value, uint64_t* result) {
++  if (value.starts_with("0x") || value.starts_with("0X")) {
++    value.remove_prefix(2);
++  }
++
++  if (value.empty() || value.size() > 16) {
++    return false;
++  }
++
++  uint64_t out = 0;
++  for (char c : value) {
++    uint8_t nibble;
++    if (c >= '0' && c <= '9') {
++      nibble = static_cast<uint8_t>(c - '0');
++    } else if (c >= 'a' && c <= 'f') {
++      nibble = static_cast<uint8_t>(c - 'a' + 10);
++    } else if (c >= 'A' && c <= 'F') {
++      nibble = static_cast<uint8_t>(c - 'A' + 10);
++    } else {
++      return false;
++    }
++    out = (out << 4) | nibble;
++  }
++
++  *result = out;
++  return true;
++}
++
++std::optional<MtcPlants05LabSignatureAlgorithm> ParseSignatureAlgorithm(
++    const base::DictValue& root) {
++  const std::string* value = root.FindString("signature_algorithm");
++
++  // Compatibility with the first version of the laboratory exporter. New
++  // exports should carry signature_algorithm explicitly.
++  if (!value) {
++    value = root.FindString("profile");
++  }
++  if (!value) {
++    return std::nullopt;
++  }
++
++  if (*value == "ecdsa-sha256" || *value == "ecdsa-p256") {
++    return MtcPlants05LabSignatureAlgorithm::kEcdsaSha256;
++  }
++  if (*value == "ecdsa-sha384" || *value == "ecdsa-p384") {
++    return MtcPlants05LabSignatureAlgorithm::kEcdsaSha384;
++  }
++  if (*value == "ecdsa-sha512" || *value == "ecdsa-p521") {
++    return MtcPlants05LabSignatureAlgorithm::kEcdsaSha512;
++  }
++  if (*value == "mldsa44") {
++    return MtcPlants05LabSignatureAlgorithm::kMldsa44;
++  }
++  if (*value == "mldsa65") {
++    return MtcPlants05LabSignatureAlgorithm::kMldsa65;
++  }
++  if (*value == "mldsa87") {
++    return MtcPlants05LabSignatureAlgorithm::kMldsa87;
++  }
++
++  return std::nullopt;
++}
++
++std::optional<MtcPlants05LabConfig> ParseConfig(std::string_view json) {
++  std::optional<base::DictValue> parsed =
++      base::JSONReader::ReadDict(json, base::JSON_PARSE_RFC);
++  if (!parsed) {
++    LOG(ERROR) << "MTC Plants-05 lab config is not valid JSON";
++    return std::nullopt;
++  }
++
++  const base::DictValue& root = *parsed;
++
++  const std::string* format = root.FindString("format");
++  std::optional<int> version = root.FindInt("version");
++  const std::string* spec = root.FindString("spec");
++  const std::string* source_format = root.FindString("source_format");
++
++  if (!format || *format != "chromium-mtc-plants05-lab" || !version ||
++      *version != 1 || !spec || *spec != "plants-05" || !source_format ||
++      *source_format != "MCF1") {
++    LOG(ERROR) << "Unsupported MTC Plants-05 lab config format";
++    return std::nullopt;
++  }
++
++  MtcPlants05LabConfig config;
++
++  const std::string* ca_id_hex = root.FindString("ca_id_hex");
++  if (!ca_id_hex || !base::HexStringToBytes(*ca_id_hex, &config.ca_id) ||
++      config.ca_id.empty()) {
++    LOG(ERROR) << "Invalid MTC Plants-05 CA ID";
++    return std::nullopt;
++  }
++
++  const base::ListValue* signers = root.FindList("signers");
++  if (!signers || signers->size() != 2 || !(*signers)[0].is_dict()) {
++    LOG(ERROR) << "MTC Plants-05 config must contain exactly two signers";
++    return std::nullopt;
++  }
++
++  const base::DictValue& ca_signer = (*signers)[0].GetDict();
++  const std::string* signer_id_hex = ca_signer.FindString("id_hex");
++  const std::string* spki_base64 = ca_signer.FindString("spki_der_base64");
++
++  std::vector<uint8_t> signer_id;
++  if (!signer_id_hex || !base::HexStringToBytes(*signer_id_hex, &signer_id) ||
++      signer_id != config.ca_id || !spki_base64) {
++    LOG(ERROR) << "Invalid MTC Plants-05 CA signer";
++    return std::nullopt;
++  }
++
++  std::optional<std::vector<uint8_t>> spki = base::Base64Decode(*spki_base64);
++  if (!spki || spki->empty()) {
++    LOG(ERROR) << "Invalid MTC Plants-05 CA SPKI";
++    return std::nullopt;
++  }
++  config.ca_spki_der = std::move(*spki);
++
++  std::optional<MtcPlants05LabSignatureAlgorithm> signature_algorithm =
++      ParseSignatureAlgorithm(root);
++  if (!signature_algorithm) {
++    LOG(ERROR) << "Unsupported MTC Plants-05 signature algorithm";
++    return std::nullopt;
++  }
++  config.signature_algorithm = *signature_algorithm;
++
++  const std::string* min_serial_hex = root.FindString("min_serial_hex");
++  const std::string* max_serial_hex = root.FindString("max_serial_hex");
++  if (!min_serial_hex || !max_serial_hex ||
++      !ParseUint64Hex(*min_serial_hex, &config.min_serial) ||
++      !ParseUint64Hex(*max_serial_hex, &config.max_serial) ||
++      config.min_serial > config.max_serial) {
++    LOG(ERROR) << "Invalid MTC Plants-05 serial range";
++    return std::nullopt;
++  }
++
++  std::optional<int> log_number = root.FindInt("log_number");
++  if (!log_number || *log_number <= 0 ||
++      *log_number > std::numeric_limits<uint16_t>::max()) {
++    LOG(ERROR) << "Invalid MTC Plants-05 log number";
++    return std::nullopt;
++  }
++  config.log_number = static_cast<uint16_t>(*log_number);
++
++  const base::DictValue* landmark = root.FindDict("landmark");
++  if (!landmark) {
++    LOG(ERROR) << "Missing MTC Plants-05 landmark";
++    return std::nullopt;
++  }
++
++  std::optional<int> landmark_number = landmark->FindInt("number");
++  std::optional<int> tree_size = landmark->FindInt("tree_size");
++  if (!landmark_number || *landmark_number <= 0 || !tree_size ||
++      *tree_size <= 0) {
++    LOG(ERROR) << "Invalid MTC Plants-05 landmark coordinates";
++    return std::nullopt;
++  }
++
++  config.landmark_number = static_cast<uint64_t>(*landmark_number);
++  config.tree_size = static_cast<uint64_t>(*tree_size);
++
++  if (config.max_serial - config.min_serial + 1 != config.tree_size) {
++    LOG(ERROR) << "MTC Plants-05 serial range does not match tree size";
++    return std::nullopt;
++  }
++
++  const base::ListValue* subtrees = landmark->FindList("trusted_subtrees");
++  if (!subtrees || subtrees->empty()) {
++    LOG(ERROR) << "MTC Plants-05 config has no trusted subtrees";
++    return std::nullopt;
++  }
++
++  uint64_t expected_start = 0;
++  for (const base::Value& entry : *subtrees) {
++    if (!entry.is_dict()) {
++      return std::nullopt;
++    }
++
++    const base::DictValue& subtree_dict = entry.GetDict();
++    std::optional<int> start = subtree_dict.FindInt("start");
++    std::optional<int> end = subtree_dict.FindInt("end");
++    const std::string* hash_hex = subtree_dict.FindString("hash");
++
++    if (!start || !end || *start < 0 || *end <= *start ||
++        static_cast<uint64_t>(*start) != expected_start || !hash_hex) {
++      LOG(ERROR) << "Invalid MTC Plants-05 trusted subtree range";
++      return std::nullopt;
++    }
++
++    MtcPlants05LabTrustedSubtree subtree;
++    subtree.start = static_cast<uint64_t>(*start);
++    subtree.end = static_cast<uint64_t>(*end);
++
++    if (!base::HexStringToSpan(*hash_hex, subtree.hash)) {
++      LOG(ERROR) << "Invalid MTC Plants-05 trusted subtree hash";
++      return std::nullopt;
++    }
++
++    expected_start = subtree.end;
++    config.trusted_subtrees.push_back(std::move(subtree));
++  }
++
++  if (expected_start != config.tree_size) {
++    LOG(ERROR) << "MTC Plants-05 trusted subtrees do not cover tree";
++    return std::nullopt;
++  }
++
++  const std::string* merkle_hash = root.FindString("merkle_hash");
++  if (!merkle_hash || *merkle_hash != "SHA-256") {
++    LOG(ERROR) << "Unsupported MTC Plants-05 Merkle hash";
++    return std::nullopt;
++  }
++
++  return config;
++}
++
++}  // namespace
++
++std::optional<MtcPlants05LabConfig> LoadMtcPlants05LabConfig(
++    const base::FilePath& path) {
++  // This is an explicitly opt-in laboratory-only configuration. Keep the
++  // synchronous file read isolated here; production trust configuration must
++  // not depend on this path.
++  base::ScopedAllowBlockingForTesting allow_blocking;
++
++  std::string json;
++  if (!base::ReadFileToString(path, &json)) {
++    LOG(ERROR) << "Unable to read MTC Plants-05 lab config: " << path;
++    return std::nullopt;
++  }
++
++  return ParseConfig(json);
++}
++
++std::optional<MtcPlants05LabConfig> LoadMtcPlants05LabConfigFromCommandLine() {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++
++  if (!command_line->HasSwitch(switches::kMtcPlants05Trust)) {
++    return std::nullopt;
++  }
++
++  base::FilePath path =
++      command_line->GetSwitchValuePath(switches::kMtcPlants05Trust);
++  if (path.empty()) {
++    LOG(ERROR) << "--" << switches::kMtcPlants05Trust << " requires a path";
++    return std::nullopt;
++  }
++
++  return LoadMtcPlants05LabConfig(path);
++}
++
++}  // namespace net
+diff --git a/net/cert/mtc_plants05_lab_config.h b/net/cert/mtc_plants05_lab_config.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..04e30f33acd7b5c372fbed31ca4969ecd4ed7567
+--- /dev/null
++++ b/net/cert/mtc_plants05_lab_config.h
+@@ -0,0 +1,64 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef NET_CERT_MTC_PLANTS05_LAB_CONFIG_H_
++#define NET_CERT_MTC_PLANTS05_LAB_CONFIG_H_
++
++#include <array>
++#include <cstdint>
++#include <optional>
++#include <vector>
++
++#include "base/files/file_path.h"
++#include "net/base/net_export.h"
++
++namespace net {
++
++// Operator-supplied trust configuration for the controlled Plants-05
++// interoperability laboratory. This is deliberately separate from Chrome Root
++// Store production trust configuration.
++enum class MtcPlants05LabSignatureAlgorithm {
++  kEcdsaSha256,
++  kEcdsaSha384,
++  kEcdsaSha512,
++  kMldsa44,
++  kMldsa65,
++  kMldsa87,
++};
++
++struct NET_EXPORT MtcPlants05LabTrustedSubtree {
++  uint64_t start = 0;
++  uint64_t end = 0;
++  std::array<uint8_t, 32> hash{};
++};
++
++struct NET_EXPORT MtcPlants05LabConfig {
++  std::vector<uint8_t> ca_id;
++  std::vector<uint8_t> ca_spki_der;
++
++  MtcPlants05LabSignatureAlgorithm signature_algorithm =
++      MtcPlants05LabSignatureAlgorithm::kEcdsaSha256;
++
++  uint64_t min_serial = 0;
++  uint64_t max_serial = 0;
++
++  uint16_t log_number = 0;
++  uint64_t landmark_number = 0;
++  uint64_t tree_size = 0;
++
++  std::vector<MtcPlants05LabTrustedSubtree> trusted_subtrees;
++};
++
++// Reads and validates a chromium-mtc-plants05-lab version 1 JSON file.
++NET_EXPORT std::optional<MtcPlants05LabConfig> LoadMtcPlants05LabConfig(
++    const base::FilePath& path);
++
++// Reads the path from --mtc-plants05-trust. Returns nullopt if the switch is
++// absent or if the supplied configuration is invalid.
++NET_EXPORT std::optional<MtcPlants05LabConfig>
++LoadMtcPlants05LabConfigFromCommandLine();
++
++}  // namespace net
++
++#endif  // NET_CERT_MTC_PLANTS05_LAB_CONFIG_H_
+-- 
+2.50.1 (Apple Git-155)
+

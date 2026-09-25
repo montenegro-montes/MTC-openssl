@@ -1,0 +1,180 @@
+From 324f09d89b29670e14cd4f5f46742d170adb273a Mon Sep 17 00:00:00 2001
+From: Jose Antonio Montenegro Montes
+ <joseantoniomontenegromontes@MacBook-Air-de-Jose-2.local>
+Date: Thu, 24 Sep 2026 08:22:05 +0200
+Subject: [PATCH] Add experimental Plants-05 landmark verification
+
+---
+ pki/trust_store.cc              | 21 +++++++++++++++++++-
+ pki/trust_store.h               | 24 +++++++++++++++++++++--
+ pki/verify_certificate_chain.cc | 34 ++++++++++++++++++++++++++++++++-
+ 3 files changed, 75 insertions(+), 4 deletions(-)
+
+diff --git a/pki/trust_store.cc b/pki/trust_store.cc
+index ef2b68355cb1225b0816631a88be9080c7d1e69b..00714aa1afbdda0f1c017b0f9bb71f0576f48900 100644
+--- a/pki/trust_store.cc
++++ b/pki/trust_store.cc
+@@ -197,9 +197,22 @@ MTCAnchor::MTCAnchor(Span<const uint8_t> ca_id,
+                      SignatureAlgorithm ca_signature_algorithm,
+                      UniquePtr<CRYPTO_BUFFER> ca_key,
+                      std::vector<LogTrustedSubtrees> log_trusted_subtrees)
+-    : ca_id_(ca_id.begin(), ca_id.end()),
++    : MTCAnchor(kPlants04, ca_id, ca_signature_algorithm, std::move(ca_key),
++                0, ~uint64_t{0}, std::move(log_trusted_subtrees)) {}
++
++MTCAnchor::MTCAnchor(MtcSpecVersion spec_version,
++                     Span<const uint8_t> ca_id,
++                     SignatureAlgorithm ca_signature_algorithm,
++                     UniquePtr<CRYPTO_BUFFER> ca_key,
++                     uint64_t min_serial,
++                     uint64_t max_serial,
++                     std::vector<LogTrustedSubtrees> log_trusted_subtrees)
++    : spec_version_(spec_version),
++      ca_id_(ca_id.begin(), ca_id.end()),
+       ca_signature_algorithm_(ca_signature_algorithm),
+       ca_key_(std::move(ca_key)),
++      min_serial_(min_serial),
++      max_serial_(max_serial),
+       trusted_subtrees_(std::move(log_trusted_subtrees)) {
+   CreateSyntheticCert(ca_id);
+ }
+@@ -208,6 +221,12 @@ bool MTCAnchor::IsValid() const {
+   if (!synthetic_cert_) {
+     return false;
+   }
++  if (spec_version_ != kPlants04 && spec_version_ != kPlants05) {
++    return false;
++  }
++  if (min_serial_ > max_serial_) {
++    return false;
++  }
+   uint16_t min_log_number = 0;
+   for (const auto &[log_number, subtrees] : trusted_subtrees_) {
+     if (log_number <= min_log_number) {
+diff --git a/pki/trust_store.h b/pki/trust_store.h
+index 0a58f6351db1320f47578fc62c3f1aab8c304e01..d7afd22106f8d76a38781ae66d787f84a828a272 100644
+--- a/pki/trust_store.h
++++ b/pki/trust_store.h
+@@ -152,7 +152,10 @@ class OPENSSL_EXPORT MTCAnchor {
+  public:
+   enum MtcSpecVersion {
+     // draft-ietf-plants-merkle-tree-certs-04
+-    kPlants04
++    kPlants04,
++
++    // draft-ietf-plants-merkle-tree-certs-05
++    kPlants05
+   };
+ 
+   // Create an MTCAnchor with spec version kPlants04 for a trusted CA with
+@@ -166,11 +169,25 @@ class OPENSSL_EXPORT MTCAnchor {
+             UniquePtr<CRYPTO_BUFFER> ca_key,
+             std::vector<LogTrustedSubtrees> log_trusted_subtrees);
+ 
++  // Experimental Plants-05 constructor. The existing constructor above
++  // retains Plants-04 semantics for all existing Chromium callers.
++  MTCAnchor(MtcSpecVersion spec_version,
++            Span<const uint8_t> ca_id,
++            SignatureAlgorithm ca_signature_algorithm,
++            UniquePtr<CRYPTO_BUFFER> ca_key,
++            uint64_t min_serial,
++            uint64_t max_serial,
++            std::vector<LogTrustedSubtrees> log_trusted_subtrees);
++
+   // Returns whether this MTCAnchor represents a valid anchor. This function
+   // exists because the c'tor inputs could be invalid.
+   bool IsValid() const;
+ 
+-  MtcSpecVersion spec_version() const { return kPlants04; }
++  MtcSpecVersion spec_version() const { return spec_version_; }
++
++  bool IsSerialInRange(uint64_t serial) const {
++    return min_serial_ <= serial && serial <= max_serial_;
++  }
+   Span<const uint8_t> ca_id() const {
+     return ca_id_;
+   }
+@@ -194,10 +211,13 @@ class OPENSSL_EXPORT MTCAnchor {
+  private:
+   void CreateSyntheticCert(Span<const uint8_t> ca_id);
+ 
++  MtcSpecVersion spec_version_ = kPlants04;
+   std::vector<uint8_t> ca_id_;
+   SignatureAlgorithm ca_signature_algorithm_;
+   UniquePtr<CRYPTO_BUFFER> ca_key_;
+   std::shared_ptr<const ParsedCertificate> synthetic_cert_;
++  uint64_t min_serial_ = 0;
++  uint64_t max_serial_ = ~uint64_t{0};
+   std::vector<LogTrustedSubtrees> trusted_subtrees_;
+ };
+ 
+diff --git a/pki/verify_certificate_chain.cc b/pki/verify_certificate_chain.cc
+index eb651ab0390b097529bc7cc1abe7af23bba4af0d..6d2fe01a85c3095843a7101c935446978ff2b00b 100644
+--- a/pki/verify_certificate_chain.cc
++++ b/pki/verify_certificate_chain.cc
+@@ -1242,6 +1242,16 @@ enum class VerifyMTCResult {
+ static VerifyMTCResult VerifyMTC(const ParsedCertificate &cert,
+                                  const MTCAnchor *mtc_anchor,
+                                  VerifyCertificateChainDelegate *delegate) {
++  if (!mtc_anchor) {
++    return VerifyMTCResult::kFailed;
++  }
++
++  const MTCAnchor::MtcSpecVersion spec_version = mtc_anchor->spec_version();
++  if (spec_version != MTCAnchor::kPlants04 &&
++      spec_version != MTCAnchor::kPlants05) {
++    return VerifyMTCResult::kFailed;
++  }
++
+   // Step 1: Check that the TBSCertificate's signature field is id-alg-mtcProof
+   // (kMtcProofDraftPlants04) with omitted parameters.
+   if (cert.signature_algorithm() !=
+@@ -1271,6 +1281,13 @@ static VerifyMTCResult VerifyMTC(const ParsedCertificate &cert,
+     return VerifyMTCResult::kFailed;
+   }
+ 
++  // Plants-05 constrains MTC serial numbers to the range configured by the
++  // issuing MTC CA. Plants-04 anchors retain the historical unrestricted range.
++  if (spec_version == MTCAnchor::kPlants05 &&
++      !mtc_anchor->IsSerialInRange(serial)) {
++    return VerifyMTCResult::kFailed;
++  }
++
+   // Step 4's revocation check is not performed in this function. The caller is
+   // responsible for performing revocation checks.
+ 
+@@ -1438,15 +1455,30 @@ static VerifyMTCResult VerifyMTC(const ParsedCertificate &cert,
+     );
+   }
+   if (trusted_subtree_hash) {
++    // This initial Plants-05 path intentionally supports landmark-relative
++    // verification only. A landmark proof carries no subtree signatures.
++    if (spec_version == MTCAnchor::kPlants05 &&
++        CBS_len(&signatures) != 0) {
++      return VerifyMTCResult::kFailed;
++    }
++
+     return (CRYPTO_memcmp(expected_subtree_hash->data(),
+                           trusted_subtree_hash->data(),
+                           expected_subtree_hash->size()) == 0)
+                ? VerifyMTCResult::kSuccess
+                : VerifyMTCResult::kFailed;
+-  } else if (CBS_len(&signatures) == 0) {
++  }
++
++  if (CBS_len(&signatures) == 0) {
+     return VerifyMTCResult::kLandmarkNotRecognized;
+   }
+ 
++  // Standalone Plants-05 verification is deliberately not enabled here yet.
++  // The existing signature/cosigner path below remains Plants-04 only.
++  if (spec_version == MTCAnchor::kPlants05) {
++    return VerifyMTCResult::kFailed;
++  }
++
+   // Step 6: Let log_id be the log ID constructed from the CA ID in issuer and
+   // the log_number.
+   // Section 5.1: For each positive integer N, the OID {caID logs(0) N}
+-- 
+2.50.1 (Apple Git-155)
+

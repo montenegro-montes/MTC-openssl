@@ -1,0 +1,20 @@
+From 5b2f219594dc63c9766a1ec3b25eb575ed551ba3 Mon Sep 17 00:00:00 2001
+From: Jose Antonio Montenegro Montes
+ <joseantoniomontenegromontes@MacBook-Air-de-Jose-2.local>
+Date: Thu, 24 Sep 2026 08:23:51 +0200
+Subject: [PATCH 2/3] Point Chromium at Plants-05 BoringSSL
+
+---
+ third_party/boringssl/src | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/boringssl/src b/third_party/boringssl/src
+index 5fbad2285b096858fc9afa3e4c949fde39452070..324f09d89b29670e14cd4f5f46742d170adb273a 160000
+--- a/third_party/boringssl/src
++++ b/third_party/boringssl/src
+@@ -1 +1 @@
+-Subproject commit 5fbad2285b096858fc9afa3e4c949fde39452070
++Subproject commit 324f09d89b29670e14cd4f5f46742d170adb273a
+-- 
+2.50.1 (Apple Git-155)
+
