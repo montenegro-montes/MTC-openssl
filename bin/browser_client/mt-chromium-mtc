@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Existing-build interoperability plus explicit source reconstruction; never builds.
+# Existing-build interoperability; source preparation and compilation are explicit namespaces.
 set -euo pipefail
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$REPO"
@@ -164,8 +164,8 @@ Verify exact commits, Chromium's BoringSSL gitlink, and authoritative source tre
   BoringSSL: $BORINGSSL_PATCHED_TREE
 Explicit source interface: reconstruct-source plan|status|run STEP [--dest ABSOLUTE_PATH]
 Stages 100–160 reconstruct only these two source repositories and pinned depot_tools.
-Other Chromium DEPS, toolchains and build configuration require later explicit work.
-Later build: separately authorized, not implemented here; no packages or gclient sync.
+Next explicit phase: prepare-build plan (DEPS, Linux dependencies and GN).
+Compilation is available only through build run chromium; see build plan.
 Normal resume cannot execute reconstruction or build stages.
 PLAN
 )
@@ -283,11 +283,208 @@ try:
 finally: lock.rmdir()
 PY
 }
+build_phase() {
+ python3 - "$REPO" "$@" <<'PY'
+import hashlib, json, os, platform, shlex, subprocess, sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+def require(ok, message):
+ if not ok: raise SystemExit('ERROR: '+message)
+def digest(path):
+ h=hashlib.sha256()
+ with path.open('rb') as f:
+  for block in iter(lambda:f.read(1024*1024),b''): h.update(block)
+ return h.hexdigest()
+def now(): return datetime.now(timezone.utc).isoformat()
+repo=Path(sys.argv[1]); namespace=sys.argv[2]; args=sys.argv[3:]
+root=repo/'campaigns/browser_client/chromium_mtc'
+v=dict(line.split('=',1) for line in (root/'versions/chromium-mtc.env').read_text().splitlines() if line and not line.startswith('#'))
+destination=Path.home()/'chromium-mtc-rebuild'
+if '--dest' in args:
+ i=args.index('--dest'); require(args.count('--dest')==1 and i+1<len(args),'Use --dest ABSOLUTE_PATH once')
+ destination=Path(args[i+1]); require(destination.is_absolute(),'An absolute --dest is required'); del args[i:i+2]
+dest=destination.resolve(); action=args.pop(0) if args else 'plan'
+steps=['170.verify-reconstructed-source','180.prepare-chromium-checkout-layout','190.sync-pinned-deps','200.check-linux-build-dependencies','210.configure-linux-release','220.verify-build-configuration']
+step=None
+if action=='run':
+ require(len(args)==1,'One step/target required')
+ if namespace=='build': require(args.pop()=='chromium','Only build run chromium is supported')
+ else:
+  requested=args.pop(); matches=[s for s in steps if requested in (s,s.split('.')[0])]
+  require(len(matches)==1,'Unknown preparation step'); step=matches[0]
+else: require(action in ('plan','status','install-deps') and not args,'Expected plan|status|run STEP or prepare-build install-deps')
+require(action!='install-deps' or namespace=='prepare-build','Use prepare-build install-deps')
+src=dest/'src'; boring=src/'third_party/boringssl/src'; depot=dest/'depot_tools'
+state=dest/'.mtc-build-state'; source_state=dest/'.mtc-source-state'; out=src/'out/mtc-release'
+gn_args='is_debug = false\nis_component_build = false\nsymbol_level = 1\nuse_remoteexec = false\n'
+layout="""# Owned by the Chromium MTC reconstruction workflow.
+solutions = [{
+    'name': 'src',
+    'url': 'https://chromium.googlesource.com/chromium/src.git',
+    'managed': False,
+    'deps_file': 'DEPS',
+    'custom_deps': {'src/third_party/boringssl/src': None},
+}]
+target_os = ['linux']
+target_os_only = True
+"""
+sync=[str(depot/'gclient'),'sync','--nohooks','--noprehooks']
+hooks=[str(depot/'gclient'),'runhooks']
+check=[str(src/'build/install-build-deps.sh'),'--quick-check']
+install=[str(src/'build/install-build-deps.sh')]
+gen=[str(depot/'gn'),'gen','out/mtc-release']
+build=[str(depot/'autoninja'),'-C','out/mtc-release','chrome']
+if action=='plan':
+ print('PRINT ONLY — no commands executed.'); print('Destination: '+str(dest))
+ if namespace=='prepare-build':
+  print('\n'.join(steps))
+  print('180: unmanaged src; exclude src/third_party/boringssl/src via custom_deps=None.')
+  print('190 (cwd='+str(dest)+'): '+shlex.join(sync))
+  print('200 (check only): '+shlex.join(check))
+  print('Optional explicit installation: prepare-build install-deps')
+  print('210 (cwd='+str(src)+'): '+shlex.join(hooks)+' && '+shlex.join(gen))
+  print('GN args:\n'+gn_args.rstrip())
+  print('220: verify source, layout, GN args/build.ninja and no recorded compilation/artifacts.')
+ else:
+  print('Working directory: '+str(src)); print('Command: autoninja -C out/mtc-release chrome')
+  print('Resolved executable: '+str(depot/'autoninja'))
+  print('Requires current stages 170–220, exact sources/depot_tools, dependency check and generated GN configuration.')
+ print('Environment: DEPOT_TOOLS_UPDATE=0; pinned depot_tools first on PATH.')
+ print('Ubuntu 24.04 x86_64 only. Normal resume cannot execute this phase.'); sys.exit(0)
+for p in (repo,Path.home()/'Desktop/chromium-mtc',Path.home()/'Desktop/depot_tools'):
+ p=p.resolve(); require(dest!=p and p not in dest.parents and dest not in p.parents,'Destination overlaps a protected checkout')
+identity={'destination':str(dest),'versions':v,'workflow':'chromium-mtc-source-v1'}
+owner=dest/'.mtc-source-owner.json'
+if dest.exists():
+ require(owner.is_file() and not owner.is_symlink() and json.loads(owner.read_text())==identity,'Destination lacks matching reconstruction ownership')
+for path in (src,boring,depot,state,source_state,out): require(path.resolve()==path,'Symlink workflow path rejected: '+str(path))
+# Bind evidence to configuration, implementation and the last source verification.
+source_done=source_state/'160.verify-source-trees.done'
+context={'owner':identity,'driver_sha256':digest(repo/'bin/browser_client/mt-chromium-mtc'),'args':gn_args,'layout':layout,
+         'source_verification_mtime_ns':source_done.stat().st_mtime_ns if source_done.is_file() else None}
+def record_path(s): return state/(s+'.json')
+def recorded(s):
+ p=record_path(s)
+ if not p.is_file() or p.is_symlink(): return False
+ try: return json.loads(p.read_text()).get('context')==context
+ except (ValueError,OSError): return False
+if action=='status':
+ print('Destination: '+str(dest))
+ if namespace=='prepare-build':
+  for s in steps: print(('RECORDED ' if recorded(s) else 'PENDING/STALE ')+s)
+ else:
+  p=state/'build-result.json'
+  if p.is_file():
+   result=json.loads(p.read_text()); print('RECORDED build: '+result['timestamp']); print('Executable: '+result['executable'])
+   print('Configuration evidence: '+('CURRENT' if result.get('context')==context else 'STALE'))
+  else: print('NO SUCCESSFUL BUILD RECORDED')
+  if (state/'build-attempt.json').is_file(): print('Last attempt: '+(state/'build-attempt.json').read_text().strip())
+ print('Read-only recorded status; no tools run and no live source verification.'); sys.exit(0)
+require(platform.system()=='Linux' and platform.machine()=='x86_64','Execution requires Ubuntu 24.04 x86_64; plan/status are portable')
+os_release=dict(line.split('=',1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)
+require(os_release.get('ID','').strip('"')=='ubuntu' and os_release.get('VERSION_ID','').strip('"')=='24.04','Execution requires Ubuntu 24.04')
+require(owner.is_file() and source_done.is_file(),'Complete reconstruct-source through 160 first')
+require(not any(c.isspace() for c in str(dest)),'Chromium checkout path must not contain whitespace')
+env=dict(os.environ,DEPOT_TOOLS_UPDATE='0',PATH=str(depot)+os.pathsep+os.environ.get('PATH',''))
+def git(path,*args):
+ return subprocess.check_output(['git','-c','core.hooksPath=/dev/null','-C',str(path),*args],text=True).strip()
+def verify_sources():
+ for label,path,commit,tree in [('Chromium',src,v['CHROMIUM_PATCHED_COMMIT'],v['CHROMIUM_PATCHED_TREE']),('BoringSSL',boring,v['BORINGSSL_PATCHED_COMMIT'],v['BORINGSSL_PATCHED_TREE']),('depot_tools',depot,v['DEPOT_TOOLS_COMMIT'],None)]:
+  require(Path(git(path,'rev-parse','--show-toplevel')).resolve()==path,'Unexpected repository: '+label)
+  require(git(path,'rev-parse','HEAD')==commit,label+' HEAD mismatch')
+  if tree: require(git(path,'show','-s','--format=%T','HEAD')==tree,label+' tree mismatch')
+  require(not git(path,'diff','--name-only','--ignore-submodules=all'),'Modified tracked content: '+label)
+  require(not git(path,'diff','--cached','--name-only','--ignore-submodules=none'),'Modified index: '+label)
+ require(git(src,'ls-tree','HEAD','third_party/boringssl/src')=='160000 commit '+v['BORINGSSL_PATCHED_COMMIT']+'\tthird_party/boringssl/src','BoringSSL gitlink mismatch')
+def exact_file(path,text):
+ require(path.is_file() and not path.is_symlink() and path.read_text()==text,'Unexpected/missing configuration: '+str(path))
+def write_new_or_exact(path,text):
+ require(not path.is_symlink(),'Symlink file rejected: '+str(path))
+ if path.exists(): exact_file(path,text)
+ else:
+  with path.open('x') as f: f.write(text)
+def verify_layout(): exact_file(dest/'.gclient',layout)
+def verify_output():
+ require((state/'output-owner.json').is_file() and json.loads((state/'output-owner.json').read_text())=={'path':str(out),'args':gn_args},'Unowned output directory')
+ exact_file(out/'args.gn',gn_args)
+ require((out/'build.ninja').is_file() and not (out/'build.ninja').is_symlink(),'Run 210: generated build.ninja missing')
+ require(recorded(steps[4]),'Current GN generation evidence missing')
+ proof=json.loads(record_path(steps[4]).read_text())
+ require(proof['build_ninja_sha256']==digest(out/'build.ninja'),'Generated build.ninja changed; rerun preparation')
+def no_compilation():
+ require(not (state/'build-attempt.json').exists(),'Build already attempted; 220 cannot certify a pre-compilation state')
+ for name in ('chrome','.ninja_log','.siso_deps','.siso_log'):
+  require(not (out/name).exists(),'Compilation artifact already exists: '+name)
+def run(command,cwd):
+ print('RUN (cwd='+str(cwd)+'): '+shlex.join(command),flush=True)
+ subprocess.run(command,cwd=cwd,env=env,check=True)
+def invalidate(index):
+ for s in steps[index:]:
+  p=record_path(s)
+  if p.exists(): p.unlink()
+def save(path,data):
+ require(not path.is_symlink(),'Symlink record rejected')
+ path.write_text(json.dumps(data,indent=2,sort_keys=True)+'\n')
+def prerequisites(count):
+ for s in steps[:count]: require(recorded(s),'Run '+s+' first (missing/stale evidence)')
+# Share the reconstruction lock: sync/build cannot race source checkout stages.
+lock=source_state/'lock'
+try: lock.mkdir()
+except FileExistsError: raise SystemExit('ERROR: Workflow locked; inspect before retrying')
+try:
+ state.mkdir(exist_ok=True); verify_sources()
+ if action=='install-deps':
+  prerequisites(3); verify_layout(); invalidate(3)
+  run(install,src); run(check,src); verify_sources()
+  save(state/'dependency-install.json',{'timestamp':now(),'command':install,'context':context})
+  print('Installation checked; run 200, 210 and 220 explicitly.'); sys.exit(0)
+ if namespace=='build':
+  prerequisites(len(steps)); verify_layout(); verify_output(); run(check,src); verify_sources()
+  attempt={'timestamp':now(),'command':build,'status':'started'}; save(state/'build-attempt.json',attempt)
+  try:
+   run(build,src); verify_sources(); exact_file(out/'args.gn',gn_args)
+   exe=out/'chrome'; require(exe.is_file() and not exe.is_symlink() and os.access(exe,os.X_OK),'Build returned without Chromium executable')
+   save(state/'build-result.json',{'timestamp':now(),'context':context,'chromium_commit':v['CHROMIUM_PATCHED_COMMIT'],'chromium_tree':v['CHROMIUM_PATCHED_TREE'],'boringssl_commit':v['BORINGSSL_PATCHED_COMMIT'],'boringssl_tree':v['BORINGSSL_PATCHED_TREE'],'depot_tools_commit':v['DEPOT_TOOLS_COMMIT'],'gn_args':gn_args,'command':build,'display_command':'autoninja -C out/mtc-release chrome','cwd':str(src),'executable':str(exe),'executable_sha256':digest(exe)})
+   attempt['status']='success'
+  except BaseException:
+   attempt['status']='failed'; raise
+  finally: save(state/'build-attempt.json',attempt)
+  print('PASS Chromium build; metadata: '+str(state/'build-result.json')); sys.exit(0)
+ index=steps.index(step); prerequisites(index); invalidate(index)
+ if index>=2: verify_layout()
+ if index==1: write_new_or_exact(dest/'.gclient',layout)
+ if index==2:
+  # No reset/force/delete flags. BoringSSL is excluded, never restored by overwriting it.
+  try: run(sync,dest)
+  finally: verify_sources()
+ if index==3: run(check,src)
+ if index==4:
+  no_compilation()
+  output_owner=state/'output-owner.json'; output_identity={'path':str(out),'args':gn_args}
+  if out.exists() and any(out.iterdir()):
+   require(output_owner.is_file() and json.loads(output_owner.read_text())==output_identity,'Refusing non-empty unowned output directory')
+  out.mkdir(parents=True,exist_ok=True); write_new_or_exact(out/'args.gn',gn_args)
+  save(output_owner,output_identity)
+  try:
+   run(hooks,src); verify_sources(); run(gen,src)
+  finally: verify_sources()
+  exact_file(out/'args.gn',gn_args); no_compilation()
+  require((out/'build.ninja').is_file(),'GN did not generate build.ninja')
+ if index==5: verify_output(); no_compilation()
+ verify_sources()
+ result={'timestamp':now(),'context':context}
+ if index==4: result['build_ninja_sha256']=digest(out/'build.ninja')
+ save(record_path(step),result); print('PASS '+step)
+finally: lock.rmdir()
+PY
+}
 case "${1:-help}" in
- help|--help|-h) echo 'Usage: mt-chromium-mtc init|status|plan|doctor|reconstruct-plan|reconstruct-source plan|status|run STEP [--dest PATH]|show STEP|run STEP|resume|cleanup';;
+ help|--help|-h) echo 'Usage: mt-chromium-mtc init|status|plan|doctor|reconstruct-plan|reconstruct-source plan|status|run STEP [--dest PATH]|prepare-build plan|status|run STEP|install-deps [--dest PATH]|build plan|status|run chromium [--dest PATH]|show STEP|run STEP|resume|cleanup';;
  doctor) doctor;;
  reconstruct-plan) reconstruct_plan;;
  reconstruct-source) shift; reconstruct_source "$@";;
+ prepare-build|build) build_phase "$@";;
  init) init;;
  plan) printf '%s\n' "${STEPS[@]}"; echo 'Existing Chromium/validated fixture only. No build, pull or automatic generation.';;
  show) step=$(step_name "${2:?Step required}"); echo "$step"; sed -n '/^run_step()/,/^case "${1:-help}"/p' "$0"; [[ "$step" != 60.* ]] || sed -n '/^start_server()/,/^run_step()/p' "$0";;

@@ -274,13 +274,145 @@ run 160 to revalidate. Input checks run before every source execution.
 
 Normal `resume` retains only the existing positive interoperability steps 00–60;
 it cannot reach any reconstruction stage. Source stages have no resume command.
-There is no build, package installation, gclient sync, hook execution, or automatic
-DEPS/toolchain download. This reconstructs the pinned Chromium and BoringSSL Git
+The reconstruction namespace performs no build, package installation, gclient
+sync, hook execution, or automatic DEPS/toolchain download. This reconstructs the pinned Chromium and BoringSSL Git
 content plus depot_tools, **not a build-ready full Chromium dependency checkout**.
 Fetching the upstream histories and checking out sources can be expensive and is
-reserved for explicit future execution. Other DEPS, Linux GN configuration,
-prerequisites, build and browser validation require separately authorized work.
+reserved for explicit execution. The separate preparation and build interfaces
+below handle DEPS, Linux prerequisites, GN and compilation. Browser validation
+remains a separate activity.
 
 `doctor` prints OS, architecture, tool presence and free space without invoking
 wrappers or installing tools. `reconstruct-plan`, source `plan` and source `status`
 perform no reconstruction, download or build.
+
+
+## Explicit Ubuntu 24.04 x86_64 build preparation
+
+Source reconstruction through 160 has been manually validated on the server
+(user-reported). The new preparation/build path has only been checked statically
+and through print-only interfaces on macOS; real sync, hooks, installation, GN
+and compilation still require server validation.
+
+All commands default to `$HOME/chromium-mtc-rebuild` and accept optional
+`--dest ABSOLUTE_PATH` before or after the action. Plan/status are portable and
+read-only; execution rejects platforms other than Ubuntu 24.04 x86_64.
+
+```sh
+bin/browser_client/mt-chromium-mtc prepare-build plan
+bin/browser_client/mt-chromium-mtc prepare-build status
+bin/browser_client/mt-chromium-mtc prepare-build run 170
+bin/browser_client/mt-chromium-mtc prepare-build run 180
+bin/browser_client/mt-chromium-mtc prepare-build run 190
+bin/browser_client/mt-chromium-mtc prepare-build run 200
+# Only if packages are missing: explicitly install with Chromium's own script.
+# It may request sudo; this action is never inferred from a failed check.
+bin/browser_client/mt-chromium-mtc prepare-build install-deps
+# After installation, explicitly rerun 200, then continue:
+bin/browser_client/mt-chromium-mtc prepare-build run 210
+bin/browser_client/mt-chromium-mtc prepare-build run 220
+```
+
+| Stage | Explicit action |
+| --- | --- |
+| 170.verify-reconstructed-source | Check preserved Chromium/BoringSSL HEADs and trees, BoringSSL gitlink, clean tracked files/index and pinned depot_tools. |
+| 180.prepare-chromium-checkout-layout | Write a matching `.gclient` in the reconstruction root; refuse conflicting configuration. Never replace `src`. |
+| 190.sync-pinned-deps | Run pinned `depot_tools/gclient sync --nohooks --noprehooks` from the reconstruction root. Downloads dependencies without running hooks. |
+| 200.check-linux-build-dependencies | Run `src/build/install-build-deps.sh --quick-check`; fail on missing packages without installing anything. |
+| 210.configure-linux-release | Run pinned `gclient runhooks`, then `gn gen out/mtc-release` from `src`. Hooks download/setup toolchains; GN generates build files, without compiling Chromium. |
+| 220.verify-build-configuration | Reverify source, layout, exact args, generated `build.ninja` hash and absence of recorded build attempts/known compilation artifacts. |
+
+The `.gclient` is exactly:
+
+```python
+# Owned by the Chromium MTC reconstruction workflow.
+solutions = [{
+    'name': 'src',
+    'url': 'https://chromium.googlesource.com/chromium/src.git',
+    'managed': False,
+    'deps_file': 'DEPS',
+    'custom_deps': {'src/third_party/boringssl/src': None},
+}]
+target_os = ['linux']
+target_os_only = True
+```
+
+`managed=False` leaves the reconstructed Chromium HEAD authoritative. Its
+preserved DEPS supplies dependency revisions; no revision override requests an
+unpublished custom commit from upstream. `custom_deps=None` excludes BoringSSL
+from synchronization: its DEPS pin names the upstream base whereas the patched
+Chromium gitlink names the preserved custom commit. The existing BoringSSL
+checkout is kept in place. There is no force/reset/delete operation or fallback
+that overwrites it. Exact HEADs, trees, tracked content and the gitlink are checked
+before and after synchronization, including after a failed sync. A mismatch
+fails closed for manual inspection. Untracked/ignored dependency and output
+files are not claimed to be covered by the two Git tree hashes.
+
+All tool commands prepend the reconstructed pinned depot_tools to PATH and set
+`DEPOT_TOOLS_UPDATE=0`. gclient and autoninja use absolute paths to that checkout.
+Wrappers may bootstrap their pinned tools during explicit execution. The Linux
+package list belongs to Chromium, not this driver. `install-deps` invokes
+`build/install-build-deps.sh`, then its `--quick-check`; it invalidates stages
+200–220, which must be run explicitly again. No plan/status or other namespace
+installs packages. The upstream workflow reference is
+[Chromium Linux build instructions](https://chromium.googlesource.com/chromium/src/+/main/docs/linux/build_instructions.md);
+actual commands/flags were checked against the local pinned scripts.
+
+The complete `src/out/mtc-release/args.gn` is:
+
+```gn
+is_debug = false
+is_component_build = false
+symbol_level = 1
+use_remoteexec = false
+```
+
+The last two settings retain the known-good checkout's symbol level and local
+execution choice. No additional MTC feature flag was present in its `args.gn`;
+MTC functionality remains in the preserved source patches. The Linux x86_64
+host supplies the native target defaults. A non-empty output directory must
+already carry matching ownership evidence in `.mtc-build-state/output-owner.json`;
+conflicting args are refused rather than overwritten.
+
+## Explicit compilation and provenance
+
+```sh
+bin/browser_client/mt-chromium-mtc build plan
+bin/browser_client/mt-chromium-mtc build status
+# The only driver interface that compiles Chromium:
+bin/browser_client/mt-chromium-mtc build run chromium
+```
+
+The last command invokes exactly the equivalent of:
+
+```sh
+cd "$HOME/chromium-mtc-rebuild/src"
+"$HOME/chromium-mtc-rebuild/depot_tools/autoninja" -C out/mtc-release chrome
+```
+
+It requires current successful stages 170–220, the reconstruction ownership and
+160 record, matching `.gclient`, exact sources/depot_tools, output ownership,
+matching args and the generated Ninja file. It reruns the package quick-check
+before compilation. Missing output or stale prerequisites cause failure, never
+implicit sync, install, hooks or GN generation.
+
+Preparation evidence binds the driver SHA-256, version pins, destination, GN args,
+layout and source verification marker timestamp. Rerunning a preparation stage
+invalidates its own and later evidence. Preparation/build share reconstruction's
+lock, so these driver operations cannot race. Status reports recorded evidence,
+not fresh verification of files or external manual activity. Stage 220's
+pre-compilation check is limited to workflow attempts and known artifact names;
+it cannot prove that no external compilation has ever occurred.
+
+A successful future build records `.mtc-build-state/build-result.json`: UTC time,
+Chromium/BoringSSL commits and trees, depot_tools commit, GN args, exact command,
+working directory, executable path and streamed SHA-256. A separate attempt
+record distinguishes started/failed/successful attempts; an older success record
+is retained if a later attempt fails. No large artifacts are archived. Once a
+build has been attempted, stage 220 refuses to certify a fresh pre-compilation
+state; existing current preparation evidence permits an explicit build retry.
+
+Normal `resume` remains limited to interoperability stages 00–60. Reconstruction
+100–160 is unchanged. Neither reconstruction nor preparation can dispatch
+compilation. `build plan/status` cannot build, and missing output never triggers
+an automatic build.
