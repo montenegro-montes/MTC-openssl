@@ -35,6 +35,23 @@ CASES = ('mtc-positive', 'mtc-no-trust', 'mtc-bad-merkle', 'mtc-bad-serial', 'x5
 TLS = dict(version='TLS 1.3', group='X25519', cipher='TLS_AES_256_GCM_SHA384',
            tickets=False, client_authentication=False, port=4433)
 LABEL = 'mtc.browser-validation'
+PAGE_HTML = '''<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="icon" href="data:,">
+  <title>MTC browser test</title>
+</head>
+<body>
+  <h1>MTC browser test</h1>
+  <p id="result">TLS browser validation page</p>
+</body>
+</html>
+'''
+
+
+def page_target(case, run_root):
+    return 'browser-test.html?mtc_case='+case+'&run='+run_root.name
 
 
 def require(ok, reason):
@@ -545,14 +562,22 @@ def browser_executable(override=None):
     raise ValueError('Existing patched Chromium executable missing; use --chromium PATH. No build attempted.')
 
 
-def browser_command(executable, profile, case_dir, anchor, url, enable_mtc=False):
+def browser_command(executable, profile, case_dir, anchor, url, enable_mtc=False, browser_mode='headless', disable_trust_anchor_ids=False):
+    require(browser_mode in ('headless', 'headed'), 'Invalid browser mode')
     flags = [str(executable), '--headless=new', '--dump-dom', '--no-first-run', '--no-default-browser-check',
              '--disable-background-networking', '--disable-component-update', '--disable-sync', '--disable-quic',
-             '--no-proxy-server', '--host-resolver-rules=MAP '+HOST+' 127.0.0.1',
+             '--no-proxy-server',
              '--user-data-dir='+str(profile), '--log-net-log='+str(case_dir/'netlog.json'),
              '--net-log-capture-mode=Everything']
+    if browser_mode == 'headed':
+        flags.remove('--headless=new')
+        flags.remove('--dump-dom')
+        flags.remove('--log-net-log='+str(case_dir/'netlog.json'))
+        flags.remove('--net-log-capture-mode=Everything')
     if enable_mtc:
         flags.append('--enable-features=MtcPlants05Lab,VerifyMTCs')
+    if disable_trust_anchor_ids:
+        flags.append('--disable-features=TLSTrustAnchorIDs')
     if anchor:
         flags.append('--mtc-plants05-trust='+str(anchor))
     return flags + [url]
@@ -637,7 +662,7 @@ def classify(case, case_dir, url, process, *, positive_control=False):
     negotiated = any(p.get('version') == 'TLS 1.3' and p.get('cipher_suite') == 0x1302 and
                      p.get('key_exchange_group') == 29 and p.get('is_resumed') is False for p in ssl_connections)
     http = any(name == 'HTTP_TRANSACTION_READ_RESPONSE_HEADERS' and re.search(r'HTTP/\S+ 200', str(p)) for name, p, _, _ in events)
-    dom = 'TLS_AES_256_GCM_SHA384' in stdout and ('s_server' in stdout or 'SSL-Session' in stdout)
+    dom = '<h1>MTC browser test</h1>' in stdout and '<p id="result">TLS browser validation page</p>' in stdout
     result['application_data_observed'] = http and dom
     result['negotiated_canonical_tls'] = negotiated
     result['target_url'] = url
@@ -734,8 +759,18 @@ class Server:
         command(['docker', 'image', 'inspect', image])  # Never pulls.
         selected = self.credentials['x509' if self.case == 'x509-positive' else 'mtc']
         fixture = Path(selected['fixture'])
+        webroot = self.output/'www'
+        webroot.mkdir()
+        body = PAGE_HTML.encode('utf-8')
+        (webroot/'page.html').write_bytes(body)
+        # -HTTP serves a complete response file, including our explicit MIME type.
+        response = ('HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n'
+                    f'Content-Length: {len(body)}\r\nConnection: close\r\n\r\n').encode('ascii') + body
+        # Support literal request-target filenames as well as query-stripping versions.
+        for name in ('browser-test.html', page_target(self.case, self.run_root)):
+            (webroot/name).write_bytes(response)
         args = ['/opt/mtc/openssl.sh', 's_server', '-accept', '4433', '-tls1_3', '-groups', 'X25519',
-                '-ciphersuites', TLS['cipher'], '-num_tickets', '0', '-www', '-state', '-msg',
+                '-ciphersuites', TLS['cipher'], '-num_tickets', '0', '-HTTP', '-state', '-msg',
                 '-cert', '/fixtures/'+str(Path(selected['cert']).relative_to(fixture)),
                 '-key', '/fixtures/'+str(Path(selected['key']).relative_to(fixture))]
         if self.case != 'x509-positive':
@@ -744,6 +779,7 @@ class Server:
             args += ['-cert_chain', '/fixtures/'+str(Path(selected['intermediates']).relative_to(fixture))]
         cmd = ['docker', 'run', '-d', '--pull', 'never', '--name', self.name, '--label', LABEL+'='+str(self.run_root),
                '-p', '127.0.0.1:4433:4433', '-v', str(fixture)+':/fixtures:ro', '-v', str(self.output)+':/results',
+               '--workdir', '/results/www',
                '--entrypoint', '/bin/sh', image, '-c', 'exec '+shlex.join(args)+' > /results/server.log 2>&1']
         write(self.output/'server-command.json', dict(command=cmd, image=image))
         write(self.output/'server-owner.json', dict(name=self.name, label=LABEL, owner=str(self.run_root)))
@@ -769,7 +805,17 @@ class Server:
         command(['docker', 'rm', '-f', self.name])
 
 
+def check_hostname():
+    resolution_error = HOST+' must resolve exclusively to 127.0.0.1. Configure /etc/hosts first.'
+    try:
+        addresses = {entry[4][0] for entry in socket.getaddrinfo(HOST, 4433, type=socket.SOCK_STREAM)}
+    except socket.gaierror as error:
+        raise ValueError(resolution_error) from error
+    require(addresses == {'127.0.0.1'}, resolution_error)
+
+
 def run_browser(cmd, output, timeout):
+    check_hostname()
     # Only this child process group is signalled; no PID-name matching.
     with (output/'chromium.stdout.log').open('xb') as stdout, (output/'chromium.stderr.log').open('xb') as stderr:
         child = subprocess.Popen(cmd, stdout=stdout, stderr=stderr, start_new_session=True)
@@ -791,7 +837,7 @@ def run_browser(cmd, output, timeout):
     return result
 
 
-def run_case(case, credentials, browser, output, run_root, timeout, positive_control):
+def run_case(case, credentials, browser, output, run_root, timeout, positive_control, browser_mode='headless', capture=None):
     output.mkdir()
     anchor = None
     if case.startswith('mtc-') and case != 'mtc-no-trust':
@@ -800,10 +846,15 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
         if case in ('mtc-bad-merkle', 'mtc-bad-serial'):
             anchor = output/'derived-anchor.json'
             write(anchor, mutate_anchor(read(credentials['mtc']['anchor']), case))
-    url = 'https://'+HOST+':4433/?mtc_case='+case+'&run='+run_root.name
+    url = 'https://'+HOST+':4433/'+page_target(case, run_root)
     server = Server(credentials, case, output, run_root)
     try:
+        if capture is not None:
+            require(browser_mode == 'headless', 'PCAP validation requires headless mode')
+            check_hostname()
         server.start()
+        if capture is not None:
+            capture.start()
         with tempfile.TemporaryDirectory(prefix='mtc-browser-profile-', dir=output) as profile:
             cmd = browser_command(
                 browser['executable'],
@@ -812,14 +863,28 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
                 anchor,
                 url,
                 enable_mtc=case.startswith('mtc-'),
+                browser_mode=browser_mode,
+                disable_trust_anchor_ids=case == 'x509-positive',
             )
             write(output/'chromium-command.json', dict(command=cmd, timeout_seconds=timeout))
             exit_code = run_browser(cmd, output, timeout)
         # Flush server logs after browser exits; preserve files before removing container.
+        if capture is not None:
+            capture.stop()
         server.stop(); server.created = False
-        return classify(case, output, url, exit_code, positive_control=positive_control)
+        result = classify(case, output, url, exit_code, positive_control=positive_control)
+        if browser_mode == 'headed':
+            # Keep the automated classifier intact; inspection lacks NetLog and DOM evidence.
+            result.update(browser_mode='headed', observed_outcome='INSPECTION', **{'pass': False},
+                          reason='Visible browser inspection only; no automated PASS. '
+                                 'NetLog and DOM evidence are unavailable. The owned browser is closed at the timeout limit.')
+        return result
     finally:
-        server.stop()
+        try:
+            if capture is not None:
+                capture.stop()
+        finally:
+            server.stop()
 
 
 def blocked_summary(output, reason, browser=None):
@@ -869,11 +934,14 @@ def main(argv=None):
                                            'trust-status', 'trust-x509', 'untrust-x509'))
     parser.add_argument('case', nargs='?', choices=(*CASES, 'all'))
     parser.add_argument('--chromium', type=Path)
+    parser.add_argument('--browser-mode', choices=('headless', 'headed'), default='headless',
+                        help='headless: automated validation (default); headed: bounded visual inspection, never automated PASS')
     parser.add_argument('--timeout', type=int, default=60)
     parser.add_argument('--image', default='mt-tls-mtc:local', help='Existing image used only for generation fallback')
     args = parser.parse_args(argv)
     require(5 <= args.timeout <= 300, 'Timeout must be between 5 and 300 seconds')
     require((args.action == 'run') == bool(args.case), 'run requires CASE; other actions take no case')
+    require(not (args.case == 'all' and args.browser_mode == 'headed'), 'Run all requires headless automated validation')
     if args.action in ('trust-status', 'trust-x509', 'untrust-x509'):
         return trust_action(args.action, REPO)
     if args.action == 'plan':
@@ -881,7 +949,10 @@ def main(argv=None):
         print('Search: artifacts/mtc, artifacts/x509, artifacts/cert-chain-scaling')
         print('Identity: '+HOST+'; ECDSA P-256; MTC N=16 landmark leaf 0')
         print('Cases: '+', '.join(CASES)); print('TLS: '+json.dumps(TLS))
-        print('Existing patched Chromium only. Each case: fresh profile, bounded headless run, NetLog/server/DOM evidence.')
+        if args.browser_mode == 'headless':
+            print('Existing patched Chromium only. Each case: fresh profile, bounded headless run, NetLog/server/DOM evidence.')
+        else:
+            print('Visible browser inspection only: fresh profile, bounded headed run, server evidence; no NetLog, DOM or automated PASS.')
         print('No trust installation. No build/fetch/sync. Normal resume cannot reach this namespace.'); return 0
     if args.action == 'status':
         roots = list(owned_results(REPO))
@@ -924,13 +995,17 @@ def main(argv=None):
         results = []; positive_pass = False
         summary = dict(overall_pass=False, timestamp=datetime.now(timezone.utc).isoformat(), chromium=browser,
                        hostname=HOST, tls=TLS, credentials=credentials, cases=results)
+        if args.browser_mode == 'headed':
+            summary.update(browser_mode='headed', validation_mode='visual_inspection')
+            print(f'Visible inspection only; each owned browser closes after at most {args.timeout} seconds. No automated PASS.', flush=True)
         for case in cases:
             # Recheck immutable input fingerprints before every invocation.
             for selected, keys in [(credentials['mtc'], [('cert','cert_sha256'),('key','key_sha256'),('trust','trust_sha256'),('anchor','anchor_sha256')]),
                                    (credentials['x509'], [('cert','certificate_sha256'),('key','key_sha256'),('root','root_sha256')])]:
                 for pathkey, hashkey in keys: require(sha(selected[pathkey]) == selected[hashkey], 'Credential changed: '+pathkey)
             try:
-                result = run_case(case, credentials, browser, output/case, output, args.timeout, positive_pass)
+                result = run_case(case, credentials, browser, output/case, output, args.timeout, positive_pass,
+                                  browser_mode=args.browser_mode)
             except Exception as e:
                 result = next(r for r in blocked_summary(output, str(e), browser)['cases'] if r['name'] == case)
                 result['reason'] = 'Execution incomplete: '+str(e)
@@ -940,6 +1015,8 @@ def main(argv=None):
             print(case+': '+result['observed_outcome']+' — '+result['reason'], flush=True)
         summary['overall_pass'] = all(r['pass'] for r in results)
         write(output/'summary.json', summary)
+        if args.browser_mode == 'headed':
+            return 2  # Inspection does not establish automated validation success.
         return 0 if summary['overall_pass'] else 1
     except Exception as e:
         if output and not (output/'summary.json').exists():

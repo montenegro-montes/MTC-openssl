@@ -2,6 +2,7 @@
 # Existing-build interoperability; source preparation and compilation are explicit namespaces.
 set -euo pipefail
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+MENU_CALL_DIR=$PWD
 cd "$REPO"
 STATE="$REPO/.mt-state/chromium-mtc"
 STEPS=(00.preflight 10.detect-existing-chromium 20.select-or-generate-mtc-fixture 30.validate-mtc-fixture 40.export-mtc-anchor 50.configure-hostname 60.start-mtc-positive-server)
@@ -502,9 +503,140 @@ try:
 finally: lock.rmdir()
 PY
 }
+menu_invoke() {
+ local mode=$1 answer result
+ shift
+ if [[ "$mode" == confirm ]]; then
+  printf 'Command: '; printf '%q ' "$0" "$@"; printf '\n'
+  read -r -p 'Continue? [y/N] ' answer || exit 0
+  case "$answer" in y|Y) ;; *) echo 'Cancelled.'; return 0;; esac
+ fi
+ # Preserve the caller's directory so relative invocations of "$0" still work.
+ if (cd "$MENU_CALL_DIR" && "$0" "$@"); then :
+ else result=$?; printf 'Command exited with status %s.\n' "$result"; fi
+}
+
+menu_browser_mode() {
+ local browser_case=$1 selection
+ while true; do
+  printf '\n%s\n1. Headless automated validation\n2. Visible browser inspection\n3. Back\n' "$browser_case"
+  read -r -p 'Select an option: ' selection || exit 0
+  case "$selection" in
+   1) menu_invoke confirm browser-validation run "$browser_case" --browser-mode headless; return 0;;
+   2) menu_invoke confirm browser-validation run "$browser_case" --browser-mode headed; return 0;;
+   0|3) return 0;;
+   *) echo 'Invalid option.';;
+  esac
+ done
+}
+
+menu_submenu() {
+ local section=$1 title selection index mode
+ local labels=() commands=() prefix=() args=()
+ case "$section" in
+  source)
+   title='Source reconstruction'; prefix=(reconstruct-source)
+   labels=('100 Verify reconstruction inputs' '110 Prepare depot_tools' '120 Prepare Chromium base' '130 Prepare BoringSSL base' '140 Import preserved commits' '150 Checkout patched source' '160 Verify source trees' 'Status' 'Plan')
+   commands=('run 100' 'run 110' 'run 120' 'run 130' 'run 140' 'run 150' 'run 160' status plan);;
+  preparation)
+   title='Linux build preparation'; prefix=(prepare-build)
+   labels=('170 Verify reconstructed source' '180 Prepare Chromium checkout layout' '190 Sync pinned dependencies' '200 Check Linux build dependencies' '210 Configure Linux release' '220 Verify build configuration' 'Status' 'Plan' 'Install build dependencies')
+   commands=('run 170' 'run 180' 'run 190' 'run 200' 'run 210' 'run 220' status plan install-deps);;
+  build)
+   title='Build Chromium'; prefix=(build)
+   labels=('Plan' 'Status' 'Build Chromium'); commands=(plan status 'run chromium');;
+  setup)
+   title='Existing Chromium / MTC setup'
+   labels=('00 Preflight' '10 Detect existing Chromium' '20 Select or generate MTC fixture' '30 Validate MTC fixture' '40 Export MTC anchor' '50 Check hostname configuration' '60 Start MTC positive server' 'Status' 'Resume from next pending step')
+   commands=('run 00' 'run 10' 'run 20' 'run 30' 'run 40' 'run 50' 'run 60' status resume);;
+  trust)
+   title='X.509 trust management'; prefix=(browser-validation)
+   labels=('Trust status' 'Trust X.509 root' 'Remove X.509 root trust')
+   commands=(trust-status trust-x509 untrust-x509);;
+  validation)
+   title='Browser functional validation'; prefix=(browser-validation)
+   labels=('Plan' 'Credentials' 'Status' 'Run mtc-positive' 'Run mtc-no-trust' 'Run mtc-bad-merkle' 'Run mtc-bad-serial' 'Run x509-positive' 'Run all')
+   commands=(plan credentials status 'run mtc-positive' 'run mtc-no-trust' 'run mtc-bad-merkle' 'run mtc-bad-serial' 'run x509-positive' 'run all');;
+  pcap)
+   title='Browser PCAP validation'; prefix=(browser-pcap)
+   labels=('Plan' 'Requirements / capture backend' 'Status' 'Capture mtc-positive' 'Capture mtc-no-trust' 'Capture mtc-bad-merkle' 'Capture mtc-bad-serial' 'Capture x509-positive' 'Capture all')
+   commands=(plan requirements status 'run mtc-positive' 'run mtc-no-trust' 'run mtc-bad-merkle' 'run mtc-bad-serial' 'run x509-positive' 'run all');;
+ esac
+ while true; do
+  printf '\n%s\n' "$title"
+  for ((index=0; index<${#labels[@]}; index++)); do
+   printf '%d. %s\n' "$((index+1))" "${labels[index]}"
+  done
+  printf '0. Back\n'
+  read -r -p 'Select an option: ' selection || exit 0
+  [[ "$selection" != 0 ]] || return 0
+  [[ "$selection" =~ ^[1-9][0-9]?$ ]] || { echo 'Invalid option.'; continue; }
+  (( selection <= ${#labels[@]} )) || { echo 'Invalid option.'; continue; }
+  read -r -a args <<< "${commands[selection-1]}"
+  if [[ "$section" == validation && "${args[0]}" == run && "${args[1]}" != all ]]; then
+   menu_browser_mode "${args[1]}"
+   continue
+  fi
+  mode=confirm
+  case "${args[0]}" in status|plan|trust-status|requirements) mode=readonly;; esac
+  menu_invoke "$mode" ${prefix[@]+"${prefix[@]}"} "${args[@]}"
+ done
+}
+
+menu() (
+ [[ -t 0 ]] || fail 'menu requires an interactive TTY on stdin.'
+ trap 'printf "\n"; exit 130' INT
+ local selection
+ while true; do
+  cat <<'MENU'
+============================================================
+Chromium / MTC Plants-05 Workflow
+============================================================
+0. Exit
+1. Cleanup / reset
+2. Doctor / requirements
+3. Initialize / configuration
+4. Overall status
+5. Source reconstruction              [100-160]
+6. Linux build preparation            [170-220]
+7. Build Chromium
+8. Existing Chromium / MTC setup      [00-60]
+9. X.509 trust management
+10. Browser functional validation
+11. Browser PCAP validation
+12. Browser measurements               [NOT IMPLEMENTED]
+13. Network-condition experiments      [NOT IMPLEMENTED]
+MENU
+  read -r -p 'Select an option: ' selection || exit 0
+  case "$selection" in
+   1) menu_invoke confirm cleanup;;
+   2) menu_invoke readonly doctor;;
+   3) menu_invoke confirm init;;
+   4)
+    printf '\nExisting Chromium / MTC setup\n'; menu_invoke readonly status
+    printf '\nBrowser functional validation\n'; menu_invoke readonly browser-validation status
+    printf '\nSource reconstruction\n'; menu_invoke readonly reconstruct-source status
+    printf '\nLinux build preparation\n'; menu_invoke readonly prepare-build status
+    printf '\nChromium build\n'; menu_invoke readonly build status;;
+   5) menu_submenu source;;
+   6) menu_submenu preparation;;
+   7) menu_submenu build;;
+   8) menu_submenu setup;;
+   9) menu_submenu trust;;
+   10) menu_submenu validation;;
+   11) menu_submenu pcap;;
+   12|13) echo 'This phase is not implemented yet.';;
+   0) exit 0;;
+   *) echo 'Invalid option.';;
+  esac
+ done
+)
+
 case "${1:-help}" in
- help|--help|-h) echo 'Usage: mt-chromium-mtc init|status|plan|doctor|browser-validation plan|credentials|status|trust-status|trust-x509|untrust-x509|run CASE|cleanup|reconstruct-plan|reconstruct-source plan|status|run STEP [--dest PATH]|prepare-build plan|status|run STEP|install-deps [--dest PATH]|build plan|status|run chromium [--dest PATH]|show STEP|run STEP|resume|cleanup';;
+ help|--help|-h) echo 'Usage: mt-chromium-mtc menu|init|status|plan|doctor|browser-validation plan|credentials|status|trust-status|trust-x509|untrust-x509|run CASE|cleanup|browser-pcap plan|requirements|status|run CASE|reconstruct-plan|reconstruct-source plan|status|run STEP [--dest PATH]|prepare-build plan|status|run STEP|install-deps [--dest PATH]|build plan|status|run chromium [--dest PATH]|show STEP|run STEP|resume|cleanup';;
+ menu) menu;;
  browser-validation) shift; exec python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_validation.py" "$@";;
+ browser-pcap) shift; exec python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_pcap.py" "$@";;
  doctor) doctor;;
  reconstruct-plan) reconstruct_plan;;
  reconstruct-source) shift; reconstruct_source "$@";;

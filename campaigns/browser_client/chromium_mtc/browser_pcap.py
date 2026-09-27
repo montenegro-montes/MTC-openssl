@@ -1,0 +1,498 @@
+#!/usr/bin/env python3
+"""One loopback capture per browser case; no repeated measurement campaign."""
+import argparse
+import base64
+import csv
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+sys.dont_write_bytecode = True
+import browser_validation as bv
+
+PREFIX = 'chromium-browser-pcap-'
+FILTER = 'tcp port 4433'
+METRICS = ('tcp_packets_client_to_server', 'tcp_packets_server_to_client', 'tcp_packets_total',
+           'tcp_payload_bytes_client_to_server', 'tcp_payload_bytes_server_to_client', 'tcp_payload_bytes_total')
+
+
+def requirements():
+    system = platform.system()
+    return dict(platform=system, interface={'Darwin': 'lo0', 'Linux': 'lo'}.get(system),
+                capture_filter=FILTER, dumpcap=shutil.which('dumpcap'), tcpdump=shutil.which('tcpdump'),
+                tshark=shutil.which('tshark'), permissions='NOT CHECKED; capture readiness is checked only by run',
+                instruction='Install capture tools manually if missing. Ask your administrator to grant '
+                            'your user capture access to the loopback interface. No automatic sudo or permission changes.')
+
+
+class Capture:
+    def __init__(self, output, tools):
+        self.output, self.tools = output, tools
+        self.child = self.log = self.path = None
+        self.clean = False
+
+    def start(self):
+        attempts = []
+        try:
+            for backend in ('dumpcap', 'tcpdump'):
+                executable = self.tools[backend]
+                if not executable:
+                    continue
+                self.path = self.output/('capture.pcapng' if backend == 'dumpcap' else 'capture.pcap')
+                cmd = [executable, '-i', self.tools['interface']]
+                cmd += (['-f', FILTER, '-s', '0', '-w', str(self.path)] if backend == 'dumpcap' else
+                        ['-nn', '-s', '0', '-U', '-w', str(self.path), FILTER])
+                log_path = self.output/(backend+'.stderr.log')
+                attempt = dict(backend=backend, command=cmd, stderr=str(log_path), ready=False)
+                attempts.append(attempt)
+                self.log = log_path.open('xb')
+                try:
+                    self.child = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=self.log,
+                                                  start_new_session=True, env={**os.environ, 'LC_ALL': 'C'})
+                except OSError as error:
+                    attempt['error'] = str(error)
+                    self.log.close(); self.log = None
+                    continue
+                attempt['pid'] = self.child.pid
+                deadline = time.monotonic()+10
+                while time.monotonic() < deadline and self.child.poll() is None:
+                    text = log_path.read_text(errors='replace')
+                    ready = ('File:' in text if backend == 'dumpcap' else 'listening on ' in text)
+                    if ready and self.path.exists():
+                        attempt['ready'] = True
+                        return
+                    time.sleep(0.1)
+                self.stop()
+            raise ValueError('No capture backend became ready. '+self.tools['instruction']+
+                             ' Inspect dumpcap/tcpdump stderr. Manual interface checks: dumpcap -D; tcpdump -D.')
+        finally:
+            bv.write(self.output/'capture-command.json', dict(interface=self.tools['interface'],
+                     filter=FILTER, attempts=attempts, capture_file=str(self.path) if self.path else None))
+
+    def stop(self):
+        if self.child is None:
+            return
+        try:
+            running = self.child.poll() is None
+            if running:
+                self.child.send_signal(signal.SIGINT)
+            try:
+                code = self.child.wait(timeout=10)
+                self.clean = running and code == 0
+            except subprocess.TimeoutExpired:
+                self.child.kill(); self.child.wait(timeout=5)
+                self.clean = False
+        finally:
+            self.child = None
+            if self.log:
+                self.log.close(); self.log = None
+
+
+def hello(raw):
+    r = bv.Reader(raw)
+    bv.require(r.number(1) == 1 and r.number(3) == len(raw)-4, 'Malformed ClientHello')
+    r.take(2); random = r.take(32).hex(); r.vector(1); r.vector(); r.vector(1)
+    exts = bv.Reader(r.vector()); r.finish(); payload = None; hostname = None
+    while exts.pos < len(exts.data):
+        kind, value = exts.number(2), exts.vector()
+        if kind == 0xca34:
+            bv.require(payload is None, 'Duplicate TAI extension')
+            payload = value
+        if kind == 0:
+            names = bv.Reader(value); entries = bv.Reader(names.vector()); names.finish()
+            while entries.pos < len(entries.data):
+                name_type, name = entries.number(1), entries.vector()
+                if name_type == 0: hostname = name.decode('ascii')
+    ids = []
+    if payload is not None:
+        outer = bv.Reader(payload); entries = bv.Reader(outer.vector()); outer.finish()
+        while entries.pos < len(entries.data):
+            raw_id = entries.vector(1); arcs = []; n = 0
+            bv.require(bool(raw_id) and not raw_id[-1] & 128, 'Malformed Trust Anchor ID')
+            for byte in raw_id:
+                n = (n << 7) | (byte & 127)
+                if not byte & 128: arcs.append(n); n = 0
+            ids.append(dict(hex=raw_id.hex(), decimal='.'.join(map(str, arcs))))
+    return dict(client_random=random, hostname=hostname, client_hello_observed=True,
+                trust_anchor_ids_extension_observed=payload is not None,
+                trust_anchor_ids_extension_type='0xca34' if payload is not None else None,
+                trust_anchor_ids_extension_payload_bytes=len(payload) if payload is not None else None,
+                trust_anchor_ids_extension_payload_hex=payload.hex() if payload is not None else None,
+                trust_anchor_ids=ids, requested_tai_observed=any(i['hex'] == bv.core.relid(bv.REQUESTED).hex() for i in ids))
+
+
+def plaintext_hellos(segments, initial_sequence):
+    """Reassemble a contiguous TCP prefix, then plaintext TLS handshake records only."""
+    bv.require(initial_sequence is not None, 'Missing SYN: incomplete capture')
+    data = bytearray()
+    for seq, payload in sorted(segments, key=lambda item: (item[0]-initial_sequence) % (1 << 32)):
+        offset = (seq-initial_sequence) % (1 << 32)
+        if offset > len(data): break
+        overlap = min(len(payload), len(data)-offset)
+        bv.require(data[offset:offset+overlap] == payload[:overlap], 'Conflicting TCP retransmission')
+        data.extend(payload[overlap:])
+        bv.require(len(data) <= 8*1024*1024, 'TCP prefix exceeds bounded analysis size')
+    pos = 0; handshake = bytearray(); found = []
+    while pos+5 <= len(data):
+        kind = data[pos]; size = int.from_bytes(data[pos+3:pos+5], 'big')
+        if pos+5+size > len(data): break
+        record = data[pos+5:pos+5+size]; pos += 5+size
+        if kind != 22: continue  # Never interpret encrypted application_data as plaintext TLS.
+        handshake.extend(record)
+        while len(handshake) >= 4:
+            size = 4+int.from_bytes(handshake[1:4], 'big')
+            if len(handshake) < size: break
+            raw = bytes(handshake[:size]); del handshake[:size]
+            if raw[0] == 1: found.append(hello(raw))
+    return found
+
+
+def netlog_connections(net):
+    """Index ClientHellos and conservative unused-TLS evidence by dependency component."""
+    types = {v: k for k, v in net.get('constants', {}).get('logEventTypes', {}).items()}
+    end_phase = net.get('constants', {}).get('logEventPhase', {}).get('PHASE_END', 2)
+    graph = {}; grouped = {}
+
+    def dependencies(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key == 'source_dependency' and isinstance(item, dict) and 'id' in item:
+                    yield item['id']
+                else:
+                    yield from dependencies(item)
+        elif isinstance(value, list):
+            for item in value: yield from dependencies(item)
+
+    def has_url(value):
+        if isinstance(value, dict):
+            return any((key == 'url' and bool(item)) or has_url(item) for key, item in value.items())
+        return isinstance(value, list) and any(has_url(item) for item in value)
+
+    for event in net.get('events', []):
+        sid = event.get('source', {}).get('id')
+        if sid is None: continue
+        grouped.setdefault(sid, []).append(event)
+        graph.setdefault(sid, set())
+        for dep in dependencies(event.get('params', {})):
+            graph[sid].add(dep); graph.setdefault(dep, set()).add(sid)
+    indexed = {}; visited = set()
+    for sid in graph:
+        if sid in visited: continue
+        component = {sid}; todo = [sid]
+        while todo:
+            for dep in graph[todo.pop()] - component:
+                component.add(dep); todo.append(dep)
+        visited.update(component)
+        events = sorted((event for node in component for event in grouped.get(node, [])),
+                        key=lambda event: float(event.get('time', 0)))
+        hellos = {}; connected_at = None; closed_unused = False; used = False
+        http_request = False; authentication = False; client_finished = False
+        for event in events:
+            name = types.get(event.get('type'), event.get('type'))
+            params = event.get('params', {})
+            used |= has_url(params) or 'SEND_REQUEST' in str(name) or name in (
+                'HTTP2_SESSION_SEND_HEADERS', 'HTTP3_HEADERS_SENT')
+            http_request |= 'SEND_REQUEST' in str(name) or name in (
+                'HTTP2_SESSION_SEND_HEADERS', 'HTTP3_HEADERS_SENT')
+            authentication |= (name in ('SSL_HANDSHAKE_MESSAGE_SENT', 'SSL_HANDSHAKE_MESSAGE_RECEIVED')
+                               and params.get('type') in (11, 15, 20))
+            client_finished |= name == 'SSL_HANDSHAKE_MESSAGE_SENT' and params.get('type') == 20
+            if name == 'SSL_HANDSHAKE_MESSAGE_SENT' and params.get('type') == 1:
+                item = hello(base64.b64decode(params['bytes'], validate=True))
+                random = item['client_random']
+                bv.require(random not in hellos or hellos[random] == item, 'Conflicting NetLog ClientHellos')
+                hellos[random] = item
+            if (name == 'SSL_CONNECT' and event.get('phase') == end_phase
+                    and params.get('net_error', 0) == 0 and params.get('version') == 'TLS 1.3'):
+                connected_at = float(event.get('time', 0))
+            if (name == 'SOCKET_POOL_CLOSING_SOCKET' and params.get('reason') == 'Socket pool destroyed'
+                    and connected_at is not None and float(event.get('time', 0)) >= connected_at):
+                closed_unused = True
+        # A shared component containing several handshakes cannot attribute its SSL_CONNECT
+        # and pool-close events to an individual connection safely.
+        auxiliary = len(hellos) == 1 and connected_at is not None and closed_unused and not used
+        for random, item in hellos.items():
+            bv.require(random not in indexed, 'ClientHello random occurs in multiple NetLog components')
+            indexed[random] = dict(hello=item, auxiliary_tls_only=auxiliary,
+                                   tls_completed=connected_at is not None,
+                                   client_finished_observed=client_finished,
+                                   authentication_observed=authentication, http_request_observed=http_request)
+    return indexed
+
+
+def analyze(output, capture, browser_result):
+    result = dict(name=browser_result['name'], observed_outcome='INCONCLUSIVE', **{'pass': False},
+                  wire_observed={k: None for k in METRICS},
+                  pcap_tls_observed=dict(client_hello_observed=None, decryption_configured=False,
+                                         encrypted_handshake_visibility='Not decoded; see semantic_evidence'),
+                  semantic_evidence=dict(source='browser-validation classifier, NetLog and server.log',
+                                         browser_result=browser_result), reasons=[])
+    try:
+        bv.require(capture.path is not None and capture.path.is_file(), 'Capture file missing')
+        bv.require(capture.clean, 'Capture did not stop cleanly; packet completeness unconfirmed')
+        capture_logs = '\n'.join(p.read_text(errors='replace') for p in output.glob('*.stderr.log')
+                                 if p.name in ('dumpcap.stderr.log', 'tcpdump.stderr.log'))
+        dropped = [int(n) for n in re.findall(r'(\d+) packets dropped by kernel', capture_logs)]
+        dropped += [int(n) for n in re.findall(r'Packets dropped: (\d+)', capture_logs)]
+        bv.require(not any(dropped), 'Capture tool reported dropped packets')
+        tshark = capture.tools['tshark']
+        bv.require(tshark, 'tshark unavailable: capture preserved; wire analysis/correlation unavailable')
+        if capture.path.suffix == '.pcap':
+            converted = output/'capture.pcapng'
+            bv.command([tshark, '-n', '-r', capture.path, '-F', 'pcapng', '-w', converted])
+            capture.path = converted
+        fields = ('frame.number', 'ip.src', 'ip.dst', 'tcp.srcport', 'tcp.dstport', 'tcp.stream',
+                  'tcp.seq_raw', 'tcp.flags.syn', 'tcp.flags.ack', 'tcp.len', 'tcp.payload')
+        cmd = [tshark, '-n', '-r', str(capture.path), '-Y', 'ip.src == 127.0.0.1 && ip.dst == 127.0.0.1 && tcp.port == 4433',
+               '-T', 'fields', '-E', 'separator=/t', '-E', 'occurrence=f']
+        for field in fields: cmd += ['-e', field]
+        bv.write(output/'analysis-command.json', dict(command=cmd))
+        with (output/'tshark.tsv').open('x') as out, (output/'tshark.stderr').open('x') as err:
+            analysis = subprocess.run(cmd, stdout=out, stderr=err, timeout=60)
+        bv.require(analysis.returncode == 0, 'tshark failed; inspect tshark.stderr')
+        streams = {}
+        with (output/'tshark.tsv').open() as source:
+            for row in csv.reader(source, delimiter='\t'):
+                bv.require(len(row) == len(fields), 'Incomplete tshark fields')
+                frame, src, dst, sport, dport, stream, seq, syn, ack, length, payload = row
+                entry = streams.setdefault(stream, dict(stream=int(stream), client_port=None, segments=[], isn=None,
+                                                         **{k: 0 for k in METRICS}))
+                direction = 'client_to_server' if dport == '4433' else 'server_to_client'
+                port = int(sport if dport == '4433' else dport)
+                bv.require(entry['client_port'] in (None, port), 'Ambiguous TCP stream endpoints')
+                entry['client_port'] = port
+                entry['tcp_packets_'+direction] += 1; entry['tcp_packets_total'] += 1
+                entry['tcp_payload_bytes_'+direction] += int(length); entry['tcp_payload_bytes_total'] += int(length)
+                if dport == '4433':
+                    if syn.lower() in ('1', 'true') and ack.lower() in ('0', 'false'):
+                        entry['isn'] = (int(seq)+1) % (1 << 32)
+                    if int(length):
+                        raw = bytes.fromhex(payload.replace(':', ''))
+                        bv.require(len(raw) == int(length), 'Truncated TCP payload')
+                        entry['segments'].append((int(seq), raw))
+        server = (output/'server.log').read_text(errors='replace')
+        server_hellos = {}; early_rejections = set(); post_auth_rejections = set()
+        hello_matches = list(re.finditer(r'^<<< TLS[^\n]*, ClientHello\n((?:    [0-9a-f ]+\n)+)', server, re.M))
+        for index, match in enumerate(hello_matches):
+            item = hello(bytes.fromhex(match[1])); server_hellos[item['client_random']] = item
+            # s_server handles connections sequentially; bound evidence to this ClientHello.
+            transcript = server[match.end():hello_matches[index+1].start() if index+1 < len(hello_matches) else len(server)]
+            if (re.search(r'^>>> TLS[^\n]*, Alert[^\n]*, fatal handshake_failure\s*$', transcript, re.M)
+                    and not re.search(r'^(?:>>>|<<<) TLS[^\n]*, Handshake[^\n]*, (?:ServerHello|Certificate|CertificateVerify|Finished)\s*$', transcript, re.M)
+                    and not re.search(r'ApplicationData|Application Data|^(?:GET|POST|HEAD) ', transcript, re.M)):
+                early_rejections.add(item['client_random'])
+            if result['name'] in ('mtc-bad-merkle', 'mtc-bad-serial'):
+                flight = [re.search(r'^>>> TLS[^\n]*, Handshake[^\n]*, '+name+r'\n((?:    [0-9a-f ]+\n)+)',
+                                    transcript, re.M)
+                          for name in ('EncryptedExtensions', 'Certificate', 'CertificateVerify', 'Finished')]
+                alert = re.search(r'^<<< TLS[^\n]*, Alert[^\n]*, fatal certificate[_ ]unknown\n((?:    [0-9a-f ]+\n)+)',
+                                  transcript, re.M)
+                if (all(flight) and alert and bytes.fromhex(alert[1]) == b'\x02\x2e'
+                        and all(a.end() <= b.start() for a, b in zip(flight, flight[1:]+[alert]))
+                        and item['requested_tai_observed']
+                        and not re.search(r'^<<< TLS[^\n]*, Handshake[^\n]*, Finished\s*$|ApplicationData|Application Data|^(?:GET|POST|HEAD) ',
+                                          transcript, re.M)):
+                    # Decrypted semantic evidence comes from s_server, never the encrypted PCAP.
+                    ee = base64.b64encode(bytes.fromhex(flight[0][1])).decode('ascii')
+                    if bv.encrypted_extensions_selected([
+                            ('SSL_HANDSHAKE_MESSAGE_RECEIVED', dict(type=8, bytes=ee), None, None)]):
+                        post_auth_rejections.add(item['client_random'])
+        url = bv.read(output/'chromium-command.json')['command'][-1]
+        net = bv.read(output/'netlog.json')
+        events = bv.relevant_netlog(net, url)
+        net_connections = netlog_connections(net)
+        net_hellos = {}
+        for name, params, _, _ in events:
+            if name == 'SSL_HANDSHAKE_MESSAGE_SENT' and params.get('type') == 1:
+                item = hello(base64.b64decode(params['bytes'], validate=True)); net_hellos[item['client_random']] = item
+        matched = []; observations = []; seen = set(); unmatched = []
+        for entry in streams.values():
+            segments = entry.pop('segments'); isn = entry.pop('isn')
+            if not segments:
+                unmatched.append(entry); continue
+            items = plaintext_hellos(segments, isn)
+            bv.require(bool(items), 'TCP payload without a complete ClientHello')
+            classifications = []; randoms = []; rejected = []; rejected_after = []
+            for item in items:
+                random = item['client_random']
+                bv.require(item['hostname'] == bv.HOST and server_hellos.get(random) == item,
+                           'PCAP/server ClientHello mismatch or uncorrelated traffic')
+                connection = net_connections.get(random)
+                if connection is not None:
+                    bv.require(connection['hello'] == item, 'PCAP/NetLog ClientHello contents mismatch')
+                early = (result['name'] == 'mtc-no-trust' and random in early_rejections
+                         and entry['tcp_payload_bytes_server_to_client'] == 7
+                         and connection is not None and not connection['tls_completed']
+                         and not connection['authentication_observed'] and not connection['http_request_observed'])
+                rejected.append(early)
+                after = (result['name'] in ('mtc-bad-merkle', 'mtc-bad-serial')
+                         and random in post_auth_rejections and connection is not None
+                         and not connection['tls_completed'] and not connection['client_finished_observed']
+                         and not connection['http_request_observed'])
+                rejected_after.append(after)
+                if random in net_hellos:
+                    bv.require(net_hellos[random] == item, 'URL-linked ClientHello contents mismatch')
+                    classification = 'url_linked'
+                elif early:
+                    classification = 'rejected_before_server_auth'
+                elif after:
+                    classification = 'rejected_after_server_auth'
+                elif connection is not None and connection['auxiliary_tls_only']:
+                    classification = 'auxiliary_tls_only'
+                else:
+                    classification = 'other_correlated'
+                bv.require(random not in seen, 'ClientHello random maps to more than one captured handshake')
+                classifications.append(classification); randoms.append(random)
+                seen.add(random); observations.append(dict(stream=entry['stream'], **item))
+            entry.update(client_random=randoms[0], client_randoms=randoms,
+                         rejected_before_server_auth=all(rejected),
+                         rejected_after_server_auth=all(rejected_after),
+                         requested_tai_observed=all(item['requested_tai_observed'] for item in items),
+                         classification=classifications[0] if len(set(classifications)) == 1 else 'other_correlated')
+            matched.append(entry)
+        bv.require(bool(seen) and seen == set(server_hellos), 'Incomplete PCAP/server connection correlation')
+        bv.require(bool(net_hellos) and set(net_hellos) <= seen, 'Missing URL-linked target connection correlation')
+        primary = [entry for entry in matched if entry['classification'] == 'url_linked']
+        result['wire_observed'] = dict(**{k: sum(e[k] for e in matched) for k in METRICS},
+            **{'url_linked_'+k: sum(e[k] for e in primary) for k in METRICS},
+            url_linked_connection_count=len(primary), url_linked_streams=[e['stream'] for e in primary],
+            auxiliary_tls_only_connection_count=sum(e['classification'] == 'auxiliary_tls_only' for e in matched),
+            rejected_before_server_auth_connection_count=sum(e['rejected_before_server_auth'] for e in matched),
+            rejected_after_server_auth_connection_count=sum(e['rejected_after_server_auth'] for e in matched),
+            connection_count=len(matched), captured_connection_count=len(streams), connections=matched,
+            connections_without_client_payload=unmatched,
+            byte_definition='Observed TCP payload bytes, including retransmissions; excludes all link/IP/TCP headers',
+            primary_scope='TCP payload for connections linked by NetLog to the requested navigation',
+            browser_session_scope='All target TLS connections correlated between PCAP and server.log')
+        result['pcap_tls_observed'].update(client_hello_observed=True, client_hellos=observations,
+            requested_tai_observed=all(o['requested_tai_observed'] for o in observations))
+        case = result['name']
+        expected_group = case in ('mtc-positive', 'mtc-bad-merkle', 'mtc-bad-serial')
+        if case.startswith('mtc-'):
+            bv.require(all(o['requested_tai_observed'] == expected_group for o in observations), 'Unexpected requested TAI in capture')
+        if expected_group:
+            bv.require(browser_result.get('requested_tai_observed') is True, 'Requested TAI differs from browser classifier')
+        bv.require(bool(primary), 'No URL-linked PCAP stream')
+        if case == 'mtc-no-trust':
+            bv.require(all(e['rejected_before_server_auth'] and e['classification'] in
+                           ('url_linked', 'rejected_before_server_auth') for e in matched)
+                       and not any(e['tcp_payload_bytes_total'] for e in unmatched),
+                       'No-trust attempt lacks correlated early fatal rejection or has unexpected payload')
+            bv.require(all(browser_result.get(key) is False for key in (
+                'application_data_observed', 'client_finished_observed', 'server_authentication_flight_observed',
+                'server_finished_observed', 'requested_tai_observed', 'selected_tai_observed')),
+                'No-trust semantic evidence contradicts rejection before server authentication')
+        elif case in ('mtc-bad-merkle', 'mtc-bad-serial'):
+            bv.require(all(e['rejected_after_server_auth'] and e['classification'] in
+                           ('url_linked', 'rejected_after_server_auth') for e in matched)
+                       and not any(e['tcp_payload_bytes_total'] for e in unmatched),
+                       'Attempt lacks correlated post-server-auth certificate_unknown rejection or has unexpected payload')
+            bv.require(all(browser_result.get(key) is True for key in (
+                'requested_tai_observed', 'selected_tai_observed', 'server_authentication_flight_observed',
+                'server_finished_observed')) and all(browser_result.get(key) is False for key in (
+                'client_finished_observed', 'application_data_observed')),
+                'Browser semantic evidence contradicts rejection after server authentication')
+        else:
+            bv.require(not any(e['classification'] == 'other_correlated' for e in matched),
+                       'Additional correlated connection lacks sufficient unused TLS-only evidence')
+        result.update(observed_outcome=browser_result['observed_outcome'], **{'pass': browser_result['pass']})
+    except (ValueError, OSError, KeyError, IndexError, subprocess.SubprocessError) as error:
+        result['reasons'].append(str(error))
+    result['evidence'] = {p.name: str(p) for p in output.iterdir() if p.is_file()}
+    if capture.path is not None and capture.path.is_file():
+        result['capture_file'] = str(capture.path)
+        result['capture_sha256'] = bv.sha(capture.path)
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action', choices=('plan', 'requirements', 'status', 'run'))
+    parser.add_argument('case', nargs='?', choices=(*bv.CASES, 'all'))
+    parser.add_argument('--chromium', type=Path)
+    parser.add_argument('--timeout', type=int, default=60)
+    parser.add_argument('--image', default='mt-tls-mtc:local')
+    args = parser.parse_args()
+    bv.require((args.action == 'run') == bool(args.case), 'run requires CASE; other actions take no case')
+    bv.require(5 <= args.timeout <= 300, 'Timeout must be between 5 and 300 seconds')
+    tools = requirements()
+    if args.action == 'requirements':
+        print(json.dumps(tools, indent=2)); return 0
+    if args.action == 'plan':
+        print('PRINT ONLY: reuse browser-validation credentials, server, headless browser and classifier.')
+        print('Cases: '+', '.join(bv.CASES))
+        print('One capture per case; individual negative runs also capture mtc-positive as their required control.')
+        print('Order: validate credentials/hostname -> server -> loopback capture ready -> headless browser -> stop capture -> stop server -> correlate.')
+        print('Darwin lo0 / Linux lo; filter: '+FILTER+'; dumpcap preferred, tcpdump fallback; no automatic sudo/install.')
+        print('tshark optional: without it, preserve capture and report INCONCLUSIVE. TCP payload totals include retransmissions.')
+        print('No TLS decryption: encrypted authentication evidence comes from server.log/NetLog/classifier only.')
+        return 0
+    if args.action == 'status':
+        roots = sorted((bv.REPO/'artifacts/results').glob(PREFIX+'*/summary.json'))
+        print(json.dumps(bv.read(roots[-1]), indent=2) if roots else 'NO BROWSER PCAP RESULTS'); return 0
+    bv.require(tools['interface'], 'Only Darwin and Linux loopback capture are supported')
+    bv.require(tools['dumpcap'] or tools['tcpdump'], tools['instruction'])
+    # Share the functional runner lock: both workflows use the same TLS port.
+    lock = bv.REPO/'.mt-state/chromium-browser-validation.lock'
+    lock.parent.mkdir(exist_ok=True)
+    try: lock.mkdir()
+    except FileExistsError: raise ValueError('Browser validation locked; inspect active run before retrying')
+    root = None; summary = dict(overall_pass=False, cases=[], capture_backend=tools)
+    try:
+        root = bv.REPO/'artifacts/results'/(PREFIX+bv.stamp()); root.mkdir(parents=True)
+        bv.write(root/'owner.json', dict(workflow='mtc.browser-pcap', root=str(root)))
+        print('Result directory: '+str(root), flush=True)
+        credentials = bv.prepare_credentials(bv.REPO, root, args.image)
+        bv.require(credentials['x509']['root_trust']['status'] == 'TRUSTED',
+                   'X509 root is not trusted; use browser-validation trust-x509 explicitly')
+        bv.check_hostname()
+        browser = bv.browser_executable(args.chromium)
+        with socket.socket() as sock:
+            try: sock.bind(('127.0.0.1', 4433))
+            except OSError: raise ValueError('Port 4433 occupied; stop its owner explicitly')
+        summary.update(chromium=browser, credentials=credentials, hostname=bv.HOST, tls=bv.TLS)
+        cases = bv.CASES if args.case == 'all' else (('mtc-positive', args.case) if args.case in bv.CASES[1:4] else (args.case,))
+        control = False
+        for case in cases:
+            output = root/case; capture = Capture(output, tools)
+            try:
+                for selected, keys in [(credentials['mtc'], [('cert','cert_sha256'), ('key','key_sha256'), ('trust','trust_sha256'), ('anchor','anchor_sha256')]),
+                                       (credentials['x509'], [('cert','certificate_sha256'), ('key','key_sha256'), ('root','root_sha256')])]:
+                    for pathkey, hashkey in keys:
+                        bv.require(bv.sha(selected[pathkey]) == selected[hashkey], 'Credential changed: '+pathkey)
+                browser_result = bv.run_case(case, credentials, browser, output, root, args.timeout, control, capture=capture)
+                bv.write(output/'browser-result.json', browser_result)
+                result = analyze(output, capture, browser_result)
+            except (ValueError, OSError, subprocess.SubprocessError) as error:
+                output.mkdir(exist_ok=True)
+                result = dict(name=case, observed_outcome='INCONCLUSIVE', **{'pass': False}, reasons=[str(error)])
+            finally:
+                capture.stop()
+            bv.write(output/'result.json', result); bv.write(output/'summary.json', result)
+            summary['cases'].append(result)
+            if case == 'mtc-positive': control = result['pass']
+            print(case+': '+result['observed_outcome'], flush=True)
+        summary['overall_pass'] = all(r['pass'] for r in summary['cases'])
+        return 0 if summary['overall_pass'] else 1
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        summary['reason'] = str(error); raise
+    finally:
+        try:
+            if root is not None: bv.write(root/'summary.json', summary)
+        finally:
+            lock.rmdir()
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        print('ERROR: '+str(error), file=sys.stderr); sys.exit(1)
