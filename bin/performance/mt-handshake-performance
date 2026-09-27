@@ -24,8 +24,8 @@ usage() {
   cat <<EOF
 Usage:
   $SELF menu
-  $SELF init [CONFIG] [KEM]
-  $SELF new [CONFIG] [KEM]
+  $SELF init [CONFIG] [KEM] [DEPTH=2|3|4|5|all]
+  $SELF new [CONFIG] [KEM] [DEPTH=2|3|4|5|all]
   $SELF status [CONFIG]
   $SELF plan [CONFIG] [OUTPUT]
   $SELF run-native [CONFIG] [OUTPUT]
@@ -43,6 +43,9 @@ Usage:
 CONFIG defaults to .mt-state/handshake-performance.env. When OUTPUT is omitted,
 a new timestamped directory is selected below artifacts/results/. Nothing is
 executed by init or plan.
+X509_DEPTH defaults to 2 (including the local root; 1 certificate transmitted).
+D=3..5/all require existing X509_CHAIN_FIXTURES (or active CHAIN_FIXTURES).
+Only single authentication supports D>2. Mutual remains D=2 on both sides.
 EOF
 }
 
@@ -84,6 +87,82 @@ select_kem() {
   configure_kem "${selection:-1}"
 }
 
+configure_depth() {
+  X509_DEPTH=${1:-2}
+  case "$X509_DEPTH" in
+    2|3|4|5) X509_DEPTHS=("$X509_DEPTH");;
+    all) X509_DEPTHS=(2 3 4 5);;
+    *) fail 'X509_DEPTH must be 2, 3, 4, 5, or all (root included).';;
+  esac
+}
+
+select_depth() {
+  local selection
+  printf '%s\n' 'Select X.509 trust-path depth:' \
+    '  1) D=2  root -> server; 1 certificate transmitted; current/default baseline' \
+    '  2) D=3  root -> intermediate -> server; 2 certificates transmitted; representative PKI' \
+    '  3) D=4  root -> intermediate -> intermediate -> server; 3 certificates transmitted; deep-chain sensitivity' \
+    '  4) D=5  root -> intermediate -> intermediate -> intermediate -> server; 4 certificates transmitted; stress case' \
+    '  5) All D=2..5' >&2
+  read -r -p 'Choice [1]: ' selection || selection=1
+  case "${selection:-1}" in
+    1) configure_depth 2;; 2) configure_depth 3;; 3) configure_depth 4;;
+    4) configure_depth 5;; 5) configure_depth all;; *) fail 'Choice must be 1..5.';;
+  esac
+}
+
+depth_output() {
+  if [[ "$X509_DEPTH" == 2 ]]; then printf '%s\n' "$1"
+  else printf '%s/d%s\n' "$1" "$2"; fi
+}
+
+depth_plan() {
+  local depth
+  for depth in "${X509_DEPTHS[@]}"; do
+    printf 'X.509 trust-path depth D=%s (local root included): %s certificate(s) transmitted; root not transmitted\n' "$depth" "$((depth-1))"
+    printf '  Scenario: x509-simple-d%s; output: %s\n' "$depth" "$(depth_output "$1" "$depth")"
+  done
+  [[ "$X509_DEPTH" == 2 ]] || printf 'Mutual/all-authentication execution: BLOCKED (client fixtures support only D=2). MTC credentials remain unchanged.\n'
+}
+
+check_depth_mode() {
+  [[ "$X509_DEPTH" != 2 ]] || return 0
+  case "$command" in
+    run-native-single|run-pcap-single|run-single) ;;
+    *) fail 'D=3..5/all supports single authentication only; mutual client fixtures are D=2. No dependencies started.';;
+  esac
+}
+
+validate_depth_fixtures() {
+  [[ "$X509_DEPTH" != 2 ]] || return 0
+  if [[ -z "${X509_CHAIN_FIXTURES:-}" && -f "$REPO/.mt-state/cert-scaling/paths.env" ]]; then
+    X509_CHAIN_FIXTURES=$(sed -n 's/^CHAIN_FIXTURES=//p' "$REPO/.mt-state/cert-scaling/paths.env")
+  fi
+  [[ "${X509_CHAIN_FIXTURES:-}" == artifacts/* ]] || fail 'Set X509_CHAIN_FIXTURES to existing cert_chain_scaling fixtures below artifacts/. No fixtures generated.'
+  python3 -B - "$REPO" "$X509_CHAIN_FIXTURES" "${X509_DEPTHS[*]}" "${PROFILES[*]}" <<'PYDEPTH'
+import json, re, sys
+from pathlib import Path
+repo=Path(sys.argv[1]); root=(repo/sys.argv[2]).resolve()
+if not root.is_relative_to((repo/'artifacts').resolve()): raise SystemExit('Chain fixtures must remain below artifacts/')
+sys.path.insert(0,str(repo/'campaigns/scaling/cert_chain_scaling'))
+from result_state import validate_fixture
+for depth in map(int,sys.argv[3].split()):
+ if depth==2: continue  # Preserve original population credentials, including in All.
+ for profile in sys.argv[4].split():
+  directory=root/profile/f'depth-{depth}'
+  validate_fixture(directory,profile,depth)
+  meta=json.loads((directory/'manifest.json').read_text())
+  names=['root.pem','server.pem','server.key','intermediates.pem','server-chain.pem']
+  if not all(n in meta['files_sha256'] for n in names): raise ValueError('Incomplete fixture hashes: '+str(directory))
+  def certs(name): return re.findall(rb'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', (directory/name).read_bytes(),re.S)
+  root_certs,leaf,intermediates,chain=[certs(n) for n in ('root.pem','server.pem','intermediates.pem','server-chain.pem')]
+  if not (len(root_certs)==len(leaf)==1 and len(intermediates)==depth-2 and chain==leaf+intermediates and root_certs[0] not in chain
+          and meta['transmitted_certificates']==depth-1 and meta['root_transmitted'] is False):
+   raise ValueError('Invalid depth/transmitted chain: '+str(directory))
+print('PASS existing chain fixture hashes/counts; TLS execution NOT CHECKED')
+PYDEPTH
+}
+
 default_performance_output() {
   printf 'artifacts/results/handshake-performance-%s-%s-%s\n' "$KEM_SLUG" "$(date -u +%Y%m%dT%H%M%SZ)" "$$"
 }
@@ -96,6 +175,9 @@ config_template() {
   cat <<'EOF'
 # Paths are relative to the repository and must remain below artifacts/.
 KEM=x25519
+X509_DEPTH=2
+# Optional existing cert_chain_scaling fixture root; empty uses active CHAIN_FIXTURES.
+X509_CHAIN_FIXTURES=
 RUNS=30
 WARMUPS=5
 PCAP_RUNS=30
@@ -111,11 +193,12 @@ EOF
 }
 
 create_configuration() {
-  local config=$1 selected=${2:-}
+  local config=$1 selected=${2:-} depth=${3:-}
   [[ ! -e "$config" ]] || fail "Configuration exists: $config"
   if [[ -n "$selected" ]]; then configure_kem "$selected"; else select_kem; fi
+  if [[ -n "$depth" ]]; then configure_depth "$depth"; else select_depth; fi
   mkdir -p "$(dirname "$config")"
-  config_template | sed "s/^KEM=x25519$/KEM=$KEM/" > "$config"
+  config_template | sed -e "s/^KEM=x25519$/KEM=$KEM/" -e "s/^X509_DEPTH=2$/X509_DEPTH=$X509_DEPTH/" > "$config"
   select_active_config "$config"
   echo "Created $config with key establishment $KEM_LABEL ($KEM_GROUP). A run will replace the placeholders automatically from the active validated fixtures."
 }
@@ -152,13 +235,15 @@ load_plan_counts() {
   local file=$1 name value
 
   KEM=x25519
+  X509_DEPTH=2
+  X509_CHAIN_FIXTURES=
   RUNS=
   WARMUPS=
   PCAP_RUNS=
 
   while IFS='=' read -r name value; do
     case "$name" in
-      KEM|RUNS|WARMUPS|PCAP_RUNS)
+      KEM|RUNS|WARMUPS|PCAP_RUNS|X509_DEPTH|X509_CHAIN_FIXTURES)
         printf -v "$name" '%s' "$value"
         ;;
     esac
@@ -173,6 +258,7 @@ load_plan_counts() {
      "$PCAP_RUNS" =~ ^[1-9][0-9]*$ ]] ||
     fail 'RUNS/WARMUPS/PCAP_RUNS must be integers.'
   configure_kem "$KEM"
+  configure_depth "$X509_DEPTH"
 }
 
 # Fixture provenance must not replace the performance KEM selection. Bash
@@ -218,7 +304,7 @@ ensure_retry_group_support() {
 write_automatic_config() {
   local file=$1
   load_fixture_paths
-  python3 - "$REPO" "$file" "$MTC16" "$KEM" <<'PYCONFIG'
+  python3 - "$REPO" "$file" "$MTC16" "$KEM" "$X509_DEPTH" "${X509_CHAIN_FIXTURES:-}" "$RUNS" "$WARMUPS" "$PCAP_RUNS" <<'PYCONFIG'
 import json, sys
 from pathlib import Path
 
@@ -237,9 +323,11 @@ text = f'''# Automatically derived from validated active fixtures.
 # X.509 and MTC use matching server profiles across all nine active profiles, leaf 0.
 # Mutual authentication uses matching client/server signature profiles.
 KEM={kem}
-RUNS=30
-WARMUPS=5
-PCAP_RUNS=30
+X509_DEPTH={sys.argv[5]}
+X509_CHAIN_FIXTURES={sys.argv[6]}
+RUNS={sys.argv[7]}
+WARMUPS={sys.argv[8]}
+PCAP_RUNS={sys.argv[9]}
 
 '''
 text += ''.join(f'{key}={path}\n' for key, path in values.items() if key.startswith('MTC_SERVER_') and key != 'MTC_SERVER_ID')
@@ -262,6 +350,7 @@ case_args() {
   local profile=$1 case_name=$2 population="$MTC_ROOT/population/$1" mtc="$MTC_ROOT/batch16/mtc/$1" ca_id client client_mtc client_id
   client="$MUTUAL_CLIENT_ROOT/profiles/$profile"
   client_mtc="$client/mtc-n16"
+  case_name=${case_name%-d[2-5]}
   ca_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ca_id"])' "$REPO/$mtc/manifest.json")
   client_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ca_id"])' "$REPO/$client_mtc/manifest.json")
   server_args=(); client_args=()
@@ -269,6 +358,11 @@ case_args() {
     x509-simple)
       server_args=(-cert "$(inside "$population/0.pem")" -key "$(inside "$population/0.key")")
       client_args=(-CAfile "$(inside "$population/ca.pem")" -verify_hostname server)
+      if [[ "${CURRENT_X509_DEPTH:-2}" != 2 ]]; then
+        local chain="$X509_CHAIN_FIXTURES/$profile/depth-$CURRENT_X509_DEPTH"
+        server_args=(-cert "$(inside "$chain/server.pem")" -key "$(inside "$chain/server.key")" -cert_chain "$(inside "$chain/intermediates.pem")")
+        client_args=(-CAfile "$(inside "$chain/root.pem")" -verify_hostname server)
+      fi
       ;;
     mtc-simple-landmark)
       server_args=(-cert "$(inside "$mtc/landmark-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id.1.1.1" -mtc_landmark)
@@ -279,6 +373,7 @@ case_args() {
       client_args=(-mtc_trust "$(inside "$mtc/authority.bin")")
       ;;
     x509-mutual)
+      [[ "${CURRENT_X509_DEPTH:-2}" == 2 ]] || fail 'Mutual X.509 supports D=2 only.'
       server_args=(-cert "$(inside "$population/0.pem")" -key "$(inside "$population/0.key")" -CAfile "$(inside "$client/x509/client-ca.pem")" -Verify 1 -verify_return_error)
       client_args=(-CAfile "$(inside "$population/ca.pem")" -verify_hostname server -cert "$(inside "$client/x509/client.pem")" -key "$(inside "$client/x509/client.key")")
       ;;
@@ -464,11 +559,14 @@ measure_pcap() {
 
 write_summary() {
   local output=$1
-  python3 - "$output" "$KEM" "$KEM_LABEL" "$KEM_GROUP" <<'PY'
+  python3 - "$output" "$KEM" "$KEM_LABEL" "$KEM_GROUP" "$CURRENT_X509_DEPTH" "${X509_CHAIN_FIXTURES:-}" <<'PY'
 import csv,json,math,statistics,sys
 from pathlib import Path
 root=Path(sys.argv[1]); result={
  'key_establishment':{'id':sys.argv[2],'label':sys.argv[3],'openssl_group':sys.argv[4]},
+ 'x509_trust_path':{'depth_including_root':int(sys.argv[5]),'transmitted_certificates':int(sys.argv[5])-1,'root_transmitted':False,
+                    'fixtures':sys.argv[6] if int(sys.argv[5])>2 else 'original MTC population X.509 baseline',
+                    'scope':'X.509 only; MTC credentials unchanged; mutual supports D=2 only'},
  'mutual_authentication':{'signature_pairing':'client_and_server_use_the_same_profile'},
  'definitions':{
  'process_wall_ms':'host monotonic time around one Docker client process; includes process/container overhead',
@@ -500,6 +598,8 @@ for source,key in [('native.csv','native'),('pcap.csv','pcap')]:
    fields=['tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native','process_wall_ms','tls_bytes_total'] if key=='native' else ['tcp_syn_to_synack_ms','tls_clienthello_to_finished_ms','connection_syn_to_finished_ms','wire_bytes','packet_count']
    cases[profile][name]={
     'key_establishment':result['key_establishment'],
+    **({'depth_including_root':int(sys.argv[5]),'transmitted_certificates':int(sys.argv[5])-1,
+        'scenario':f'{profile}-{name}' if '-d' in name else f'{profile}-{name}-d{sys.argv[5]}'} if name.startswith('x509-') else {}),
     **{f:describe([float(r[f]) for r in group]) for f in fields},
    }
  result[key]=cases
@@ -595,6 +695,7 @@ status_config() {
     echo 'Status: CONFIGURED'
   fi
   load_plan_counts "$config"
+  depth_plan '(selected output)'
   printf 'Key establishment: %s (%s)\nRepetitions: native=%s measured + %s warmups; PCAP=%s\n' \
     "$KEM_LABEL" "$KEM_GROUP" "$RUNS" "$WARMUPS" "$PCAP_RUNS"
   mtc_root=$(sed -nE 's/^MTC_ROOT=//p' "$config" | tail -1)
@@ -651,14 +752,14 @@ command=${1:-menu}
 case "$command" in
   menu) menu;;
   init)
-    [[ $# -le 3 ]] || fail 'Usage: init [CONFIG] [KEM]'
+    [[ $# -le 4 ]] || fail 'Usage: init [CONFIG] [KEM] [DEPTH]'
     config=${2:-$DEFAULT_CONFIG}
-    create_configuration "$config" "${3:-}"
+    create_configuration "$config" "${3:-}" "${4:-}"
     ;;
   new)
-    [[ $# -le 3 ]] || fail 'Usage: new [CONFIG] [KEM]'
+    [[ $# -le 4 ]] || fail 'Usage: new [CONFIG] [KEM] [DEPTH]'
     config=${2:-"$REPO/.mt-state/handshake-performance-$(date -u +%Y%m%dT%H%M%SZ)-$$.env"}
-    create_configuration "$config" "${3:-}"
+    create_configuration "$config" "${3:-}" "${4:-}"
     ;;
   status)
     [[ $# -le 2 ]] || fail 'Usage: status [CONFIG]'
@@ -671,9 +772,12 @@ case "$command" in
 
     load_plan_counts "$config"
     output=${3:-$(default_performance_output)}
+    depth_plan "$output"
+    validate_depth_fixtures
 
     printf 'EXECUTION PLAN\nConfiguration: %s\nKey establishment: %s (%s)\n' "$config" "$KEM_LABEL" "$KEM_GROUP"
     printf 'Signature profiles (9): %s\n' "${PROFILES[*]}"
+    [[ "$X509_DEPTH" == 2 ]] || printf 'Counts below are per depth cell. Only single-authentication options are supported for this selection.\n'
     printf 'Mutual authentication: client and server use the same signature profile.\n\n'
     printf ' 4 Native single:        27 scenarios; %d measured + %d warmups\n' "$((27 * RUNS))" "$((27 * WARMUPS))"
     printf ' 5 Native mutual:        27 scenarios; %d measured + %d warmups\n' "$((27 * RUNS))" "$((27 * WARMUPS))"
@@ -714,13 +818,33 @@ case "$command" in
     fi
     load_plan_counts "$config"
     requested_output=${3:-$(default_performance_output)}
+    check_depth_mode
+    validate_depth_fixtures
+    # Check every output before preparing dependencies or starting any cell.
+    for depth in "${X509_DEPTHS[@]}"; do
+      candidate=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$(depth_output "$requested_output" "$depth")")
+      [[ "$candidate" == "$REPO"/artifacts/results/* && ! -e "$candidate" ]] || fail "Invalid or existing output: $candidate"
+    done
     if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config" || ! grep -q '^MUTUAL_CLIENT_ROOT=' "$config"; then
       ensure_dependencies
       write_automatic_config "$config"
     fi
-    load_config "$config"; output=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$requested_output")
+    load_config "$config"
+    # Recheck after automatic configuration. Never regenerate chain-depth fixtures.
+    configure_depth "${X509_DEPTH:-2}"
+    check_depth_mode
+    validate_depth_fixtures
+    base_cases=("${ACTIVE_CASES[@]}")
+    for CURRENT_X509_DEPTH in "${X509_DEPTHS[@]}"; do
+    ACTIVE_CASES=("${base_cases[@]}")
+    if [[ "$X509_DEPTH" != 2 ]]; then
+      ACTIVE_CASES=("x509-simple-d$CURRENT_X509_DEPTH" mtc-simple-landmark mtc-simple-standalone)
+    fi
+    output=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$(depth_output "$requested_output" "$CURRENT_X509_DEPTH")")
     trap cleanup EXIT INT TERM
     prepare_run "$output"
+    printf '{"depth_including_root":%s,"transmitted_certificates":%s,"root_transmitted":false,"scope":"X.509 only; MTC unchanged"}\n' \
+      "$CURRENT_X509_DEPTH" "$((CURRENT_X509_DEPTH-1))" > "$output/x509-depth.json"
     case "$command" in
       run-native|run-native-single|run-native-mutual) measure_native "$output";;
       run-pcap|run-pcap-single|run-pcap-mutual) measure_pcap "$output";;
@@ -728,11 +852,15 @@ case "$command" in
     esac
     write_summary "$output"
     report="$REPO/artifacts/reports/$(basename "$output")/report.html"
+    if [[ "$X509_DEPTH" != 2 ]]; then
+      report="$REPO/artifacts/reports/${output#"$REPO/artifacts/results/"}/report.html"
+    fi
     python3 "$REPORTER" "$output/summary.json" --output "$report" \
       --mode "$command" --started-epoch "$started_epoch" --ended-epoch "$(date +%s)" \
       --kem-id "$KEM" --kem-label "$KEM_LABEL" --kem-group "$KEM_GROUP"
     cleanup; trap - EXIT INT TERM
     printf 'Completed: %s\nJSON report: %s\nHTML report: %s\n' "$output" "$output/summary.json" "$report"
+    done
     ;;
   help|-h|--help) usage;;
   *) usage; exit 2;;
