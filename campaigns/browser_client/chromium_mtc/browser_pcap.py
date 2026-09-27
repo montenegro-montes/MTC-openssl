@@ -22,6 +22,43 @@ PREFIX = 'chromium-browser-pcap-'
 FILTER = 'tcp port 4433'
 METRICS = ('tcp_packets_client_to_server', 'tcp_packets_server_to_client', 'tcp_packets_total',
            'tcp_payload_bytes_client_to_server', 'tcp_payload_bytes_server_to_client', 'tcp_payload_bytes_total')
+DECOMPOSITION = ('client_hello_tcp_payload_bytes', 'server_initial_flight_tcp_payload_bytes',
+                 'client_post_server_flight_tls_payload_bytes', 'http_request_tcp_payload_bytes',
+                 'http_response_tcp_payload_bytes', 'pre_http_tls_payload_bytes_total',
+                 'client_hello_handshake_bytes')
+DECOMPOSITION_DEFINITIONS = {
+    'client_hello_tcp_payload_bytes': 'Observed bytes overlapping the single plaintext TLS record containing '
+        'only ClientHello, including its 5-byte record header and retransmissions; excludes other coalesced bytes. '
+        'Unavailable for fragmented TLS-record layouts.',
+    'client_hello_handshake_bytes': 'Length of the correlated server.log ClientHello hex dump, including '
+        'the 4-byte handshake header; excludes TLS record headers and retransmissions.',
+    'unavailable_encrypted_components': 'Server-log semantic events are not mapped to PCAP TCP sequence ranges. '
+        'Encrypted TLS 1.3 records do not distinguish Finished, HTTP, alerts or post-handshake messages. '
+        'Packet direction/order alone cannot safely establish complete flight or HTTP boundaries.',
+    'aggregation': 'Sum across successful URL-linked connections only when every URL-linked connection '
+        'has an available value; otherwise null (blank in CSV). Missing values are never zero.'}
+
+
+def connection_decomposition(segments, isn, handshake_bytes):
+    """Optional measurement only; never changes correlation or PASS conditions."""
+    values = dict.fromkeys(DECOMPOSITION)
+    values['client_hello_handshake_bytes'] = handshake_bytes
+    # Existing correlation has checked retransmission consistency and the ClientHello.
+    # Bound this extra prefix read to one possible ClientHello record.
+    limit = handshake_bytes+5
+    prefix = bytearray()
+    for seq, payload in sorted(segments, key=lambda item: (item[0]-isn) % (1 << 32)):
+        offset = (seq-isn) % (1 << 32)
+        if offset > len(prefix) or offset >= limit: break
+        overlap = min(len(payload), len(prefix)-offset)
+        prefix.extend(payload[overlap:overlap+max(0, limit-len(prefix))])
+    if (len(prefix) == limit and prefix[0] == 22 and prefix[5] == 1
+            and int.from_bytes(prefix[3:5], 'big') == handshake_bytes
+            and int.from_bytes(prefix[6:9], 'big') == handshake_bytes-4):
+        values['client_hello_tcp_payload_bytes'] = sum(
+            max(0, min((seq-isn) % (1 << 32)+len(payload), limit)-(seq-isn) % (1 << 32))
+            for seq, payload in segments)
+    return values
 
 
 def requirements():
@@ -159,6 +196,7 @@ def netlog_connections(net):
     """Index ClientHellos and conservative unused-TLS evidence by dependency component."""
     types = {v: k for k, v in net.get('constants', {}).get('logEventTypes', {}).items()}
     end_phase = net.get('constants', {}).get('logEventPhase', {}).get('PHASE_END', 2)
+    begin_phase = net.get('constants', {}).get('logEventPhase', {}).get('PHASE_BEGIN', 1)
     graph = {}; grouped = {}
 
     def dependencies(value):
@@ -219,9 +257,34 @@ def netlog_connections(net):
         # A shared component containing several handshakes cannot attribute its SSL_CONNECT
         # and pool-close events to an individual connection safely.
         auxiliary = len(hellos) == 1 and connected_at is not None and closed_unused and not used
+        # Require lifecycle evidence on the ClientHello's own source. Component-wide
+        # evidence can veto this classification but cannot supply a different socket's end.
+        aborted = False
+        if len(hellos) == 1 and not used and not client_finished and connected_at is None:
+            forbidden = any(
+                types.get(e.get('type'), e.get('type')) in (
+                    'SOCKET_IN_USE', 'SSL_SOCKET_BYTES_SENT', 'SSL_SOCKET_BYTES_RECEIVED')
+                or (types.get(e.get('type'), e.get('type')) == 'SSL_CONNECT'
+                    and e.get('phase') == end_phase and e.get('params', {}).get('net_error', 0) == 0)
+                for e in events)
+            for node in component:
+                started = sent_hello = sent_bytes = ended = False
+                for e in sorted(grouped.get(node, []), key=lambda e: float(e.get('time', 0))):
+                    name = types.get(e.get('type'), e.get('type'))
+                    params = e.get('params', {})
+                    if name == 'SSL_CONNECT' and e.get('phase') == begin_phase:
+                        started = True
+                    if started and name == 'SSL_HANDSHAKE_MESSAGE_SENT' and params.get('type') == 1:
+                        sent_hello = True
+                    if sent_hello and name == 'SOCKET_BYTES_SENT' and params.get('byte_count', 0) > 0:
+                        sent_bytes = True
+                    if sent_bytes and name == 'SOCKET_ALIVE' and e.get('phase') == end_phase:
+                        ended = True
+                aborted |= started and sent_hello and sent_bytes and ended and not forbidden
         for random, item in hellos.items():
             bv.require(random not in indexed, 'ClientHello random occurs in multiple NetLog components')
             indexed[random] = dict(hello=item, auxiliary_tls_only=auxiliary,
+                                   aborted_unused_attempt=aborted,
                                    tls_completed=connected_at is not None,
                                    client_finished_observed=client_finished,
                                    authentication_observed=authentication, http_request_observed=http_request)
@@ -280,11 +343,16 @@ def analyze(output, capture, browser_result):
                         entry['segments'].append((int(seq), raw))
         server = (output/'server.log').read_text(errors='replace')
         server_hellos = {}; early_rejections = set(); post_auth_rejections = set()
+        server_hello_lengths = {}; completed = set()
         hello_matches = list(re.finditer(r'^<<< TLS[^\n]*, ClientHello\n((?:    [0-9a-f ]+\n)+)', server, re.M))
         for index, match in enumerate(hello_matches):
             item = hello(bytes.fromhex(match[1])); server_hellos[item['client_random']] = item
             # s_server handles connections sequentially; bound evidence to this ClientHello.
             transcript = server[match.end():hello_matches[index+1].start() if index+1 < len(hello_matches) else len(server)]
+            server_hello_lengths[item['client_random']] = len(bytes.fromhex(match[1]))
+            if all(re.search(r'^'+direction+r' TLS[^\n]*, Handshake[^\n]*, Finished\s*$', transcript, re.M)
+                   for direction in ('>>>', '<<<')):
+                completed.add(item['client_random'])
             if (re.search(r'^>>> TLS[^\n]*, Alert[^\n]*, fatal handshake_failure\s*$', transcript, re.M)
                     and not re.search(r'^(?:>>>|<<<) TLS[^\n]*, Handshake[^\n]*, (?:ServerHello|Certificate|CertificateVerify|Finished)\s*$', transcript, re.M)
                     and not re.search(r'ApplicationData|Application Data|^(?:GET|POST|HEAD) ', transcript, re.M)):
@@ -357,14 +425,36 @@ def analyze(output, capture, browser_result):
                          rejected_after_server_auth=all(rejected_after),
                          requested_tai_observed=all(item['requested_tai_observed'] for item in items),
                          classification=classifications[0] if len(set(classifications)) == 1 else 'other_correlated')
+            if (entry['classification'] == 'url_linked' and len(items) == 1
+                    and randoms[0] in completed and browser_result['pass']
+                    and result['name'] in ('mtc-positive', 'x509-positive')):
+                entry.update(connection_decomposition(segments, isn, server_hello_lengths[randoms[0]]))
             matched.append(entry)
         bv.require(bool(seen) and seen == set(server_hellos), 'Incomplete PCAP/server connection correlation')
         bv.require(bool(net_hellos) and set(net_hellos) <= seen, 'Missing URL-linked target connection correlation')
         primary = [entry for entry in matched if entry['classification'] == 'url_linked']
+        successful_navigation = any(
+            len(e['client_randoms']) == 1 and e['client_random'] in completed
+            and net_connections.get(e['client_random'], {}).get('tls_completed')
+            for e in primary)
+        for entry in matched:
+            connection = net_connections.get(entry['client_random'], {})
+            aborted = (result['name'] in ('mtc-positive', 'x509-positive')
+                       and browser_result['pass'] is True and successful_navigation
+                       and entry['classification'] == 'other_correlated'
+                       and len(entry['client_randoms']) == 1
+                       and connection.get('aborted_unused_attempt', False)
+                       and entry['client_random'] not in completed
+                       # Conservative initial support: no server TLS bytes reached the client.
+                       and entry['tcp_payload_bytes_server_to_client'] == 0)
+            entry['aborted_before_tls_completion'] = aborted
+            if aborted:
+                entry['classification'] = 'aborted_before_tls_completion'
         result['wire_observed'] = dict(**{k: sum(e[k] for e in matched) for k in METRICS},
             **{'url_linked_'+k: sum(e[k] for e in primary) for k in METRICS},
             url_linked_connection_count=len(primary), url_linked_streams=[e['stream'] for e in primary],
             auxiliary_tls_only_connection_count=sum(e['classification'] == 'auxiliary_tls_only' for e in matched),
+            aborted_before_tls_completion_connection_count=sum(e['aborted_before_tls_completion'] for e in matched),
             rejected_before_server_auth_connection_count=sum(e['rejected_before_server_auth'] for e in matched),
             rejected_after_server_auth_connection_count=sum(e['rejected_after_server_auth'] for e in matched),
             connection_count=len(matched), captured_connection_count=len(streams), connections=matched,
@@ -372,6 +462,11 @@ def analyze(output, capture, browser_result):
             byte_definition='Observed TCP payload bytes, including retransmissions; excludes all link/IP/TCP headers',
             primary_scope='TCP payload for connections linked by NetLog to the requested navigation',
             browser_session_scope='All target TLS connections correlated between PCAP and server.log')
+        result['wire_observed'].update({
+            'url_linked_'+key: sum(e[key] for e in primary)
+            if primary and all(e.get(key) is not None for e in primary) else None
+            for key in DECOMPOSITION})
+        result['wire_observed']['decomposition_definitions'] = DECOMPOSITION_DEFINITIONS
         result['pcap_tls_observed'].update(client_hello_observed=True, client_hellos=observations,
             requested_tai_observed=all(o['requested_tai_observed'] for o in observations))
         case = result['name']

@@ -561,6 +561,10 @@ menu_submenu() {
    title='Browser PCAP validation'; prefix=(browser-pcap)
    labels=('Plan' 'Requirements / capture backend' 'Status' 'Capture mtc-positive' 'Capture mtc-no-trust' 'Capture mtc-bad-merkle' 'Capture mtc-bad-serial' 'Capture x509-positive' 'Capture all')
    commands=(plan requirements status 'run mtc-positive' 'run mtc-no-trust' 'run mtc-bad-merkle' 'run mtc-bad-serial' 'run x509-positive' 'run all');;
+  measurements)
+   title='Browser measurements'; prefix=(browser-measurements)
+   labels=('Plan' 'Requirements / capture backend' 'Status' 'Run pilot (3 pairs)')
+   commands=(plan requirements status 'run --pairs 3');;
  esac
  while true; do
   printf '\n%s\n' "$title"
@@ -604,7 +608,7 @@ Chromium / MTC Plants-05 Workflow
 9. X.509 trust management
 10. Browser functional validation
 11. Browser PCAP validation
-12. Browser measurements               [NOT IMPLEMENTED]
+12. Browser measurements
 13. Network-condition experiments      [NOT IMPLEMENTED]
 MENU
   read -r -p 'Select an option: ' selection || exit 0
@@ -625,7 +629,8 @@ MENU
    9) menu_submenu trust;;
    10) menu_submenu validation;;
    11) menu_submenu pcap;;
-   12|13) echo 'This phase is not implemented yet.';;
+   12) menu_submenu measurements;;
+   13) echo 'This phase is not implemented yet.';;
    0) exit 0;;
    *) echo 'Invalid option.';;
   esac
@@ -633,10 +638,11 @@ MENU
 )
 
 case "${1:-help}" in
- help|--help|-h) echo 'Usage: mt-chromium-mtc menu|init|status|plan|doctor|browser-validation plan|credentials|status|trust-status|trust-x509|untrust-x509|run CASE|cleanup|browser-pcap plan|requirements|status|run CASE|reconstruct-plan|reconstruct-source plan|status|run STEP [--dest PATH]|prepare-build plan|status|run STEP|install-deps [--dest PATH]|build plan|status|run chromium [--dest PATH]|show STEP|run STEP|resume|cleanup';;
+ help|--help|-h) echo 'Usage: mt-chromium-mtc menu|init|status|plan|doctor|browser-validation plan|credentials|status|trust-status|trust-x509|untrust-x509|run CASE|cleanup|browser-pcap plan|requirements|status|run CASE|browser-measurements plan|requirements|status|run --pairs N|reconstruct-plan|reconstruct-source plan|status|run STEP [--dest PATH]|prepare-build plan|status|run STEP|install-deps [--dest PATH]|build plan|status|run chromium [--dest PATH]|show STEP|run STEP|resume|cleanup';;
  menu) menu;;
  browser-validation) shift; exec python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_validation.py" "$@";;
  browser-pcap) shift; exec python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_pcap.py" "$@";;
+ browser-measurements) shift; exec python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_measurements.py" "$@";;
  doctor) doctor;;
  reconstruct-plan) reconstruct_plan;;
  reconstruct-source) shift; reconstruct_source "$@";;
