@@ -429,12 +429,14 @@ def browser_executable(override=None):
     raise ValueError('Existing patched Chromium executable missing; use --chromium PATH. No build attempted.')
 
 
-def browser_command(executable, profile, case_dir, anchor, url):
+def browser_command(executable, profile, case_dir, anchor, url, enable_mtc=False):
     flags = [str(executable), '--headless=new', '--dump-dom', '--no-first-run', '--no-default-browser-check',
              '--disable-background-networking', '--disable-component-update', '--disable-sync', '--disable-quic',
              '--no-proxy-server', '--host-resolver-rules=MAP '+HOST+' 127.0.0.1',
              '--user-data-dir='+str(profile), '--log-net-log='+str(case_dir/'netlog.json'),
              '--net-log-capture-mode=Everything']
+    if enable_mtc:
+        flags.append('--enable-features=MtcPlants05Lab,VerifyMTCs')
     if anchor:
         flags.append('--mtc-plants05-trust='+str(anchor))
     return flags + [url]
@@ -538,17 +540,68 @@ def classify(case, case_dir, url, process, *, positive_control=False):
         result['pass'] = bool(success)
         result['reason'] = 'Authenticated target TLS and HTTP corroborated by NetLog, server transcript and DOM' if success else 'Positive acceptance requirements not all established'
     else:
-        rejected = certificate and verify and finished and netflight and cert_error and not client and 20 not in sent and not http and not dom and not config_error and process != 'timeout'
+        server_handshake_failure = 'SSL3 alert write:fatal:handshake failure' in server
+        server_certificate_unknown = (
+            'SSL3 alert read:fatal:certificate unknown' in server
+            or 'SSL alert number 46' in server
+        )
+
         if case == 'mtc-no-trust':
-            rejected = rejected and not result['requested_tai_observed']
+            rejected = (
+                not certificate
+                and not verify
+                and not finished
+                and not client
+                and not http
+                and not dom
+                and not result['requested_tai_observed']
+                and not result['selected_tai_observed']
+                and server_handshake_failure
+                and -113 in errors
+                and 'Invalid MTC Plants-05' not in stderr
+                and process != 'timeout'
+            )
+            success_reason = (
+                'Expected no-trust rejection before server authentication flight; '
+                'no compatible MTC trust anchor negotiated; positive control passed'
+            )
         else:
-            rejected = rejected and result['requested_tai_observed'] and result['selected_tai_observed']
+            rejected = (
+                certificate
+                and verify
+                and finished
+                and result['requested_tai_observed']
+                and result['selected_tai_observed']
+                and cert_error
+                and server_certificate_unknown
+                and not client
+                and not http
+                and not dom
+                and not config_error
+                and process != 'timeout'
+            )
+            success_reason = (
+                'Expected MTC authentication rejection after server authentication '
+                'flight; certificate_unknown observed; no client Finished or HTTP; '
+                'positive control passed'
+            )
+
         if client or http or dom:
-            result.update(observed_outcome='FAIL', reason='Negative case accepted TLS/application data')
+            result.update(
+                observed_outcome='FAIL',
+                reason='Negative case accepted TLS/application data',
+            )
         elif rejected and positive_control:
-            result.update(observed_outcome='PASS', **{'pass': True}, reason='Expected certificate rejection; target authentication flight seen; positive control passed')
+            result.update(
+                observed_outcome='PASS',
+                **{'pass': True},
+                reason=success_reason,
+            )
         else:
-            result['reason'] = 'Rejection not attributable with sufficient evidence (positive control, target authentication flight and certificate error required)'
+            result['reason'] = (
+                'Rejection not attributable with sufficient case-specific evidence '
+                'and a passing positive control'
+            )
     return result
 
 
@@ -636,7 +689,14 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
     try:
         server.start()
         with tempfile.TemporaryDirectory(prefix='mtc-browser-profile-', dir=output) as profile:
-            cmd = browser_command(browser['executable'], Path(profile), output, anchor, url)
+            cmd = browser_command(
+                browser['executable'],
+                Path(profile),
+                output,
+                anchor,
+                url,
+                enable_mtc=case.startswith('mtc-'),
+            )
             write(output/'chromium-command.json', dict(command=cmd, timeout_seconds=timeout))
             exit_code = run_browser(cmd, output, timeout)
         # Flush server logs after browser exits; preserve files before removing container.
