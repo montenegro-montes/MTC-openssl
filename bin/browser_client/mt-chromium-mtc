@@ -503,7 +503,7 @@ finally: lock.rmdir()
 PY
 }
 case "${1:-help}" in
- help|--help|-h) echo 'Usage: mt-chromium-mtc init|status|plan|doctor|browser-validation plan|credentials|status|run CASE|cleanup|reconstruct-plan|reconstruct-source plan|status|run STEP [--dest PATH]|prepare-build plan|status|run STEP|install-deps [--dest PATH]|build plan|status|run chromium [--dest PATH]|show STEP|run STEP|resume|cleanup';;
+ help|--help|-h) echo 'Usage: mt-chromium-mtc init|status|plan|doctor|browser-validation plan|credentials|status|trust-status|trust-x509|untrust-x509|run CASE|cleanup|reconstruct-plan|reconstruct-source plan|status|run STEP [--dest PATH]|prepare-build plan|status|run STEP|install-deps [--dest PATH]|build plan|status|run chromium [--dest PATH]|show STEP|run STEP|resume|cleanup';;
  browser-validation) shift; exec python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_validation.py" "$@";;
  doctor) doctor;;
  reconstruct-plan) reconstruct_plan;;

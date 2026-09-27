@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicit, evidence-gated browser battery; never builds or installs trust."""
+"""Evidence-gated browser battery; trust changes require explicit trust actions."""
 import argparse
 import base64
 import copy
@@ -333,6 +333,126 @@ def generate_x509(repo):
     return out
 
 
+def x509_paths(repo):
+    return [p.parent for root in (repo/'artifacts/x509', repo/'artifacts/cert-chain-scaling')
+            for p in root.rglob('server.pem')]
+
+
+def certificate_sha256(pem):
+    x509, _, alg, _, _ = crypto()
+    return x509.load_pem_x509_certificate(pem).fingerprint(alg.SHA256()).hex()
+
+
+def nss_database():
+    home_db = Path.home()/'.pki/nssdb'
+    return home_db if home_db.is_dir() else Path(os.environ.get('XDG_DATA_HOME', str(Path.home()/'.local/share')))/'pki/nssdb'
+
+
+def nss_certificates(db):
+    listing = command(['certutil', '-L', '-d', 'sql:'+str(db)])
+    entries = []
+    for line in listing.stdout.splitlines():
+        match = re.match(r'^(.*?)\s+([A-Za-z]*,[A-Za-z]*,[A-Za-z]*)\s*$', line)
+        if match:
+            nickname, trust = match.groups()
+            pem = command(['certutil', '-L', '-d', 'sql:'+str(db), '-n', nickname, '-a'])
+            entries.append((nickname, trust, certificate_sha256(pem.stdout.encode())))
+    require(len({e[0] for e in entries}) == len(entries), 'Ambiguous NSS nicknames; inspect database manually')
+    return entries
+
+
+def trust_action(action, repo):
+    # Same discovery/ranking as run; deliberately no generation fallback.
+    x, _ = discover(x509_paths(repo), validate_x509)
+    require(x is not None, 'No valid existing X.509 fixture; no CA generated')
+    root = Path(x['root']); system = platform.system()
+    require(system in ('Darwin', 'Linux'), 'Trust management supports Darwin and Linux only')
+    fingerprint = certificate_sha256(root.read_bytes())
+    require(shutil.which('security' if system == 'Darwin' else 'certutil'),
+            'Missing trust backend: install security (macOS) or NSS certutil (Linux) manually')
+    def trusted():
+        if system == 'Linux':
+            db = nss_database()
+            require(not (db/'cert8.db').exists() or (db/'cert9.db').exists(),
+                    'Legacy NSS database; migrate it manually first')
+            return (db/'cert9.db').exists() and any(
+                fp == fingerprint and 'C' in flags.split(',')[0]
+                for _, flags, fp in nss_certificates(db))
+        # Verify this exact root independently of any alternative leaf chain.
+        result = command(['security', 'verify-cert', '-L', '-p', 'ssl', '-c', root], check=False)
+        return result.returncode == 0 and root_trust(x)['status'] == 'TRUSTED'
+
+    before = trusted()
+    evidence = dict(platform=system, root_path=str(root), root_sha256=fingerprint,
+                    trusted_before=before, action=action, trusted_after=before)
+    try:
+        if action != 'trust-status' and not (action == 'trust-x509' and before):
+            require(sha(root) == x['root_sha256'], 'Root changed since fixture validation')
+            if system == 'Darwin':
+                keychain = Path.home()/'Library/Keychains/login.keychain-db'
+                require(keychain.is_file(), 'Login keychain missing; configure/unlock it manually')
+                if action == 'trust-x509':
+                    command(['security', 'add-trusted-cert', '-r', 'trustRoot', '-p', 'ssl',
+                             '-k', keychain, root])
+                else:
+                    listing = command(['security', 'find-certificate', '-a', '-p', keychain], check=False)
+                    require(listing.returncode in (0, 44), 'Cannot inspect login keychain: '+listing.stderr)
+                    certs = re.findall(r'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', listing.stdout, re.S)
+                    if any(certificate_sha256(p.encode()) == fingerprint for p in certs):
+                        # -Z accepts SHA-256; -t also removes this certificate's user trust settings.
+                        command(['security', 'delete-certificate', '-t', '-Z', fingerprint, keychain])
+            else:
+                db = nss_database(); evidence['database'] = str(db)
+                entries = nss_certificates(db) if (db/'cert9.db').exists() else []
+                matches = [e for e in entries if e[2] == fingerprint]
+                parent = db
+                while not parent.exists():
+                    parent = parent.parent
+                require((action == 'untrust-x509' and not matches) or
+                        (os.access(parent, os.W_OK | os.X_OK) and
+                         all(os.access(p, os.W_OK) for p in db.glob('*.db'))),
+                        'NSS database is not writable. Run as its owning desktop user; '
+                        'ask an administrator to repair permissions. No privilege escalation attempted.')
+                if not (db/'cert9.db').exists() and action == 'trust-x509':
+                    require(not (db/'cert8.db').exists(), 'Legacy NSS database; migrate it manually first')
+                    db.mkdir(parents=True, exist_ok=True)
+                    command(['certutil', '-N', '--empty-password', '-d', 'sql:'+str(db)])
+                if action == 'trust-x509':
+                    if matches:
+                        for nickname, trust, _ in matches:
+                            flags = trust.split(','); flags[0] = flags[0].replace('p', '')
+                            if 'C' not in flags[0]: flags[0] += 'C'
+                            command(['certutil', '-M', '-d', 'sql:'+str(db), '-n', nickname, '-t', ','.join(flags)])
+                    else:
+                        nickname = 'Chromium-MTC-lab-'+fingerprint
+                        require(not any(e[0] == nickname for e in entries), 'NSS nickname collision; foreign certificate preserved')
+                        command(['certutil', '-A', '-d', 'sql:'+str(db), '-n', nickname, '-t', 'C,,', '-i', root])
+                else:
+                    for nickname, _, _ in matches:
+                        # Recheck the exact certificate immediately before deletion by NSS nickname.
+                        pem = command(['certutil', '-L', '-d', 'sql:'+str(db), '-n', nickname, '-a'])
+                        require(certificate_sha256(pem.stdout.encode()) == fingerprint, 'NSS certificate changed; deletion refused')
+                        command(['certutil', '-D', '-d', 'sql:'+str(db), '-n', nickname])
+        evidence['trusted_after'] = trusted()
+        if action == 'trust-x509':
+            require(evidence['trusted_after'], 'Root is still NOT TRUSTED; inspect backend permissions/settings manually')
+        elif action == 'untrust-x509':
+            require(not evidence['trusted_after'], 'Root remains trusted outside the managed user store; '
+                    'inspect system/admin trust manually. Other stores were not modified.')
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        try:
+            evidence['trusted_after'] = trusted()
+        except (ValueError, OSError, subprocess.SubprocessError):
+            evidence['trusted_after'] = None
+        evidence['error'] = str(error)
+        raise
+    finally:
+        evidence['status'] = ('UNKNOWN' if evidence['trusted_after'] is None else
+                              'TRUSTED' if evidence['trusted_after'] else 'NOT TRUSTED')
+        print(json.dumps(evidence, indent=2))
+    return 0
+
+
 def root_trust(x):
     root = Path(x['root']); system = platform.system()
     if system == 'Darwin':
@@ -346,12 +466,11 @@ def root_trust(x):
             for i, cert in enumerate(certs):
                 p = Path(temp)/f'{i}.pem'; p.write_bytes(cert.public_bytes(crypto()[1].Encoding.PEM)); args += ['-c', str(p)]
             result = command(args+['-c', str(root)], check=False)
-        manual = 'sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain '+shlex.quote(str(root))
+        manual = 'bin/browser_client/mt-chromium-mtc browser-validation trust-x509'
         return dict(status='TRUSTED' if result.returncode == 0 else 'UNTRUSTED_OR_UNAVAILABLE', method='security verify-cert -L ssl (no explicit trust override)',
                     returncode=result.returncode, diagnostic=(result.stdout+result.stderr)[-2000:], manual_command=manual)
     if system == 'Linux':
-        home_db = Path.home()/'.pki/nssdb'
-        db = home_db if home_db.is_dir() else Path(os.environ.get('XDG_DATA_HOME', str(Path.home()/'.local/share')))/'pki/nssdb'
+        db = nss_database()
         nickname = 'Chromium-MTC-lab-'+sha(root)[:16]
         manual = []
         if not (db/'cert9.db').exists():
@@ -382,10 +501,7 @@ def prepare_credentials(repo, output, image):
     mtc_paths = [p.parent for p in (repo/'artifacts/mtc').glob('*/manifest.json')]
     mtc, ma = select_or_generate(mtc_paths, validate_mtc, lambda: generate_mtc(repo, output, image), output/'mtc-discovery.json')
     mtc.update(choose_anchor(mtc, output))
-    xpaths = []
-    for root in (repo/'artifacts/x509', repo/'artifacts/cert-chain-scaling'):
-        xpaths += [p.parent for p in root.rglob('server.pem')]
-    x, xa = select_or_generate(xpaths, validate_x509, lambda: generate_x509(repo), output/'x509-discovery.json')
+    x, xa = select_or_generate(x509_paths(repo), validate_x509, lambda: generate_x509(repo), output/'x509-discovery.json')
     # Preserve the public CA certificate beside the audit, never its private key.
     ca_copy = output/'x509-root-ca.pem'
     with ca_copy.open('xb') as f:
@@ -749,7 +865,8 @@ def cleanup(repo):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('plan', 'credentials', 'status', 'run', 'cleanup'))
+    parser.add_argument('action', choices=('plan', 'credentials', 'status', 'run', 'cleanup',
+                                           'trust-status', 'trust-x509', 'untrust-x509'))
     parser.add_argument('case', nargs='?', choices=(*CASES, 'all'))
     parser.add_argument('--chromium', type=Path)
     parser.add_argument('--timeout', type=int, default=60)
@@ -757,6 +874,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     require(5 <= args.timeout <= 300, 'Timeout must be between 5 and 300 seconds')
     require((args.action == 'run') == bool(args.case), 'run requires CASE; other actions take no case')
+    if args.action in ('trust-status', 'trust-x509', 'untrust-x509'):
+        return trust_action(args.action, REPO)
     if args.action == 'plan':
         print('PRINT ONLY: discover -> strictly validate -> reuse; generate only if no valid candidate.')
         print('Search: artifacts/mtc, artifacts/x509, artifacts/cert-chain-scaling')
