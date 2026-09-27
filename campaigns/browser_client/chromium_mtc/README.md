@@ -426,3 +426,135 @@ again and checks `python3_bin_reldir.txt` and the Python executable. This runs o
 on explicit stage 210, never from plan/status/resume. External command failures
 stop with a concise error rather than a Python traceback. A Git-version
 recommendation is separate from a missing bootstrap and is left visible.
+
+## Browser credential discovery and functional battery
+
+This explicit namespace is independent of interoperability `resume`, reconstruction
+and build preparation. It never builds Chromium, fetches sources, syncs dependencies
+or installs a trust anchor. Python's `cryptography` package, OpenSSL, Docker and an
+existing patched Chromium are prerequisites; missing tools are not installed.
+
+```sh
+bin/browser_client/mt-chromium-mtc browser-validation plan
+bin/browser_client/mt-chromium-mtc browser-validation credentials
+bin/browser_client/mt-chromium-mtc browser-validation status
+bin/browser_client/mt-chromium-mtc browser-validation run all
+bin/browser_client/mt-chromium-mtc browser-validation run mtc-positive
+bin/browser_client/mt-chromium-mtc browser-validation cleanup
+```
+
+Optional `--chromium /absolute/executable` selects an existing browser;
+`--timeout 60` bounds each invocation (allowed range 5–300 seconds). Default
+executable candidates cover the reconstructed Linux release and the existing
+macOS `.app` layout. There is no build fallback. The recorded executable hash
+covers the executable/launcher, not all shared libraries in a component build.
+
+Credential selection searches only `artifacts/mtc/*/manifest.json`, and
+`server.pem` fixtures beneath `artifacts/x509` and `artifacts/cert-chain-scaling`.
+It does not depend on the historical fixture basename. Candidates are ranked by
+complete browser-specific evidence, complete evidence, browser-specific path,
+timestamp and lexical path. All candidates and rejection/selection reasons are
+recorded, including discovery audits before a generation fallback is attempted.
+
+MTC validation checks the manifest hostname `server.mtc.example.com`, ECDSA P-256,
+N=16, log 1/member 0, certificate/key match, leaf SAN/KU/EKU/validity, local hash
+inventory, checkpoint signatures, inclusion proof, empty landmark signatures,
+serial range, requested group `32473.101.2.1.1` and selected ID
+`32473.101.1.1.1`. Existing functional evidence must PASS; recorded fixture hashes
+must match exactly. Existing failure reports disqualify a candidate. Without
+functional evidence a candidate must still pass the local cryptographic checks;
+complete evidence is preferred. No reused fixture is modified.
+
+If none is valid, `fixtures.py generate` and `fixtures.py validate` are explicitly
+called with the canonical hostname into fresh timestamped directories. A failed
+generation/validation stops preparation. The image must already exist; no image
+build is attempted. An anchor is reused only when its full content equals the
+current Plants-05 exporter/parser output, including trust-file hash and subtree
+hashes. Otherwise a new anchor is exported into the new result directory; old
+anchors are preserved.
+
+X.509 validation checks the actual SAN, P-256 public key, non-CA leaf, Digital
+Signature KU, serverAuth EKU, validity, private-key match, CA root and OpenSSL
+chain/hostname verification. Available fixture hash manifests are checked. The
+existing generic chain builder fixes SAN to server/localhost, so the browser
+fallback uses a small P-256 direct-root certificate generator with the required
+web identity, rather than modifying unrelated campaign PKI. Its new keys and
+certificates are generated only when no existing candidate validates.
+
+Trust is audited separately: macOS uses local-only `security verify-cert` with
+SSL hostname policy and the normal keychain trust search (no supplied trust-root
+override). Linux checks the exact root fingerprint and SSL CA trust in Chromium's
+user NSS database, respecting legacy `~/.pki/nssdb` or the XDG location. The
+positive browser case is the final trust check. If trust is not established,
+credentials/status print the exact manual trust-install command and execution
+stops. No command automatically modifies the Keychain, NSS database or system
+trust store. `certutil` is needed for Linux trust auditing/manual installation.
+
+The five cases are `mtc-positive`, `mtc-no-trust`, `mtc-bad-merkle`,
+`mtc-bad-serial` and `x509-positive`. A single requested MTC negative case first
+executes its positive control in the same run. `run all` executes each case once.
+The bad-Merkle anchor flips one byte in the trusted subtree covering leaf 0. The
+bad-serial anchor increments both range endpoints and their hexadecimal forms,
+preserving range length. Positive anchors remain byte-for-byte unchanged.
+
+All cases use TLS 1.3, X25519, TLS_AES_256_GCM_SHA384, no tickets, server-only
+validation and the same pinned OpenSSL image/server behavior on loopback 4433.
+Each uses a fresh temporary Chromium profile, `--headless=new`, DOM dump and
+NetLog. A resolver rule maps only the canonical hostname to loopback without
+changing hostname verification or `/etc/hosts`. Certificate bypass flags are
+never used.
+
+An occupied port blocks the run; another workflow's container is not removed.
+If the old interoperability server occupies it, stop it explicitly using its
+own lifecycle command before starting this battery:
+
+```sh
+bin/browser_client/mt-chromium-mtc cleanup
+bin/browser_client/mt-chromium-mtc browser-validation run all
+```
+
+Every credential audit/run writes a fresh
+`artifacts/results/chromium-browser-validation-<UTC>-<unique>/` directory. It
+contains candidate audits, `credentials.json`, and, for executed cases, commands,
+Chromium stdout/stderr, NetLog, server TLS transcript, derived anchors and
+`result.json`; a battery also writes `summary.json`. Blocked cases are explicitly
+INCONCLUSIVE/not executed. Synthetic unit-test artifacts live only in temporary
+directories, never in these campaign result roots.
+
+Classification links NetLog sources to the unique target URL and combines
+handshake messages, TLS parameters, HTTP headers, DOM response and server
+Certificate/CertificateVerify/Finished evidence. MTC positive and mutated-anchor
+cases also require requested/selected TAI evidence. Chromium exit code alone
+never establishes PASS. Negatives require a successful positive control and
+certificate rejection evidence with no client Finished or accepted HTTP; an
+earlier negotiation failure or incomplete evidence remains INCONCLUSIVE.
+Headless suitability is established only by a successful real positive case,
+not by `--headless` being accepted on the command line.
+
+Containers carry a per-run ownership label and use `--pull never`. Normal case
+cleanup terminates only the launched browser process group, removes its temporary
+profile and removes its labelled server; all logs and anchors remain. Explicit
+cleanup handles abandoned labelled containers. Orphan profiles are reported for
+manual process-ownership inspection instead of killing a potentially recycled PID
+or deleting an in-use profile. Plan/status launch no browser/server; status only
+reads results and re-audits the selected root's current trust.
+
+Focused cheap tests:
+
+```sh
+bash -n bin/browser_client/mt-chromium-mtc
+python3 -m unittest tests/test_chromium_mtc_workflow.py -v
+git diff --check
+```
+
+
+Credential date validation supports both current `cryptography` UTC properties
+and older versions exposing naive UTC dates. Validator API/type/import failures
+stop discovery without generation; they do not disqualify all existing fixtures.
+The selected X.509 CA remains at the fixture's `root.pem`. Every successful
+credential preparation also preserves its public certificate as
+`x509-root-ca.pem` in the new result directory, with source/copy SHA-256 and a
+root self-signature verification command in `credentials.json`. The root must
+be a self-issued CA and pass OpenSSL `verify -check_ss_sig`; this cryptographic
+check remains separate from browser/platform trust. Private CA keys are never
+copied into the result directory.
