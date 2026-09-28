@@ -66,7 +66,9 @@ def save_outputs(root, summary, rows, pairs):
         'MTC N=16 landmark; server-only authentication.\n\n'
         'Odd pairs: MTC then X.509. Even pairs: X.509 then MTC. No warmups. '
         'Each run uses a fresh browser profile and the existing headless PCAP validation. '
-        'Credentials and Chromium selection are fixed for the campaign.\n\n'
+        'Credentials and Chromium selection are fixed for the campaign.\n'
+        f"X.509 trust mode: {summary.get('x509_trust_mode', 'unspecified')}; "
+        f"certificate verification bypass: {str(summary.get('certificate_verification_bypass', False)).lower()}.\n\n"
         'Primary metrics use connections linked by NetLog to the requested navigation. '
         'Secondary metrics include all target TLS connections correlated between PCAP and server.log. '
         +BYTE_DEFINITION+'\n\n'
@@ -92,10 +94,14 @@ def main():
     parser.add_argument('--profile', choices=bv.PROFILES, default=bv.PROFILE)
     parser.add_argument('--depth', type=int, choices=(2, 3, 4, 5), default=2)
     parser.add_argument('--chromium', type=Path)
+    parser.add_argument('--x509-chromium-ca-policy', action='store_true',
+                        help='Use an externally installed Chromium CACertificates policy as the X.509 trust anchor; no certificate bypass')
     parser.add_argument('--timeout', type=int, default=60)
     parser.add_argument('--image', default='mt-tls-mtc:local')
     args = parser.parse_args()
     bv.require(args.pairs is None or args.pairs > 0, '--pairs must be a positive integer')
+    bv.require(not args.x509_chromium_ca_policy or args.action == 'run',
+               '--x509-chromium-ca-policy requires run')
     bv.require(5 <= args.timeout <= 300, 'Timeout must be between 5 and 300 seconds')
     if args.action == 'plan':
         print(f'PRINT ONLY: TLS 1.3 / X25519 / TLS_AES_256_GCM_SHA384 / {args.profile} / D={args.depth} / MTC N=16 / server-only.')
@@ -105,7 +111,7 @@ def main():
         print('Outputs: measurements.csv, pairs.csv, summary.json, README.md and per-run evidence.'); return 0
     if args.action == 'requirements':
         print(bv.json.dumps(pcap.requirements(), indent=2))
-        print('tshark is required for measurement metrics. Existing trusted X.509 root and valid requested-profile/depth fixtures required.'); return 0
+        print('tshark is required for measurement metrics. A trusted X.509 root or externally installed Chromium CACertificates policy, plus valid requested-profile/depth fixtures, is required.'); return 0
     if args.action == 'status':
         paths = sorted((bv.REPO/'artifacts/results').glob(PREFIX+'*/summary.json'))
         print(bv.json.dumps(bv.read(paths[-1]), indent=2) if paths else 'NO BROWSER MEASUREMENT RESULTS'); return 0
@@ -128,7 +134,24 @@ def main():
         summary['run_id'] = root.name
         print('Result directory: '+str(root), flush=True)
         credentials = bv.prepare_credentials(bv.REPO, root, args.image, args.profile, args.depth)
-        bv.require(credentials['x509']['root_trust']['status'] == 'TRUSTED', 'X509 root must already be trusted')
+        if args.x509_chromium_ca_policy:
+            x509_trust_metadata = dict(
+                x509_trust_mode='chromium-ca-policy',
+                certificate_verification_bypass=False,
+                platform_trust_store=False,
+                policy_name='CACertificates',
+                fixture_root_pem_sha256=credentials['x509']['root_sha256'],
+                policy_root_der_sha256=bv.certificate_sha256(
+                    Path(credentials['x509']['root']).read_bytes()))
+        else:
+            x509_trust_metadata = dict(
+                x509_trust_mode='platform-trust-store',
+                certificate_verification_bypass=False,
+                platform_trust_store=True)
+        summary.update(x509_trust_metadata)
+        bv.require(args.x509_chromium_ca_policy
+                   or credentials['x509']['root_trust']['status'] == 'TRUSTED',
+                   'X509 root must already be trusted unless --x509-chromium-ca-policy is used')
         bv.require(credentials['x509']['depth'] == args.depth
                    and credentials['x509']['intermediate_count'] == args.depth-2, 'X509 depth mismatch')
         bv.require(all(credentials[c]['profile']==args.profile for c in ('mtc','x509'))
@@ -163,8 +186,12 @@ def main():
                         except OSError: raise ValueError('Port 4433 occupied; stop its owner explicitly')
                     browser_result = bv.run_case(case, credentials, browser, output, pair_root, args.timeout,
                                                  False, browser_mode='headless', capture=capture)
+                    if case == 'x509-positive':
+                        browser_result.update(x509_trust_metadata)
                     bv.write(output/'browser-result.json', browser_result)
                     result = pcap.analyze(output, capture, browser_result)
+                    if case == 'x509-positive':
+                        result.update(x509_trust_metadata)
                     bv.write(output/'result.json', result); bv.write(output/'summary.json', result)
                     row.update(status=result['observed_outcome'], capture_sha256=result.get('capture_sha256',''))
                     bv.require(browser_result['pass'] is True and result['pass'] is True
