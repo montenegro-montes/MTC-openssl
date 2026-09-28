@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in ECDSA-P256/N=16 server.test fixtures for Chromium interoperability."""
+"""Opt-in signature-profile/N=16 browser fixtures for Chromium interoperability."""
 import argparse
 from pathlib import Path
 import sys
@@ -14,6 +14,7 @@ def main():
     parser.add_argument('action', choices=('generate', 'validate'))
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--fixtures', type=Path)
+    parser.add_argument('--profile', choices=('ecdsa-p256', 'ecdsa-p384', 'ecdsa-p521', 'mldsa44', 'mldsa65', 'mldsa87'), default='ecdsa-p256')
     parser.add_argument('--image', default='mt-tls-mtc:local')
     parser.add_argument('--execute', action='store_true')
     parser.add_argument('--server-hostname', default='server.test')
@@ -22,7 +23,7 @@ def main():
         parser.error('validate requires --fixtures')
     if args.action == 'generate' and args.fixtures is not None:
         parser.error('generate requires new fixtures; omit --fixtures')
-    command = [args.action, '--output', str(args.output), '--profile', 'ecdsa-p256',
+    command = [args.action, '--output', str(args.output), '--profile', args.profile,
                '--server-hostname', args.server_hostname, '--image', args.image]
     if args.action == 'generate':
         command += ['--sizes', '16']

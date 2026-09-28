@@ -5,6 +5,7 @@ import base64
 import copy
 from datetime import datetime, timedelta, timezone
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
@@ -28,9 +29,9 @@ from export_chromium_anchor import Reader, parse_landmark, core
 
 HOST = 'server.mtc.example.com'
 PROFILE = 'ecdsa-p256'
-REQUESTED = '32473.101.2.1.1'
-SELECTED = '32473.101.1.1.1'
-CA = '32473.101'
+PROFILES = ('ecdsa-p256', 'ecdsa-p384', 'ecdsa-p521', 'mldsa44', 'mldsa65', 'mldsa87')
+# Compatibility context for existing PCAP callers; set only after fixture selection.
+REQUESTED = SELECTED = CA = None
 CASES = ('mtc-positive', 'mtc-no-trust', 'mtc-bad-merkle', 'mtc-bad-serial', 'x509-positive')
 TLS = dict(version='TLS 1.3', group='X25519', cipher='TLS_AES_256_GCM_SHA384',
            tickets=False, client_authentication=False, port=4433)
@@ -52,6 +53,28 @@ PAGE_HTML = '''<!doctype html>
 
 def page_target(case, run_root):
     return 'browser-test.html?mtc_case='+case+'&run='+run_root.name
+
+
+def browser_page(case, run_root, credentials, browser_mode):
+    if case != 'mtc-positive' or browser_mode != 'headed':
+        return PAGE_HTML
+    mtc = credentials['mtc']
+    fields = [
+        ('Case', case), ('Mode', 'Visible browser inspection'),
+        ('Authentication configured', 'MTC; server-only'), ('Signature profile', mtc['profile']),
+        ('TLS version configured', TLS['version']), ('Cipher suite configured', TLS['cipher']),
+        ('Group configured', TLS['group']), ('Session tickets configured', 'Disabled'),
+        ('MTC tree size', mtc['tree_size']), ('MTC mode', mtc['mode']), ('MTC leaf', mtc['leaf']),
+        ('CA ID', mtc['ca_id']), ('Requested TAI expected (0xca34)', mtc['requested_tai']),
+        ('Selected TAI expected (0xca34)', mtc['selected_tai']),
+        ('Target host', HOST+':'+str(TLS['port'])), ('Target path', '/'+page_target(case, run_root)),
+    ]
+    details = '<section><h2>Connection configuration</h2><dl>'+''.join(
+        '<dt>'+html.escape(label)+'</dt><dd>'+html.escape(str(value))+'</dd>' for label, value in fields)
+    details += ('</dl><p>These values describe the test configuration, not observed negotiation. '
+                'This page does not report MTC verification, CertificateVerify, Finished, '
+                'received HTTP headers or a final validation result.</p></section>\n')
+    return PAGE_HTML.replace('</body>', details+'</body>')
 
 
 def require(ok, reason):
@@ -105,68 +128,117 @@ def check_saved_hashes(root, saved, *, complete=False):
         require(hashes(root) == saved, 'Fixture hash inventory differs from validation evidence')
 
 
-def crypto():
-    from cryptography import x509
-    from cryptography.hazmat.primitives import serialization, hashes as algorithms
-    from cryptography.hazmat.primitives.asymmetric import ec
-    from cryptography.x509.oid import ExtendedKeyUsageOID
-    return x509, serialization, algorithms, ec, ExtendedKeyUsageOID
+def pem_certificates(data):
+    blocks = re.findall(rb'-----BEGIN CERTIFICATE-----\s+[A-Za-z0-9+/=\s]+-----END CERTIFICATE-----', data)
+    require(bool(blocks), 'Missing PEM certificate')
+    return [block+b'\n' for block in blocks]
 
 
-def validity_utc(cert):
-    # cryptography before 42 exposes naive UTC datetimes only.
-    def value(name):
-        modern = getattr(cert, name + '_utc', None)
-        if modern is not None:
-            return modern
-        legacy = getattr(cert, name)
-        return legacy.replace(tzinfo=timezone.utc) if legacy.tzinfo is None else legacy.astimezone(timezone.utc)
-    return value('not_valid_before'), value('not_valid_after')
+def certificate_der(pem):
+    blocks = pem_certificates(pem)
+    require(len(blocks) == 1, 'Expected one certificate')
+    return base64.b64decode(re.sub(rb'\s+', b'', blocks[0].split(b'-----')[2]), validate=True)
 
 
-def web_leaf(cert_path, key_path, *, now=None):
-    x509, ser, _, ec, eku = crypto()
+def docker_openssl(directory, args, image='mt-tls-mtc:local'):
+    return command(['docker', 'run', '--rm', '--pull', 'never', '--network', 'none',
+                    '--user', f'{os.getuid()}:{os.getgid()}', '-e', 'LC_ALL=C',
+                    '-v', str(Path(directory).resolve())+':/work:ro', '-w', '/work',
+                    '--entrypoint', '/opt/mtc/openssl.sh', image, *args])
+
+
+def profile_options(profile):
+    require(profile in PROFILES, 'Unsupported signature profile')
+    if profile.startswith('ecdsa-'):
+        curve, digest = {'ecdsa-p256': ('P-256', 'sha256'), 'ecdsa-p384': ('P-384', 'sha384'),
+                         'ecdsa-p521': ('P-521', 'sha512')}[profile]
+        return ['-algorithm', 'EC', '-pkeyopt', 'ec_paramgen_curve:'+curve], ['-'+digest]
+    return ['-algorithm', profile], []
+
+
+def normalized_algorithm(name):
+    return re.sub(r'[-_\s]+', '', name).lower()
+
+
+def check_public_profile(text, profile):
+    if profile.startswith('ecdsa-'):
+        curve = {'ecdsa-p256': 'P-256', 'ecdsa-p384': 'P-384', 'ecdsa-p521': 'P-521'}[profile]
+        require(re.search(r'NIST CURVE: '+curve+r'\s*$', text, re.M), 'Public-key profile mismatch')
+    else:
+        names = re.findall(r'\bML[-_\s]*DSA[-_\s]*[0-9]+\b', text, re.I)
+        require(bool(names) and all(normalized_algorithm(name) == profile for name in names), 'Public-key profile mismatch')
+
+
+def certificate_info(directory, name, profile, image, *, signature=True):
+    run = lambda args: docker_openssl(directory, args, image).stdout
+    text = run(['x509', '-in', name, '-noout', '-text'])
+    public = run(['x509', '-in', name, '-pubkey', '-noout'])
+    with tempfile.TemporaryDirectory(prefix='browser-public-') as temp:
+        Path(temp, 'public.pem').write_text(public)
+        check_public_profile(docker_openssl(temp, ['pkey', '-pubin', '-in', 'public.pem', '-text', '-noout'], image).stdout, profile)
+    if signature:
+        expected = ('ecdsa-with-SHA'+{'ecdsa-p256':'256', 'ecdsa-p384':'384', 'ecdsa-p521':'512'}[profile]
+                    if profile.startswith('ecdsa-') else 'ML-DSA-'+profile[5:])
+        signatures = re.findall(r'Signature Algorithm:\s*(\S+)', text)
+        normalize = str.lower
+        if profile.startswith('mldsa'):
+            signatures = re.findall(r'Signature Algorithm:[ \t]*([^\r\n]+)', text)
+            normalize = normalized_algorithm
+        require(len(signatures) == 2 and all(normalize(v) == normalize(expected) for v in signatures), 'Certificate signature profile mismatch')
+    details = run(['x509', '-in', name, '-noout', '-subject', '-issuer', '-serial', '-dates', '-nameopt', 'RFC2253'])
+    values = dict(line.split('=', 1) for line in details.splitlines() if '=' in line)
+    before = datetime.strptime(values['notBefore'], '%b %d %H:%M:%S %Y %Z').replace(tzinfo=timezone.utc)
+    after = datetime.strptime(values['notAfter'], '%b %d %H:%M:%S %Y %Z').replace(tzinfo=timezone.utc)
+    require(before <= datetime.now(timezone.utc) <= after, 'Expired/not-yet-valid certificate')
+    extension = lambda key: run(['x509', '-in', name, '-noout', '-ext', key])
+    return dict(public=public, subject=values['subject'], issuer=values['issuer'], serial=int(values['serial'], 16),
+                not_before=before.isoformat(), not_after=after.isoformat(),
+                constraints=extension('basicConstraints'), usage=extension('keyUsage'),
+                eku=extension('extendedKeyUsage'), san=extension('subjectAltName'))
+
+
+def web_leaf(cert_path, key_path, *, profile=PROFILE, image='mt-tls-mtc:local', signature=False):
     require(not Path(cert_path).is_symlink() and not Path(key_path).is_symlink(), 'Symlink credential rejected')
-    cert = x509.load_pem_x509_certificate(Path(cert_path).read_bytes())
-    sans = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)
-    require(HOST in sans, 'Wrong SAN: browser hostname absent')
-    require(not cert.extensions.get_extension_for_class(x509.BasicConstraints).value.ca, 'CA leaf rejected')
-    require(cert.extensions.get_extension_for_class(x509.KeyUsage).value.digital_signature, 'Missing Digital Signature KU')
-    require(eku.SERVER_AUTH in cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value, 'Missing serverAuth EKU')
-    now = now or datetime.now(timezone.utc)
-    not_before, not_after = validity_utc(cert)
-    require(not_before <= now <= not_after, 'Expired/not-yet-valid certificate')
-    pub = cert.public_key()
-    require(isinstance(pub, ec.EllipticCurvePublicKey) and isinstance(pub.curve, ec.SECP256R1), 'Leaf is not ECDSA P-256')
-    key = ser.load_pem_private_key(Path(key_path).read_bytes(), password=None)
-    encode = lambda k: k.public_bytes(ser.Encoding.DER, ser.PublicFormat.SubjectPublicKeyInfo)
-    require(encode(pub) == encode(key.public_key()), 'Certificate/key mismatch')
+    with tempfile.TemporaryDirectory(prefix='browser-leaf-') as temp:
+        shutil.copyfile(cert_path, Path(temp)/'cert.pem')
+        shutil.copyfile(key_path, Path(temp)/'key.pem'); (Path(temp)/'key.pem').chmod(0o600)
+        cert = certificate_info(temp, 'cert.pem', profile, image, signature=signature)
+        sans = re.findall(r'DNS:([^,\s]+)', cert['san'])
+        require(HOST in sans, 'Wrong SAN: browser hostname absent')
+        require('CA:FALSE' in cert['constraints'] and 'CA:TRUE' not in cert['constraints'], 'CA leaf rejected')
+        require('Digital Signature' in cert['usage'], 'Missing Digital Signature KU')
+        require('TLS Web Server Authentication' in cert['eku'], 'Missing serverAuth EKU')
+        public = docker_openssl(temp, ['pkey', '-in', 'key.pem', '-pubout'], image).stdout
+        require(public.strip() == cert['public'].strip(), 'Certificate/key mismatch')
     return cert, dict(SAN=sans, KU=['Digital Signature'], EKU=['serverAuth'],
-                      not_before=not_before.isoformat(), not_after=not_after.isoformat(),
+                      not_before=cert['not_before'], not_after=cert['not_after'],
                       hostname_validation=True, key_match=True)
 
 
-def validate_mtc(fixture):
+def validate_mtc(fixture, profile=PROFILE, image='mt-tls-mtc:local'):
     fixture = Path(fixture)
     manifest = read(fixture / 'manifest.json')
     require(manifest.get('server_hostname') == HOST, 'MTC manifest hostname mismatch')
-    require(PROFILE in manifest.get('profiles', []) and 16 in manifest.get('sizes', []), 'MTC profile/tree size mismatch')
-    directory = fixture / 'batch16/mtc' / PROFILE
+    require(profile in manifest.get('profiles', []) and 16 in manifest.get('sizes', []), 'MTC profile/tree size mismatch')
+    directory = fixture / 'batch16/mtc' / profile
     meta = read(directory / 'manifest.json')
-    require(meta.get('profile') == PROFILE and meta.get('tree_size') == 16 and
+    ca_id = meta['ca_id']
+    require(isinstance(ca_id, str) and bool(ca_id), 'Missing MTC ca_id identity')
+    selected_tai = f'{ca_id}.1.1.1'
+    requested_tai = f'{ca_id}.2.1.1'
+    require(meta.get('profile') == profile and meta.get('tree_size') == 16 and
             meta.get('draft') == core.DRAFT and meta.get('merkle_hash') == 'SHA-256', 'MTC metadata mismatch')
     check_saved_hashes(directory, read(directory / 'fixture-sha256.json'))
-    cert_path, key_path = directory / 'landmark-0000.pem', fixture / 'population' / PROFILE / '0.key'
-    cert, leaf = web_leaf(cert_path, key_path)
-    require(cert.serial_number == 1 << 48, 'MTC credential is not log 1 leaf 0')
+    cert_path, key_path = directory / 'landmark-0000.pem', fixture / 'population' / profile / '0.key'
+    cert, leaf = web_leaf(cert_path, key_path, profile=profile, image=image)
+    require(cert['serial'] == 1 << 48, 'MTC credential is not log 1 leaf 0')
     raw = (directory / 'trust.bin').read_bytes()
     anchor = parse_landmark(raw)
-    require(anchor['ca_id'] == CA and anchor['landmark']['tree_size'] == 16 and
+    require(anchor['ca_id'] == ca_id and anchor['landmark']['tree_size'] == 16 and
             anchor['min_serial'] == 1 << 48 and anchor['max_serial'] == (1 << 48) + 15 and
-            anchor['landmark']['requested_trust_anchor_id'] == REQUESTED and
-            anchor['landmark']['selected_trust_anchor_id'] == SELECTED, 'MTC trust identity mismatch')
+            anchor['landmark']['requested_trust_anchor_id'] == requested_tai and
+            anchor['landmark']['selected_trust_anchor_id'] == selected_tai, 'MTC trust identity mismatch')
     # Authenticate the checkpoint, not just its file hash or JSON syntax.
-    x509, ser, alg, ec, _ = crypto()
     r = Reader(raw); r.take(4); r.vector(1)
     signers = [(r.vector(1).decode(), r.vector(2)) for _ in range(r.number(1))]
     r.number(2); r.number(8); r.number(8); r.number(4)
@@ -178,14 +250,22 @@ def validate_mtc(fixture):
         require(ident not in verified, 'Duplicate checkpoint signer')
         matched = [(name, spki) for name, spki in signers if core.relid(name) == ident]
         require(len(matched) == 1, 'Unknown checkpoint signer')
-        name, spki = matched[0]; public = ser.load_der_public_key(spki)
-        require(isinstance(public, ec.EllipticCurvePublicKey) and isinstance(public.curve, ec.SECP256R1), 'Checkpoint signer profile mismatch')
-        public.verify(signature, core.message(name, CA, 0, size, root_hash, timestamp), ec.ECDSA(alg.SHA256()))
+        name, spki = matched[0]
+        message = core.message(name, ca_id, 0, size, root_hash, timestamp)
+        with tempfile.TemporaryDirectory(prefix='browser-checkpoint-') as temp:
+            for filename, data in [('public.der', spki), ('message.bin', message), ('signature.bin', signature)]:
+                Path(temp, filename).write_bytes(data)
+            public = docker_openssl(temp, ['pkey', '-pubin', '-inform', 'DER', '-in', 'public.der', '-text', '-noout'], image).stdout
+            check_public_profile(public, profile)
+            digest = profile_options(profile)[1]
+            docker_openssl(temp, ['pkeyutl', '-verify', '-rawin', '-pubin', '-keyform', 'DER', '-inkey', 'public.der',
+                                  '-in', 'message.bin', '-sigfile', 'signature.bin',
+                                  *(['-digest', digest[0][1:]] if digest else [])], image)
         verified.add(ident)
     require(verified == {core.relid(name) for name, _ in signers}, 'Incomplete checkpoint authentication')
-    der = cert.public_bytes(ser.Encoding.DER)
+    der = certificate_der(cert_path.read_bytes())
     outer, tbs = core.certificate_parts(der)
-    require(outer[1][2] == core.ALG and tbs[2][2] == core.ALG and tbs[3][2] == core.name(CA), 'MTC algorithm/issuer mismatch')
+    require(outer[1][2] == core.ALG and tbs[2][2] == core.ALG and tbs[3][2] == core.name(ca_id), 'MTC algorithm/issuer mismatch')
     require(outer[2][1][0] == 0, 'Invalid MTC bit string')
     pr = Reader(outer[2][1][1:]); extensions = pr.vector(); start, end = pr.number(6), pr.number(6)
     path = pr.vector(); signatures = pr.vector(); pr.finish()
@@ -201,7 +281,7 @@ def validate_mtc(fixture):
     for p in evidence_paths:
         d = read(p)
         require(d.get('passed') is True and d.get('server_hostname') == HOST and any(
-            c.get('profile') == PROFILE and c.get('tree_size') == 16 and c.get('mtc_mode') == 'landmark' and c.get('success') is True
+            c.get('profile') == profile and c.get('tree_size') == 16 and c.get('mtc_mode') == 'landmark' and c.get('success') is True
             for c in d.get('cells', [])), 'Existing functional evidence does not PASS')
         if 'fixture_hashes' in d:
             check_saved_hashes(fixture, d['fixture_hashes'], complete=True)
@@ -209,29 +289,43 @@ def validate_mtc(fixture):
     image = (read(evidence) if evidence else manifest).get('provenance', {}).get('image_id')
     require(isinstance(image, str) and re.fullmatch(r'sha256:[0-9a-f]{64}', image), 'Missing pinned MTC image')
     return dict(fixture=str(fixture.resolve()), cert=str(cert_path.resolve()), key=str(key_path.resolve()),
-                trust=str((directory/'trust.bin').resolve()), profile=PROFILE, tree_size=16, mode='landmark', leaf=0,
+                trust=str((directory/'trust.bin').resolve()), profile=profile, tree_size=16, mode='landmark', leaf=0,
                 hostname=HOST, validation_evidence=str(evidence.resolve()) if evidence else None,
                 complete_evidence=bool(evidence and 'fixture_hashes' in read(evidence)),
                 fixture_hash_status='MATCH' if evidence and 'fixture_hashes' in read(evidence) else 'LOCAL_HASHES_AND_CRYPTO_VERIFIED',
-                requested_tai=REQUESTED, selected_tai=SELECTED, image_id=image,
+                ca_id=ca_id, requested_tai=requested_tai, selected_tai=selected_tai, image_id=image,
                 cert_sha256=sha(cert_path), key_sha256=sha(key_path), trust_sha256=sha(directory/'trust.bin'), **leaf)
 
 
-def validate_x509(fixture, *, openssl='openssl'):
+def validate_x509(fixture, *, profile=PROFILE, depth=2, image='mt-tls-mtc:local'):
+    require(profile in PROFILES and depth in (2, 3, 4, 5), 'Unsupported profile/depth')
     fixture = Path(fixture)
     cert_path, key_path, root_path = [fixture / n for n in ('server.pem', 'server.key', 'root.pem')]
-    cert, leaf = web_leaf(cert_path, key_path)
-    x509, _, _, _, _ = crypto()
-    require(not root_path.is_symlink(), 'Symlink root rejected')
-    root = x509.load_pem_x509_certificate(root_path.read_bytes())
-    require(root.extensions.get_extension_for_class(x509.BasicConstraints).value.ca, 'Root is not a CA')
-    require(root.subject == root.issuer, 'Root is not self-issued')
-    command([openssl, 'verify', '-check_ss_sig', '-CAfile', root_path, root_path])
-    intermediate = fixture / 'intermediates.pem'
-    args = [openssl, 'verify', '-CAfile', root_path, '-purpose', 'sslserver', '-verify_hostname', HOST]
-    if intermediate.is_file() and intermediate.stat().st_size:
-        args += ['-untrusted', intermediate]
-    command(args + [cert_path])
+    cert, leaf = web_leaf(cert_path, key_path, profile=profile, image=image, signature=True)
+    intermediate = fixture/'intermediates.pem'
+    require(not root_path.is_symlink() and not intermediate.is_symlink(), 'Symlink chain rejected')
+    chain = pem_certificates(intermediate.read_bytes()) if intermediate.is_file() and intermediate.stat().st_size else []
+    require(len(chain) == depth-2, 'X509 intermediate count does not match requested depth')
+    certificates = [cert_path.read_bytes(), *chain, root_path.read_bytes()]
+    require(len({certificate_sha256(c) for c in certificates}) == depth, 'Duplicate chain certificate')
+    with tempfile.TemporaryDirectory(prefix='browser-chain-') as temp:
+        for index, pem in enumerate(certificates):
+            Path(temp, f'{index}.pem').write_bytes(pem)
+        infos = [cert, *(certificate_info(temp, f'{i}.pem', profile, image) for i in range(1, depth))]
+        require(infos[-1]['subject'] == infos[-1]['issuer'], 'Root is not self-issued')
+        require(all('CA:TRUE' in c['constraints'] and 'Certificate Sign' in c['usage'] for c in infos[1:]), 'Invalid CA constraints/key usage')
+        for i in range(depth-1):
+            require(infos[i]['issuer'] == infos[i+1]['subject'], 'X509 chain ordering/depth mismatch')
+            docker_openssl(temp, ['verify', '-no-CAfile', '-no-CApath', '-no-CAstore', '-partial_chain',
+                                  '-trusted', f'{i+1}.pem', f'{i}.pem'], image)
+        shutil.copyfile(root_path, Path(temp)/'root.pem')
+        shutil.copyfile(cert_path, Path(temp)/'server.pem')
+        docker_openssl(temp, ['verify', '-no-CApath', '-no-CAstore', '-check_ss_sig', '-CAfile', 'root.pem', 'root.pem'], image)
+        args = ['verify', '-no-CApath', '-no-CAstore', '-CAfile', 'root.pem', '-purpose', 'sslserver', '-verify_hostname', HOST]
+        if chain:
+            Path(temp, 'intermediates.pem').write_bytes(b''.join(chain))
+            args += ['-untrusted', 'intermediates.pem']
+        docker_openssl(temp, [*args, 'server.pem'], image)
     manifest = fixture / 'manifest.json'
     complete = False
     if manifest.is_file():
@@ -241,7 +335,7 @@ def validate_x509(fixture, *, openssl='openssl'):
     return dict(fixture=str(fixture.resolve()), cert=str(cert_path.resolve()), key=str(key_path.resolve()),
                 root=str(root_path.resolve()), intermediates=str(intermediate.resolve()) if intermediate.is_file() and intermediate.stat().st_size else None,
                 certificate_sha256=sha(cert_path), key_sha256=sha(key_path), root_sha256=sha(root_path),
-                profile=PROFILE, hostname=HOST, complete_evidence=complete,
+                profile=profile, depth=depth, intermediate_count=len(chain), hostname=HOST, complete_evidence=complete,
                 root_ca=True, root_self_signature_verified=True, **leaf)
 
 
@@ -288,6 +382,10 @@ def select_or_generate(paths, validator, generator, audit_path=None):
 
 def expected_anchor(mtc):
     raw = Path(mtc['trust']).read_bytes(); expected = parse_landmark(raw)
+    require(expected['ca_id'] == mtc['ca_id']
+            and expected['landmark']['requested_trust_anchor_id'] == mtc['requested_tai']
+            and expected['landmark']['selected_trust_anchor_id'] == mtc['selected_tai'],
+            'Anchor identity differs from selected fixture manifest')
     expected['source'] = dict(trust_file='trust.bin', trust_file_bytes=len(raw), trust_file_sha256=hashlib.sha256(raw).hexdigest())
     meta = read(Path(mtc['trust']).with_name('manifest.json'))
     for key in ('profile', 'draft', 'trust_anchor_draft', 'implementation_algorithm', 'merkle_hash'):
@@ -316,37 +414,62 @@ def choose_anchor(mtc, output):
     return dict(anchor=str(anchor.resolve()), anchor_sha256=sha(anchor), anchor_origin=origin, anchor_candidates=audit)
 
 
-def generate_mtc(repo, output, image):
-    fixture = repo/'artifacts/mtc'/('browser-'+HOST.replace('.', '-')+'-'+PROFILE+'-n16-'+stamp())
+def generate_mtc(repo, output, image, profile=PROFILE):
+    fixture = repo/'artifacts/mtc'/('browser-'+HOST.replace('.', '-')+'-'+profile+'-n16-'+stamp())
     validation = fixture.with_name(fixture.name+'-validation')
     for action, extra in [('generate', ['--output', fixture]), ('validate', ['--fixtures', fixture, '--output', validation])]:
-        result = command([sys.executable, HERE/'fixtures.py', action, *extra, '--server-hostname', HOST, '--image', image, '--execute'], timeout=1800)
+        result = command([sys.executable, HERE/'fixtures.py', action, *extra, '--profile', profile, '--server-hostname', HOST, '--image', image, '--execute'], timeout=1800)
         (output/(action+'-mtc.stdout.log')).write_text(result.stdout)
         (output/(action+'-mtc.stderr.log')).write_text(result.stderr)
     return fixture
 
 
-def generate_x509(repo):
-    # The shared chain builder fixes SAN=server/localhost; a small browser-specific
-    # direct-root fixture is needed instead of altering unrelated campaign PKI.
-    x509, ser, alg, ec, _ = crypto()
-    from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
-    out = repo/'artifacts/x509'/('chromium-'+HOST.replace('.', '-')+'-'+PROFILE+'-'+stamp())
+def generate_x509(repo, profile=PROFILE, depth=2, image='mt-tls-mtc:local'):
+    require(profile in PROFILES and depth in (2, 3, 4, 5),
+            'Unsupported profile/depth')
+    out = repo/'artifacts/x509'/('chromium-'+HOST.replace('.', '-')+'-'+profile+'-d'+str(depth)+'-'+stamp())
     out.mkdir(parents=True, exist_ok=False)
-    now = datetime.now(timezone.utc)
-    root_key, leaf_key = ec.generate_private_key(ec.SECP256R1()), ec.generate_private_key(ec.SECP256R1())
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'Chromium MTC comparison lab '+out.name[-8:])])
-    def builder(subject, issuer, key):
-        return x509.CertificateBuilder().subject_name(subject).issuer_name(issuer).public_key(key.public_key()).serial_number(x509.random_serial_number()).not_valid_before(now-timedelta(minutes=5)).not_valid_after(now+timedelta(days=30))
-    root = builder(name, name, root_key).add_extension(x509.BasicConstraints(ca=True, path_length=0), True).add_extension(x509.KeyUsage(False, False, False, False, False, True, True, False, False), True).sign(root_key, alg.SHA256())
-    leaf = builder(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, HOST)]), name, leaf_key).add_extension(x509.BasicConstraints(ca=False, path_length=None), True).add_extension(x509.SubjectAlternativeName([x509.DNSName(HOST)]), False).add_extension(x509.KeyUsage(True, False, False, False, False, False, False, False, False), True).add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), False).sign(root_key, alg.SHA256())
-    for label, cert, key in [('root', root, root_key), ('server', leaf, leaf_key)]:
-        (out/(label+'.pem')).write_bytes(cert.public_bytes(ser.Encoding.PEM))
-        p = out/(label+'.key')
-        fd = os.open(p, os.O_WRONLY|os.O_CREAT|os.O_EXCL, 0o600)
-        with os.fdopen(fd, 'wb') as f:
-            f.write(key.private_bytes(ser.Encoding.PEM, ser.PrivateFormat.PKCS8, ser.NoEncryption()))
-    write(out/'manifest.json', dict(hostname=HOST, profile=PROFILE, files_sha256=hashes(out)))
+    key_options, digest = profile_options(profile)
+    # Temporary issuer keys/CSRs/configs never become fixture files.
+    with tempfile.TemporaryDirectory(prefix='issuance-', dir=out) as temporary:
+        scratch = Path(temporary)
+        commands = []
+        labels = ['root', *('intermediate-'+str(i) for i in range(depth-2)), 'server']
+        for index, label in enumerate(labels):
+            ca = label != 'server'
+            subject = ('Chromium MTC comparison lab '+out.name[-8:] if index == 0 else
+                       'Browser intermediate '+str(index-1)+' '+out.name[-8:] if ca else HOST)
+            extensions = (f'basicConstraints=critical,CA:TRUE,pathlen:{depth-2-index}\n'
+                          'keyUsage=critical,keyCertSign,cRLSign\n' if ca else
+                          'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\n'
+                          f'subjectAltName=DNS:{HOST}\nextendedKeyUsage=serverAuth\n')
+            (scratch/(label+'.cnf')).write_text('[req]\ndistinguished_name=dn\n[dn]\n[cert]\n'+extensions+
+                                               'subjectKeyIdentifier=none\nauthorityKeyIdentifier=none\n')
+            commands.append(['genpkey', *key_options, '-out', label+'.key'])
+            serial = str(uuid.uuid4().int)
+            if index == 0:
+                commands.append(['req', *digest, '-new', '-x509', '-key', label+'.key', '-subj', '/CN='+subject,
+                                 '-config', label+'.cnf', '-extensions', 'cert', '-days', '30',
+                                 '-set_serial', serial, '-out', label+'.pem'])
+            else:
+                commands.append(['req', *digest, '-new', '-key', label+'.key', '-subj', '/CN='+subject,
+                                 '-config', label+'.cnf', '-out', label+'.csr'])
+                issuer = labels[index-1]
+                commands.append(['x509', *digest, '-req', '-in', label+'.csr', '-CA', issuer+'.pem',
+                                 '-CAkey', issuer+'.key', '-set_serial', serial, '-days', '30',
+                                 '-extfile', label+'.cnf', '-extensions', 'cert', '-out', label+'.pem'])
+        script = 'set -eu\numask 077\n'+'\n'.join(shlex.join(['/opt/mtc/openssl.sh', *args]) for args in commands)
+        command(['docker', 'run', '--rm', '--pull', 'never', '--network', 'none',
+                 '--user', f'{os.getuid()}:{os.getgid()}', '-v', str(scratch.resolve())+':/work',
+                 '-w', '/work', '--entrypoint', '/bin/sh', image, '-c', script], timeout=1800)
+        for label in ('root', 'server'):
+            for suffix in ('.pem', '.key'):
+                shutil.copyfile(scratch/(label+suffix), out/(label+suffix))
+            (out/(label+'.key')).chmod(0o600)
+        if depth > 2:
+            (out/'intermediates.pem').write_bytes(b''.join(
+                (scratch/(label+'.pem')).read_bytes() for label in reversed(labels[1:-1])))
+    write(out/'manifest.json', dict(hostname=HOST, profile=profile, depth=depth, files_sha256=hashes(out)))
     return out
 
 
@@ -356,8 +479,7 @@ def x509_paths(repo):
 
 
 def certificate_sha256(pem):
-    x509, _, alg, _, _ = crypto()
-    return x509.load_pem_x509_certificate(pem).fingerprint(alg.SHA256()).hex()
+    return hashlib.sha256(certificate_der(pem)).hexdigest()
 
 
 def nss_database():
@@ -378,9 +500,9 @@ def nss_certificates(db):
     return entries
 
 
-def trust_action(action, repo):
+def trust_action(action, repo, profile=PROFILE, depth=2):
     # Same discovery/ranking as run; deliberately no generation fallback.
-    x, _ = discover(x509_paths(repo), validate_x509)
+    x, _ = discover(x509_paths(repo), lambda p: validate_x509(p, profile=profile, depth=depth))
     require(x is not None, 'No valid existing X.509 fixture; no CA generated')
     root = Path(x['root']); system = platform.system()
     require(system in ('Darwin', 'Linux'), 'Trust management supports Darwin and Linux only')
@@ -476,12 +598,12 @@ def root_trust(x):
         args = ['security', 'verify-cert', '-L', '-p', 'ssl', '-n', HOST, '-c', x['cert']]
         if x.get('intermediates'):
             # security accepts certificate files; split PEM bundle into a temp audit dir.
-            certs = crypto()[0].load_pem_x509_certificates(Path(x['intermediates']).read_bytes())
+            certs = pem_certificates(Path(x['intermediates']).read_bytes())
         else:
             certs = []
         with tempfile.TemporaryDirectory(prefix='mtc-trust-audit-') as temp:
             for i, cert in enumerate(certs):
-                p = Path(temp)/f'{i}.pem'; p.write_bytes(cert.public_bytes(crypto()[1].Encoding.PEM)); args += ['-c', str(p)]
+                p = Path(temp)/f'{i}.pem'; p.write_bytes(cert); args += ['-c', str(p)]
             result = command(args+['-c', str(root)], check=False)
         manual = 'bin/browser_client/mt-chromium-mtc browser-validation trust-x509'
         return dict(status='TRUSTED' if result.returncode == 0 else 'UNTRUSTED_OR_UNAVAILABLE', method='security verify-cert -L ssl (no explicit trust override)',
@@ -502,23 +624,21 @@ def root_trust(x):
                     continue
                 pem = command(['certutil', '-L', '-d', 'sql:'+str(db), '-n', match[1], '-a'], check=False)
                 try:
-                    x509, _, alg, _, _ = crypto()
-                    trusted |= x509.load_pem_x509_certificate(pem.stdout.encode()).fingerprint(alg.SHA256()) == x509.load_pem_x509_certificate(root.read_bytes()).fingerprint(alg.SHA256())
+                    trusted |= certificate_sha256(pem.stdout.encode()) == certificate_sha256(root.read_bytes())
                 except ValueError:
                     pass
         return dict(status='TRUSTED' if trusted else 'UNTRUSTED_OR_UNAVAILABLE', method='Chromium user NSS DB: exact root fingerprint and SSL CA trust', database=str(db), manual_command='\n'.join(manual), note='Requires certutil (NSS tools); no installation performed. Browser control remains authoritative.')
     return dict(status='UNSUPPORTED', manual_command='Use the platform browser trust-store mechanism explicitly.')
 
 
-def prepare_credentials(repo, output, image):
-    try:
-        crypto()
-    except ImportError as error:
-        raise ValueError('Python cryptography is required for credential validation; no generation attempted') from error
+def prepare_credentials(repo, output, image, profile=PROFILE, depth=2):
+    require(profile in PROFILES and depth in (2, 3, 4, 5), "Unsupported profile/depth")
     mtc_paths = [p.parent for p in (repo/'artifacts/mtc').glob('*/manifest.json')]
-    mtc, ma = select_or_generate(mtc_paths, validate_mtc, lambda: generate_mtc(repo, output, image), output/'mtc-discovery.json')
+    mtc, ma = select_or_generate(mtc_paths, lambda p: validate_mtc(p, profile, image), lambda: generate_mtc(repo, output, image, profile), output/'mtc-discovery.json')
     mtc.update(choose_anchor(mtc, output))
-    x, xa = select_or_generate(x509_paths(repo), validate_x509, lambda: generate_x509(repo), output/'x509-discovery.json')
+    global CA, SELECTED, REQUESTED
+    CA, SELECTED, REQUESTED = mtc['ca_id'], mtc['selected_tai'], mtc['requested_tai']
+    x, xa = select_or_generate(x509_paths(repo), lambda p: validate_x509(p, profile=profile, depth=depth, image=image), lambda: generate_x509(repo, profile, depth, image), output/'x509-discovery.json')
     # Preserve the public CA certificate beside the audit, never its private key.
     ca_copy = output/'x509-root-ca.pem'
     with ca_copy.open('xb') as f:
@@ -613,7 +733,9 @@ def relevant_netlog(data, url):
             for e in events if e.get('source', {}).get('id') in linked]
 
 
-def encrypted_extensions_selected(events):
+def encrypted_extensions_selected(events, selected_tai=None):
+    selected_tai = selected_tai if selected_tai is not None else SELECTED
+    require(selected_tai is not None, 'MTC fixture identity not selected')
     for name, params, _, _ in events:
         if name != 'SSL_HANDSHAKE_MESSAGE_RECEIVED' or params.get('type') != 8:
             continue
@@ -626,14 +748,17 @@ def encrypted_extensions_selected(events):
                 if kind == 0xca34:
                     ids = Reader(value); entries = Reader(ids.vector()); ids.finish()
                     while entries.pos < len(entries.data):
-                        if entries.vector(1) == core.relid(SELECTED):
+                        if entries.vector(1) == core.relid(selected_tai):
                             return True
         except (ValueError, KeyError, IndexError):
             continue
     return False
 
 
-def classify(case, case_dir, url, process, *, positive_control=False):
+def classify(case, case_dir, url, process, *, positive_control=False, requested_tai=None, selected_tai=None):
+    requested_tai = requested_tai if requested_tai is not None else REQUESTED
+    selected_tai = selected_tai if selected_tai is not None else SELECTED
+    require(requested_tai is not None and selected_tai is not None, 'MTC fixture identity not selected')
     server = (case_dir/'server.log').read_text(errors='replace') if (case_dir/'server.log').exists() else ''
     stdout = (case_dir/'chromium.stdout.log').read_text(errors='replace')
     stderr = (case_dir/'chromium.stderr.log').read_text(errors='replace')
@@ -656,8 +781,8 @@ def classify(case, case_dir, url, process, *, positive_control=False):
     names = {v: k for k, v in net.get('constants', {}).get('netError', {}).items()}
     result['net_errors'] = [dict(code=e, name=names.get(e)) for e in errors]
     requests = [p for name, p, _, _ in events if name == 'SSL_CLIENT_TRUST_ANCHOR_IDS_LIST']
-    result['requested_tai_observed'] = any(REQUESTED in str(p) for p in requests)
-    result['selected_tai_observed'] = encrypted_extensions_selected(events)
+    result['requested_tai_observed'] = any(requested_tai in str(p) for p in requests)
+    result['selected_tai_observed'] = encrypted_extensions_selected(events, selected_tai)
     ssl_connections = [p for name, p, _, _ in events if name == 'SSL_CONNECT' and p.get('version')]
     negotiated = any(p.get('version') == 'TLS 1.3' and p.get('cipher_suite') == 0x1302 and
                      p.get('key_exchange_group') == 29 and p.get('is_resumed') is False for p in ssl_connections)
@@ -748,10 +873,11 @@ def classify(case, case_dir, url, process, *, positive_control=False):
 
 class Server:
     """Same pinned s_server/loopback/readiness pattern as interoperability stage 60."""
-    def __init__(self, credentials, case, output, run_root):
+    def __init__(self, credentials, case, output, run_root, browser_mode='headless'):
         self.name = 'mtc-browser-'+uuid.uuid4().hex[:16]
         self.output, self.run_root = output, run_root
         self.credentials, self.case = credentials, case
+        self.browser_mode = browser_mode
         self.created = False
 
     def start(self):
@@ -761,7 +887,7 @@ class Server:
         fixture = Path(selected['fixture'])
         webroot = self.output/'www'
         webroot.mkdir()
-        body = PAGE_HTML.encode('utf-8')
+        body = browser_page(self.case, self.run_root, self.credentials, self.browser_mode).encode('utf-8')
         (webroot/'page.html').write_bytes(body)
         # -HTTP serves a complete response file, including our explicit MIME type.
         response = ('HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n'
@@ -774,7 +900,7 @@ class Server:
                 '-cert', '/fixtures/'+str(Path(selected['cert']).relative_to(fixture)),
                 '-key', '/fixtures/'+str(Path(selected['key']).relative_to(fixture))]
         if self.case != 'x509-positive':
-            args += ['-mtc_id', SELECTED]
+            args += ['-mtc_id', selected['selected_tai']]
         elif selected.get('intermediates'):
             args += ['-cert_chain', '/fixtures/'+str(Path(selected['intermediates']).relative_to(fixture))]
         cmd = ['docker', 'run', '-d', '--pull', 'never', '--name', self.name, '--label', LABEL+'='+str(self.run_root),
@@ -837,7 +963,24 @@ def run_browser(cmd, output, timeout):
     return result
 
 
-def run_case(case, credentials, browser, output, run_root, timeout, positive_control, browser_mode='headless', capture=None):
+def x509_spki_pin(selected, image):
+    with tempfile.TemporaryDirectory(prefix='browser-spki-') as temp:
+        shutil.copyfile(selected['cert'], Path(temp)/'leaf.pem')
+        script = ('set -eu\numask 077\n'
+                  '/opt/mtc/openssl.sh x509 -in leaf.pem -pubkey -noout > public.pem\n'
+                  '/opt/mtc/openssl.sh pkey -pubin -in public.pem -outform DER -out spki.der\n'
+                  '/opt/mtc/openssl.sh dgst -sha256 -binary -out digest.bin spki.der\n'
+                  '/opt/mtc/openssl.sh base64 -A -in digest.bin')
+        pin = command(['docker', 'run', '--rm', '--pull', 'never', '--network', 'none',
+                       '--user', f'{os.getuid()}:{os.getgid()}', '-v', temp+':/work', '-w', '/work',
+                       '--entrypoint', '/bin/sh', image, '-c', script]).stdout.strip()
+        require(len(base64.b64decode(pin, validate=True)) == 32, 'Invalid leaf SPKI SHA-256 pin')
+        return pin
+
+
+def run_case(case, credentials, browser, output, run_root, timeout, positive_control, browser_mode='headless', capture=None, x509_spki=None):
+    require(x509_spki is None or (case == 'x509-positive' and capture is None),
+            'SPKI capability bypass is only for standalone x509-positive')
     output.mkdir()
     anchor = None
     if case.startswith('mtc-') and case != 'mtc-no-trust':
@@ -847,7 +990,7 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
             anchor = output/'derived-anchor.json'
             write(anchor, mutate_anchor(read(credentials['mtc']['anchor']), case))
     url = 'https://'+HOST+':4433/'+page_target(case, run_root)
-    server = Server(credentials, case, output, run_root)
+    server = Server(credentials, case, output, run_root, browser_mode=browser_mode)
     try:
         if capture is not None:
             require(browser_mode == 'headless', 'PCAP validation requires headless mode')
@@ -866,13 +1009,18 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
                 browser_mode=browser_mode,
                 disable_trust_anchor_ids=case == 'x509-positive',
             )
+            if x509_spki is not None:
+                cmd.insert(-1, '--ignore-certificate-errors-spki-list='+x509_spki)
             write(output/'chromium-command.json', dict(command=cmd, timeout_seconds=timeout))
             exit_code = run_browser(cmd, output, timeout)
         # Flush server logs after browser exits; preserve files before removing container.
         if capture is not None:
             capture.stop()
         server.stop(); server.created = False
-        result = classify(case, output, url, exit_code, positive_control=positive_control)
+        result = classify(case, output, url, exit_code, positive_control=positive_control,
+                          requested_tai=credentials['mtc']['requested_tai'], selected_tai=credentials['mtc']['selected_tai'])
+        if x509_spki is not None:
+            result.update(x509_trust_mode='spki-capability-bypass', normal_trusted_x509_baseline=False)
         if browser_mode == 'headed':
             # Keep the automated classifier intact; inspection lacks NetLog and DOM evidence.
             result.update(browser_mode='headed', observed_outcome='INSPECTION', **{'pass': False},
@@ -933,21 +1081,27 @@ def main(argv=None):
     parser.add_argument('action', choices=('plan', 'credentials', 'status', 'run', 'cleanup',
                                            'trust-status', 'trust-x509', 'untrust-x509'))
     parser.add_argument('case', nargs='?', choices=(*CASES, 'all'))
+    parser.add_argument('--profile', choices=PROFILES, default=PROFILE)
+    parser.add_argument('--depth', type=int, choices=(2, 3, 4, 5), default=2)
     parser.add_argument('--chromium', type=Path)
+    parser.add_argument('--x509-spki-capability', action='store_true',
+                        help='Standalone x509-positive capability test with leaf SPKI trust bypass; not a trusted baseline')
     parser.add_argument('--browser-mode', choices=('headless', 'headed'), default='headless',
                         help='headless: automated validation (default); headed: bounded visual inspection, never automated PASS')
     parser.add_argument('--timeout', type=int, default=60)
     parser.add_argument('--image', default='mt-tls-mtc:local', help='Existing image used only for generation fallback')
     args = parser.parse_args(argv)
+    require(not args.x509_spki_capability or (args.action == 'run' and args.case == 'x509-positive'),
+            '--x509-spki-capability requires run x509-positive')
     require(5 <= args.timeout <= 300, 'Timeout must be between 5 and 300 seconds')
     require((args.action == 'run') == bool(args.case), 'run requires CASE; other actions take no case')
     require(not (args.case == 'all' and args.browser_mode == 'headed'), 'Run all requires headless automated validation')
     if args.action in ('trust-status', 'trust-x509', 'untrust-x509'):
-        return trust_action(args.action, REPO)
+        return trust_action(args.action, REPO, args.profile, args.depth)
     if args.action == 'plan':
         print('PRINT ONLY: discover -> strictly validate -> reuse; generate only if no valid candidate.')
         print('Search: artifacts/mtc, artifacts/x509, artifacts/cert-chain-scaling')
-        print('Identity: '+HOST+'; ECDSA P-256; MTC N=16 landmark leaf 0')
+        print('Identity: '+HOST+'; '+args.profile+'; X509 D='+str(args.depth)+'; MTC N=16 landmark leaf 0')
         print('Cases: '+', '.join(CASES)); print('TLS: '+json.dumps(TLS))
         if args.browser_mode == 'headless':
             print('Existing patched Chromium only. Each case: fresh profile, bounded headless run, NetLog/server/DOM evidence.')
@@ -976,16 +1130,17 @@ def main(argv=None):
     browser = None
     try:
         output = new_result(REPO); print('Result directory: '+str(output), flush=True)
-        credentials = prepare_credentials(REPO, output, args.image)
+        credentials = prepare_credentials(REPO, output, args.image, args.profile, args.depth)
         trust = credentials['x509']['root_trust']
         print('MTC '+credentials['mtc']['origin']+': '+credentials['mtc']['fixture'])
         print('X509 '+credentials['x509']['origin']+': '+credentials['x509']['fixture'])
         print('X509 root trust: '+trust['status'])
-        if trust['status'] != 'TRUSTED':
+        if args.action == 'run' and args.case in ('x509-positive', 'all') and not args.x509_spki_capability and trust['status'] != 'TRUSTED':
             print('Explicit manual action (not executed):\n'+trust['manual_command'])
             write(output/'summary.json', blocked_summary(output, 'X509 root trust not established'))
             return 2
         if args.action == 'credentials': return 0
+        spki = x509_spki_pin(credentials['x509'], args.image) if args.x509_spki_capability else None
         browser = browser_executable(args.chromium)
         # Bind only, never probe TLS. Refuse any incumbent server, even another workflow.
         with socket.socket() as sock:
@@ -995,6 +1150,9 @@ def main(argv=None):
         results = []; positive_pass = False
         summary = dict(overall_pass=False, timestamp=datetime.now(timezone.utc).isoformat(), chromium=browser,
                        hostname=HOST, tls=TLS, credentials=credentials, cases=results)
+        if args.x509_spki_capability:
+            summary.update(x509_trust_mode='spki-capability-bypass', normal_trusted_x509_baseline=False,
+                           leaf_spki_sha256_base64=spki)
         if args.browser_mode == 'headed':
             summary.update(browser_mode='headed', validation_mode='visual_inspection')
             print(f'Visible inspection only; each owned browser closes after at most {args.timeout} seconds. No automated PASS.', flush=True)
@@ -1005,11 +1163,13 @@ def main(argv=None):
                 for pathkey, hashkey in keys: require(sha(selected[pathkey]) == selected[hashkey], 'Credential changed: '+pathkey)
             try:
                 result = run_case(case, credentials, browser, output/case, output, args.timeout, positive_pass,
-                                  browser_mode=args.browser_mode)
+                                  browser_mode=args.browser_mode, x509_spki=spki)
             except Exception as e:
                 result = next(r for r in blocked_summary(output, str(e), browser)['cases'] if r['name'] == case)
                 result['reason'] = 'Execution incomplete: '+str(e)
                 (output/case).mkdir(exist_ok=True)
+            if args.x509_spki_capability:
+                result.update(x509_trust_mode='spki-capability-bypass', normal_trusted_x509_baseline=False)
             write(output/case/'result.json', result); results.append(result)
             if case == 'mtc-positive': positive_pass = result['pass']
             print(case+': '+result['observed_outcome']+' — '+result['reason'], flush=True)
@@ -1020,7 +1180,10 @@ def main(argv=None):
         return 0 if summary['overall_pass'] else 1
     except Exception as e:
         if output and not (output/'summary.json').exists():
-            write(output/'summary.json', blocked_summary(output, str(e), browser))
+            failure = blocked_summary(output, str(e), browser)
+            if args.x509_spki_capability:
+                failure.update(x509_trust_mode='spki-capability-bypass', normal_trusted_x509_baseline=False)
+            write(output/'summary.json', failure)
         raise
     finally:
         lock.rmdir()
