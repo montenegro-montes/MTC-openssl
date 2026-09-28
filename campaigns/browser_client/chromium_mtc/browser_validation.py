@@ -1086,6 +1086,8 @@ def main(argv=None):
     parser.add_argument('--chromium', type=Path)
     parser.add_argument('--x509-spki-capability', action='store_true',
                         help='Standalone x509-positive capability test with leaf SPKI trust bypass; not a trusted baseline')
+    parser.add_argument('--x509-chromium-ca-policy', action='store_true',
+                        help='Use an externally installed Chromium CACertificates policy as the X.509 trust anchor; no certificate bypass')
     parser.add_argument('--browser-mode', choices=('headless', 'headed'), default='headless',
                         help='headless: automated validation (default); headed: bounded visual inspection, never automated PASS')
     parser.add_argument('--timeout', type=int, default=60)
@@ -1093,6 +1095,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
     require(not args.x509_spki_capability or (args.action == 'run' and args.case == 'x509-positive'),
             '--x509-spki-capability requires run x509-positive')
+    require(not args.x509_chromium_ca_policy or (args.action == 'run' and args.case == 'x509-positive'),
+            '--x509-chromium-ca-policy requires run x509-positive')
+    require(not (args.x509_spki_capability and args.x509_chromium_ca_policy),
+            'SPKI capability bypass and Chromium CA policy modes are mutually exclusive')
     require(5 <= args.timeout <= 300, 'Timeout must be between 5 and 300 seconds')
     require((args.action == 'run') == bool(args.case), 'run requires CASE; other actions take no case')
     require(not (args.case == 'all' and args.browser_mode == 'headed'), 'Run all requires headless automated validation')
@@ -1135,7 +1141,10 @@ def main(argv=None):
         print('MTC '+credentials['mtc']['origin']+': '+credentials['mtc']['fixture'])
         print('X509 '+credentials['x509']['origin']+': '+credentials['x509']['fixture'])
         print('X509 root trust: '+trust['status'])
-        if args.action == 'run' and args.case in ('x509-positive', 'all') and not args.x509_spki_capability and trust['status'] != 'TRUSTED':
+        if (args.action == 'run' and args.case in ('x509-positive', 'all')
+                and not args.x509_spki_capability
+                and not args.x509_chromium_ca_policy
+                and trust['status'] != 'TRUSTED'):
             print('Explicit manual action (not executed):\n'+trust['manual_command'])
             write(output/'summary.json', blocked_summary(output, 'X509 root trust not established'))
             return 2
@@ -1151,8 +1160,18 @@ def main(argv=None):
         summary = dict(overall_pass=False, timestamp=datetime.now(timezone.utc).isoformat(), chromium=browser,
                        hostname=HOST, tls=TLS, credentials=credentials, cases=results)
         if args.x509_spki_capability:
-            summary.update(x509_trust_mode='spki-capability-bypass', normal_trusted_x509_baseline=False,
+            summary.update(x509_trust_mode='spki-capability-bypass',
+                           normal_trusted_x509_baseline=False,
+                           certificate_verification_bypass=True,
                            leaf_spki_sha256_base64=spki)
+        elif args.x509_chromium_ca_policy:
+            summary.update(x509_trust_mode='chromium-ca-policy',
+                           certificate_verification_bypass=False,
+                           platform_trust_store=False,
+                           policy_name='CACertificates',
+                           fixture_root_pem_sha256=credentials['x509']['root_sha256'],
+                           policy_root_der_sha256=certificate_sha256(
+                               Path(credentials['x509']['root']).read_bytes()))
         if args.browser_mode == 'headed':
             summary.update(browser_mode='headed', validation_mode='visual_inspection')
             print(f'Visible inspection only; each owned browser closes after at most {args.timeout} seconds. No automated PASS.', flush=True)
@@ -1169,7 +1188,17 @@ def main(argv=None):
                 result['reason'] = 'Execution incomplete: '+str(e)
                 (output/case).mkdir(exist_ok=True)
             if args.x509_spki_capability:
-                result.update(x509_trust_mode='spki-capability-bypass', normal_trusted_x509_baseline=False)
+                result.update(x509_trust_mode='spki-capability-bypass',
+                              normal_trusted_x509_baseline=False,
+                              certificate_verification_bypass=True)
+            elif args.x509_chromium_ca_policy:
+                result.update(x509_trust_mode='chromium-ca-policy',
+                              certificate_verification_bypass=False,
+                              platform_trust_store=False,
+                              policy_name='CACertificates',
+                              fixture_root_pem_sha256=credentials['x509']['root_sha256'],
+                              policy_root_der_sha256=certificate_sha256(
+                                  Path(credentials['x509']['root']).read_bytes()))
             write(output/case/'result.json', result); results.append(result)
             if case == 'mtc-positive': positive_pass = result['pass']
             print(case+': '+result['observed_outcome']+' — '+result['reason'], flush=True)
