@@ -313,7 +313,8 @@ def analyze(output, capture, browser_result):
             bv.command([tshark, '-n', '-r', capture.path, '-F', 'pcapng', '-w', converted])
             capture.path = converted
         fields = ('frame.number', 'ip.src', 'ip.dst', 'tcp.srcport', 'tcp.dstport', 'tcp.stream',
-                  'tcp.seq_raw', 'tcp.flags.syn', 'tcp.flags.ack', 'tcp.len', 'tcp.payload')
+                  'tcp.seq_raw', 'tcp.flags.syn', 'tcp.flags.ack', 'tcp.len', 'tcp.payload',
+                  'tcp.flags.fin', 'tcp.flags.reset')
         cmd = [tshark, '-n', '-r', str(capture.path), '-Y', 'ip.src == 127.0.0.1 && ip.dst == 127.0.0.1 && tcp.port == 4433',
                '-T', 'fields', '-E', 'separator=/t', '-E', 'occurrence=f']
         for field in fields: cmd += ['-e', field]
@@ -325,8 +326,10 @@ def analyze(output, capture, browser_result):
         with (output/'tshark.tsv').open() as source:
             for row in csv.reader(source, delimiter='\t'):
                 bv.require(len(row) == len(fields), 'Incomplete tshark fields')
-                frame, src, dst, sport, dport, stream, seq, syn, ack, length, payload = row
+                frame, src, dst, sport, dport, stream, seq, syn, ack, length, payload, fin, reset = row
                 entry = streams.setdefault(stream, dict(stream=int(stream), client_port=None, segments=[], isn=None,
+                                                         first_client_abort_frame=None, last_client_payload_frame=None,
+                                                         first_server_payload_frame=None,
                                                          **{k: 0 for k in METRICS}))
                 direction = 'client_to_server' if dport == '4433' else 'server_to_client'
                 port = int(sport if dport == '4433' else dport)
@@ -334,10 +337,15 @@ def analyze(output, capture, browser_result):
                 entry['client_port'] = port
                 entry['tcp_packets_'+direction] += 1; entry['tcp_packets_total'] += 1
                 entry['tcp_payload_bytes_'+direction] += int(length); entry['tcp_payload_bytes_total'] += int(length)
+                if dport != '4433' and int(length) and entry['first_server_payload_frame'] is None:
+                    entry['first_server_payload_frame'] = int(frame)
                 if dport == '4433':
+                    if (fin.lower() in ('1', 'true') or reset.lower() in ('1', 'true')) and entry['first_client_abort_frame'] is None:
+                        entry['first_client_abort_frame'] = int(frame)
                     if syn.lower() in ('1', 'true') and ack.lower() in ('0', 'false'):
                         entry['isn'] = (int(seq)+1) % (1 << 32)
                     if int(length):
+                        entry['last_client_payload_frame'] = int(frame)
                         raw = bytes.fromhex(payload.replace(':', ''))
                         bv.require(len(raw) == int(length), 'Truncated TCP payload')
                         entry['segments'].append((int(seq), raw))
@@ -439,15 +447,24 @@ def analyze(output, capture, browser_result):
             for e in primary)
         for entry in matched:
             connection = net_connections.get(entry['client_random'], {})
+            abort_frame = entry['first_client_abort_frame']
+            last_client_payload = entry['last_client_payload_frame']
+            first_server_payload = entry['first_server_payload_frame']
+            # Strict capture ordering: all client payload (including the complete,
+            # correlated ClientHello) precedes abort; every server payload follows.
+            # Even retransmitted client payload after abort makes this unavailable.
+            abort_before_flight = (abort_frame is not None and last_client_payload is not None
+                                   and first_server_payload is not None
+                                   and last_client_payload < abort_frame < first_server_payload)
             aborted = (result['name'] in ('mtc-positive', 'x509-positive')
                        and browser_result['pass'] is True and successful_navigation
                        and entry['classification'] == 'other_correlated'
                        and len(entry['client_randoms']) == 1
                        and connection.get('aborted_unused_attempt', False)
                        and entry['client_random'] not in completed
-                       # Conservative initial support: no server TLS bytes reached the client.
-                       and entry['tcp_payload_bytes_server_to_client'] == 0)
+                       and (entry['tcp_payload_bytes_server_to_client'] == 0 or abort_before_flight))
             entry['aborted_before_tls_completion'] = aborted
+            entry['abort_before_server_flight'] = aborted and abort_before_flight
             if aborted:
                 entry['classification'] = 'aborted_before_tls_completion'
         result['wire_observed'] = dict(**{k: sum(e[k] for e in matched) for k in METRICS},
