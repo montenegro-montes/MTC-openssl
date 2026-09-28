@@ -60,8 +60,10 @@ def save_outputs(root, summary, rows, pairs):
         '# Chromium paired browser measurement pilot\n\n'
         f"Status: {summary['status']}. Complete pairs: {len(pairs)}/{summary['requested_pairs']}. "
         f"Attempted runs: {len(rows)}; PASS: {summary['pass_runs']}.\n\n"
-        'TLS 1.3 / X25519 / TLS_AES_256_GCM_SHA384; ECDSA P-256; X.509 D=2 '
-        '(local root plus server; one transmitted certificate); MTC N=16 landmark; server-only authentication.\n\n'
+        f"TLS 1.3 / X25519 / TLS_AES_256_GCM_SHA384; {summary['profile']['signature']}; "
+        f"X.509 D={summary['profile']['depth_including_root']} (includes root); "
+        f"{summary['profile']['transmitted_certificates']} transmitted certificates; "
+        'MTC N=16 landmark; server-only authentication.\n\n'
         'Odd pairs: MTC then X.509. Even pairs: X.509 then MTC. No warmups. '
         'Each run uses a fresh browser profile and the existing headless PCAP validation. '
         'Credentials and Chromium selection are fixed for the campaign.\n\n'
@@ -87,6 +89,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('plan', 'requirements', 'status', 'run'))
     parser.add_argument('--pairs', type=int, help='Required for run; no implicit large campaign')
+    parser.add_argument('--profile', choices=bv.PROFILES, default=bv.PROFILE)
+    parser.add_argument('--depth', type=int, choices=(2, 3, 4, 5), default=2)
     parser.add_argument('--chromium', type=Path)
     parser.add_argument('--timeout', type=int, default=60)
     parser.add_argument('--image', default='mt-tls-mtc:local')
@@ -94,14 +98,14 @@ def main():
     bv.require(args.pairs is None or args.pairs > 0, '--pairs must be a positive integer')
     bv.require(5 <= args.timeout <= 300, 'Timeout must be between 5 and 300 seconds')
     if args.action == 'plan':
-        print('PRINT ONLY: fixed TLS 1.3 / X25519 / TLS_AES_256_GCM_SHA384 / ECDSA P-256 / D=2 / MTC N=16 / server-only.')
+        print(f'PRINT ONLY: TLS 1.3 / X25519 / TLS_AES_256_GCM_SHA384 / {args.profile} / D={args.depth} / MTC N=16 / server-only.')
         print('Odd pairs: mtc-positive -> x509-positive; even pairs: x509-positive -> mtc-positive. No warmups.')
         print(f"Pairs: {args.pairs if args.pairs is not None else 'explicit --pairs required for run'}")
         print('Each run must PASS existing browser/PCAP validation. Stop on any failure; preserve evidence.')
         print('Outputs: measurements.csv, pairs.csv, summary.json, README.md and per-run evidence.'); return 0
     if args.action == 'requirements':
         print(bv.json.dumps(pcap.requirements(), indent=2))
-        print('tshark is required for measurement metrics. Existing trusted X.509 root and valid D=2 fixtures required.'); return 0
+        print('tshark is required for measurement metrics. Existing trusted X.509 root and valid requested-profile/depth fixtures required.'); return 0
     if args.action == 'status':
         paths = sorted((bv.REPO/'artifacts/results').glob(PREFIX+'*/summary.json'))
         print(bv.json.dumps(bv.read(paths[-1]), indent=2) if paths else 'NO BROWSER MEASUREMENT RESULTS'); return 0
@@ -116,21 +120,18 @@ def main():
     root = None; rows = []; pairs = []
     summary = dict(status='FAIL', overall_pass=False, started_at=now(), requested_pairs=args.pairs,
                    requested_runs=2*args.pairs, warmups=0, byte_definition=BYTE_DEFINITION,
-                   profile=dict(tls=bv.TLS, signature='ecdsa-p256', depth_including_root=2,
-                                transmitted_certificates=1, mtc_tree_size=16, authentication='server-only'),
+                   profile=dict(tls=bv.TLS, signature=args.profile, depth_including_root=args.depth,
+                                transmitted_certificates=args.depth-1, mtc_tree_size=16, authentication='server-only'),
                    capture_backend=tools, order='Odd: MTC -> X509; even: X509 -> MTC')
     try:
         root = bv.REPO/'artifacts/results'/(PREFIX+bv.stamp()); root.mkdir(parents=True, exist_ok=False)
         summary['run_id'] = root.name
         print('Result directory: '+str(root), flush=True)
-        credentials = bv.prepare_credentials(bv.REPO, root, args.image)
+        credentials = bv.prepare_credentials(bv.REPO, root, args.image, args.profile, args.depth)
         bv.require(credentials['x509']['root_trust']['status'] == 'TRUSTED', 'X509 root must already be trusted')
-        bv.require(not credentials['x509'].get('intermediates'), 'This pilot requires X.509 D=2; intermediates are unsupported')
-        x509 = bv.crypto()[0]
-        leaf = x509.load_pem_x509_certificate(Path(credentials['x509']['cert']).read_bytes())
-        ca = x509.load_pem_x509_certificate(Path(credentials['x509']['root']).read_bytes())
-        bv.require(leaf.issuer == ca.subject and leaf.subject != ca.subject, 'X.509 must be root -> server (D=2)')
-        bv.require(all(credentials[c]['profile']=='ecdsa-p256' for c in ('mtc','x509'))
+        bv.require(credentials['x509']['depth'] == args.depth
+                   and credentials['x509']['intermediate_count'] == args.depth-2, 'X509 depth mismatch')
+        bv.require(all(credentials[c]['profile']==args.profile for c in ('mtc','x509'))
                    and credentials['mtc']['tree_size']==16 and credentials['mtc']['mode']=='landmark', 'Pilot profile mismatch')
         bv.check_hostname()
         browser = bv.browser_executable(args.chromium)
@@ -139,6 +140,9 @@ def main():
         inputs = {str(Path(data[key])): bv.sha(data[key]) for data, keys in (
             (credentials['mtc'], ('cert','key','trust','anchor')),
             (credentials['x509'], ('cert','key','root'))) for key in keys}
+        if credentials['x509'].get('intermediates'):
+            path = credentials['x509']['intermediates']
+            inputs[path] = bv.sha(path)
         inputs[browser['executable']] = browser['sha256']
         summary['input_sha256'] = inputs
         for pair_index in range(1, args.pairs+1):
