@@ -93,6 +93,7 @@ def main():
     parser.add_argument('--pairs', type=int, help='Required for run; no implicit large campaign')
     parser.add_argument('--profile', choices=bv.PROFILES, default=bv.PROFILE)
     parser.add_argument('--depth', type=int, choices=(2, 3, 4, 5), default=2)
+    parser.add_argument('--x509-fixture-set')
     parser.add_argument('--chromium', type=Path)
     parser.add_argument('--x509-chromium-ca-policy', action='store_true',
                         help='Use an externally installed Chromium CACertificates policy as the X.509 trust anchor; no certificate bypass')
@@ -100,6 +101,8 @@ def main():
     parser.add_argument('--image', default='mt-tls-mtc:local')
     args = parser.parse_args()
     bv.require(args.pairs is None or args.pairs > 0, '--pairs must be a positive integer')
+    bv.require(not args.x509_fixture_set or args.action == 'run',
+               '--x509-fixture-set requires run')
     bv.require(not args.x509_chromium_ca_policy or args.action == 'run',
                '--x509-chromium-ca-policy requires run')
     bv.require(5 <= args.timeout <= 300, 'Timeout must be between 5 and 300 seconds')
@@ -133,7 +136,9 @@ def main():
         root = bv.REPO/'artifacts/results'/(PREFIX+bv.stamp()); root.mkdir(parents=True, exist_ok=False)
         summary['run_id'] = root.name
         print('Result directory: '+str(root), flush=True)
-        credentials = bv.prepare_credentials(bv.REPO, root, args.image, args.profile, args.depth)
+        credentials = bv.prepare_credentials(
+            bv.REPO, root, args.image, args.profile, args.depth,
+            args.x509_fixture_set)
         if args.x509_chromium_ca_policy:
             x509_trust_metadata = dict(
                 x509_trust_mode='chromium-ca-policy',

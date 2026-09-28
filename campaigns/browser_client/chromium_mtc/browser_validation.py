@@ -297,7 +297,8 @@ def validate_mtc(fixture, profile=PROFILE, image='mt-tls-mtc:local'):
                 cert_sha256=sha(cert_path), key_sha256=sha(key_path), trust_sha256=sha(directory/'trust.bin'), **leaf)
 
 
-def validate_x509(fixture, *, profile=PROFILE, depth=2, image='mt-tls-mtc:local'):
+def validate_x509(fixture, *, profile=PROFILE, depth=2, image='mt-tls-mtc:local',
+                  fixture_set=None):
     require(profile in PROFILES and depth in (2, 3, 4, 5), 'Unsupported profile/depth')
     fixture = Path(fixture)
     cert_path, key_path, root_path = [fixture / n for n in ('server.pem', 'server.key', 'root.pem')]
@@ -328,14 +329,19 @@ def validate_x509(fixture, *, profile=PROFILE, depth=2, image='mt-tls-mtc:local'
         docker_openssl(temp, [*args, 'server.pem'], image)
     manifest = fixture / 'manifest.json'
     complete = False
+    manifest_data = {}
     if manifest.is_file():
-        d = read(manifest)
-        if d.get('files_sha256'):
-            check_saved_hashes(fixture, d['files_sha256']); complete = True
+        manifest_data = read(manifest)
+        if manifest_data.get('files_sha256'):
+            check_saved_hashes(fixture, manifest_data['files_sha256']); complete = True
+    if fixture_set is not None:
+        require(manifest_data.get('fixture_set') == fixture_set,
+                'X509 fixture does not belong to requested fixture_set')
     return dict(fixture=str(fixture.resolve()), cert=str(cert_path.resolve()), key=str(key_path.resolve()),
                 root=str(root_path.resolve()), intermediates=str(intermediate.resolve()) if intermediate.is_file() and intermediate.stat().st_size else None,
                 certificate_sha256=sha(cert_path), key_sha256=sha(key_path), root_sha256=sha(root_path),
                 profile=profile, depth=depth, intermediate_count=len(chain), hostname=HOST, complete_evidence=complete,
+                fixture_set=manifest_data.get('fixture_set'),
                 root_ca=True, root_self_signature_verified=True, **leaf)
 
 
@@ -631,14 +637,29 @@ def root_trust(x):
     return dict(status='UNSUPPORTED', manual_command='Use the platform browser trust-store mechanism explicitly.')
 
 
-def prepare_credentials(repo, output, image, profile=PROFILE, depth=2):
+def prepare_credentials(repo, output, image, profile=PROFILE, depth=2,
+                        x509_fixture_set=None):
     require(profile in PROFILES and depth in (2, 3, 4, 5), "Unsupported profile/depth")
     mtc_paths = [p.parent for p in (repo/'artifacts/mtc').glob('*/manifest.json')]
     mtc, ma = select_or_generate(mtc_paths, lambda p: validate_mtc(p, profile, image), lambda: generate_mtc(repo, output, image, profile), output/'mtc-discovery.json')
     mtc.update(choose_anchor(mtc, output))
     global CA, SELECTED, REQUESTED
     CA, SELECTED, REQUESTED = mtc['ca_id'], mtc['selected_tai'], mtc['requested_tai']
-    x, xa = select_or_generate(x509_paths(repo), lambda p: validate_x509(p, profile=profile, depth=depth, image=image), lambda: generate_x509(repo, profile, depth, image), output/'x509-discovery.json')
+    x509_validator = lambda p: validate_x509(
+        p, profile=profile, depth=depth, image=image,
+        fixture_set=x509_fixture_set)
+    if x509_fixture_set is None:
+        x, xa = select_or_generate(
+            x509_paths(repo), x509_validator,
+            lambda: generate_x509(repo, profile, depth, image),
+            output/'x509-discovery.json')
+    else:
+        x, xa = discover(x509_paths(repo), x509_validator)
+        write(output/'x509-discovery.json', xa)
+        require(x is not None,
+                f'No valid X509 fixture for fixture_set={x509_fixture_set}, '
+                f'profile={profile}, depth={depth}')
+        x['origin'] = 'reused-formal-fixture-set'
     # Preserve the public CA certificate beside the audit, never its private key.
     ca_copy = output/'x509-root-ca.pem'
     with ca_copy.open('xb') as f:
@@ -1083,6 +1104,7 @@ def main(argv=None):
     parser.add_argument('case', nargs='?', choices=(*CASES, 'all'))
     parser.add_argument('--profile', choices=PROFILES, default=PROFILE)
     parser.add_argument('--depth', type=int, choices=(2, 3, 4, 5), default=2)
+    parser.add_argument('--x509-fixture-set')
     parser.add_argument('--chromium', type=Path)
     parser.add_argument('--x509-spki-capability', action='store_true',
                         help='Standalone x509-positive capability test with leaf SPKI trust bypass; not a trusted baseline')
@@ -1093,6 +1115,8 @@ def main(argv=None):
     parser.add_argument('--timeout', type=int, default=60)
     parser.add_argument('--image', default='mt-tls-mtc:local', help='Existing image used only for generation fallback')
     args = parser.parse_args(argv)
+    require(not args.x509_fixture_set or args.action == 'run',
+            '--x509-fixture-set requires run')
     require(not args.x509_spki_capability or (args.action == 'run' and args.case == 'x509-positive'),
             '--x509-spki-capability requires run x509-positive')
     require(not args.x509_chromium_ca_policy or (args.action == 'run' and args.case == 'x509-positive'),
@@ -1136,7 +1160,9 @@ def main(argv=None):
     browser = None
     try:
         output = new_result(REPO); print('Result directory: '+str(output), flush=True)
-        credentials = prepare_credentials(REPO, output, args.image, args.profile, args.depth)
+        credentials = prepare_credentials(
+            REPO, output, args.image, args.profile, args.depth,
+            args.x509_fixture_set)
         trust = credentials['x509']['root_trust']
         print('MTC '+credentials['mtc']['origin']+': '+credentials['mtc']['fixture'])
         print('X509 '+credentials['x509']['origin']+': '+credentials['x509']['fixture'])
