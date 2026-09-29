@@ -176,6 +176,15 @@ PY
  esac
  date -u +%Y-%m-%dT%H:%M:%SZ > "$STATE/$step.done"
 }
+sandbox_action() {
+ [[ "$(uname -s)" == Linux ]] || { echo 'AppArmor setup is not required on this platform.'; return; }
+ if [[ ! -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] || [[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" != 1 ]]; then
+  echo 'AppArmor user-namespace setup is not required.'; return
+ fi
+ [[ -f "$STATE/paths.env" ]] || { echo 'Initialize/configure CHROMIUM_SRC first: mt-chromium-mtc init' >&2; return 1; }
+ load
+ python3 -B "$REPO/campaigns/browser_client/chromium_mtc/apparmor_setup.py" "$1" "$CHROMIUM_SRC/out/mtc-release/chrome"
+}
 doctor() {
  local os tool
  os=$(uname -s)
@@ -194,6 +203,7 @@ doctor() {
  for tool in "${tools[@]}" gclient gn autoninja; do
   if command -v "$tool" >/dev/null; then printf 'PRESENT %s: %s\n' "$tool" "$(command -v "$tool")"; else echo "MISSING $tool"; fi
  done
+ if [[ "$os" == Linux ]]; then sandbox_action status || echo 'AppArmor sandbox preflight needs attention; see diagnostic above.'; fi
  echo 'Free disk space (repository filesystem):'
  df -h "$REPO" || echo 'Disk space unavailable'
  return 0
@@ -591,6 +601,63 @@ menu_invoke() {
  else result=$?; printf 'Command exited with status %s.\n' "$result"; fi
 }
 
+browser_measurements_plan() {
+ cat <<'PLAN'
+Supported browser matrix:
+5 profiles × 4 X.509 depths = 20 cells
+Profiles: ecdsa-p256 ecdsa-p384 mldsa44 mldsa65 mldsa87
+X.509 depths: 2 3 4 5
+Smoke:
+1 pair/cell = 20 pairs = 40 browser runs
+Formal:
+30 pairs/cell = 600 pairs = 1200 browser runs
+MTC remains N=16 landmark leaf 0 for every cell; it does not vary with depth.
+Fixture set: chromium-x509-depth-matrix-v1; externally installed Chromium CA policy.
+No fixture generation or policy installation. Each failed cell is recorded; remaining cells continue.
+P-521 remains capability-negative: Chromium does not advertise ecdsa_secp521r1_sha512 (0x0603)
+in its server-signature verification preferences, so it is excluded from this formal browser matrix.
+PLAN
+}
+
+browser_measurements_matrix() (
+ local pairs=$1 root profile depth log status result_directory passed=0 failed=0
+ [[ "$pairs" == 1 || "$pairs" == 30 ]] || fail 'Supported matrix requires 1 or 30 pairs/cell.'
+ mkdir -p "$REPO/artifacts/results"
+ root=$(mktemp -d "$REPO/artifacts/results/chromium-browser-matrix-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")
+ printf 'profile\tdepth\tpairs\tstatus\tresult_directory\tlog\n' > "$root/index.tsv"
+ browser_measurements_plan > "$root/plan.txt"
+ printf 'Selected pairs/cell: %s\n' "$pairs" >> "$root/plan.txt"
+ echo "Matrix directory: $root"
+ for profile in ecdsa-p256 ecdsa-p384 mldsa44 mldsa65 mldsa87; do
+  for depth in 2 3 4 5; do
+   log="$root/$profile-d$depth.log"
+   printf 'Cell: %s D=%s pairs=%s\n' "$profile" "$depth" "$pairs"
+   # Reuse the measurement driver, but fail instead of generating missing/invalid fixtures.
+   if python3 -B - "$REPO" "$profile" "$depth" "$pairs" <<'PY' 2>&1 | tee "$log"
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1])/'campaigns/browser_client/chromium_mtc'))
+import browser_validation as validation
+import browser_measurements as measurements
+def no_generation(*args, **kwargs):
+    raise ValueError('Matrix requires existing valid fixtures; prepare them explicitly before retrying this cell')
+validation.generate_mtc = validation.generate_x509 = no_generation
+sys.argv = ['browser_measurements.py', 'run', '--profile', sys.argv[2], '--depth', sys.argv[3],
+            '--pairs', sys.argv[4], '--x509-fixture-set', 'chromium-x509-depth-matrix-v1',
+            '--x509-chromium-ca-policy']
+raise SystemExit(measurements.main())
+PY
+   then status=PASS; passed=$((passed+1))
+   else status=FAIL; failed=$((failed+1))
+   fi
+   result_directory=$(sed -n 's/^Result directory: //p' "$log" | head -n 1)
+   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$profile" "$depth" "$pairs" "$status" "$result_directory" "$log" >> "$root/index.tsv"
+  done
+ done
+ printf 'PASS %s/20\nFAIL %s/20\nIndex: %s/index.tsv\n' "$passed" "$failed" "$root"
+ [[ "$failed" == 0 ]]
+)
+
 menu_browser_mode() {
  local browser_case=$1 selection
  while true; do
@@ -606,7 +673,7 @@ menu_browser_mode() {
 }
 
 menu_submenu() {
- local section=$1 title selection index mode
+ local section=$1 title selection index mode root_path
  local labels=() commands=() prefix=() args=()
  case "$section" in
   source)
@@ -615,8 +682,8 @@ menu_submenu() {
    commands=('run 100' 'run 110' 'run 120' 'run 130' 'run 140' 'run 150' 'run 160' status plan);;
   preparation)
    title='Build preparation (macOS / Linux)'; prefix=(prepare-build)
-   labels=('170 Verify reconstructed source' '180 Prepare Chromium checkout layout' '190 Sync pinned dependencies' '200 Check platform build dependencies' '210 Configure release build' '220 Verify build configuration' 'Status' 'Plan' 'Install build dependencies')
-   commands=('run 170' 'run 180' 'run 190' 'run 200' 'run 210' 'run 220' status plan install-deps);;
+   labels=('170 Verify reconstructed source' '180 Prepare Chromium checkout layout' '190 Sync pinned dependencies' '200 Check platform build dependencies' '210 Configure release build' '220 Verify build configuration' 'Status' 'Plan' 'Install build dependencies' 'Prepare Chromium AppArmor sandbox' 'Check Chromium AppArmor sandbox')
+   commands=('run 170' 'run 180' 'run 190' 'run 200' 'run 210' 'run 220' status plan install-deps sandbox-setup sandbox-status);;
   build)
    title='Build Chromium'; prefix=(build)
    labels=('Plan' 'Status' 'Build Chromium'); commands=(plan status 'run chromium');;
@@ -638,17 +705,18 @@ menu_submenu() {
    commands=(plan requirements status 'run mtc-positive' 'run mtc-no-trust' 'run mtc-bad-merkle' 'run mtc-bad-serial' 'run x509-positive' 'run all');;
   measurements)
    title='Browser measurements'; prefix=(browser-measurements)
-   labels=('Plan' 'Requirements / capture backend' 'Status' 'Run pilot (3 pairs)')
-   commands=(plan requirements status 'run --pairs 3');;
+   labels=('Plan' 'Requirements / capture backend' 'Status' 'Run pilot (3 pairs)' 'Run supported matrix smoke (1 pair/cell)' 'Run supported matrix (30 pairs/cell)')
+   commands=(plan requirements status 'run --pairs 3' matrix-smoke matrix);;
  esac
  while true; do
   printf '\n%s\n' "$title"
   for ((index=0; index<${#labels[@]}; index++)); do
    printf '%d. %s\n' "$((index+1))" "${labels[index]}"
   done
-  printf '0. Back\n'
+  if [[ "$section" == measurements ]]; then printf '7. Back\n'; else printf '0. Back\n'; fi
   read -r -p 'Select an option: ' selection || exit 0
   [[ "$selection" != 0 ]] || return 0
+  [[ "$section" != measurements || "$selection" != 7 ]] || return 0
   [[ "$selection" =~ ^[1-9][0-9]?$ ]] || { echo 'Invalid option.'; continue; }
   (( selection <= ${#labels[@]} )) || { echo 'Invalid option.'; continue; }
   read -r -a args <<< "${commands[selection-1]}"
@@ -656,8 +724,18 @@ menu_submenu() {
    menu_browser_mode "${args[1]}"
    continue
   fi
+  if [[ "$section" == trust ]]; then
+   read -r -p 'Root certificate path (PEM): ' root_path || return 0
+   [[ -n "$root_path" ]] || { echo 'Root path is required.'; continue; }
+   args+=(--root "$root_path")
+  fi
+  if [[ "${args[0]}" == sandbox-setup || "${args[0]}" == sandbox-status ]]; then
+   prefix=()
+  elif [[ "$section" == preparation ]]; then
+   prefix=(prepare-build)
+  fi
   mode=confirm
-  case "${args[0]}" in status|plan|trust-status|requirements) mode=readonly;; esac
+  case "${args[0]}" in status|plan|trust-status|requirements|sandbox-status) mode=readonly;; esac
   menu_invoke "$mode" ${prefix[@]+"${prefix[@]}"} "${args[@]}"
  done
 }
@@ -713,11 +791,19 @@ MENU
 )
 
 case "${1:-help}" in
- help|--help|-h) echo 'Usage: mt-chromium-mtc menu|init|status|plan|doctor|browser-validation plan|credentials|status|trust-status|trust-x509|untrust-x509|run CASE|cleanup|browser-pcap plan|requirements|status|run CASE|browser-measurements plan|requirements|status|run --pairs N|reconstruct-plan|reconstruct-source plan|status|run STEP [--dest PATH]|prepare-build plan|status|run STEP|install-deps [--dest PATH]|build plan|status|run chromium [--dest PATH]|show STEP|run STEP|resume|cleanup'; echo 'Step 20: run 20 --fixture PATH (validated existing fixture) or run 20 --generate (explicit generation and validation). No automatic fixture selection.';;
+ help|--help|-h) echo 'Usage: mt-chromium-mtc menu|init|status|plan|doctor|browser-validation plan|credentials|status|trust-status|trust-x509|untrust-x509|run CASE|cleanup|browser-pcap plan|requirements|status|run CASE|browser-measurements plan|requirements|status|run --pairs N|reconstruct-plan|reconstruct-source plan|status|run STEP [--dest PATH]|prepare-build plan|status|run STEP|install-deps [--dest PATH]|build plan|status|run chromium [--dest PATH]|show STEP|run STEP|resume|cleanup'; echo 'Step 20: run 20 --fixture PATH (validated existing fixture) or run 20 --generate (explicit generation and validation). No automatic fixture selection.'; echo 'Sandbox: sandbox-setup installs the exact configured Linux Chromium AppArmor userns policy; sandbox-status checks it. Trust commands require an explicit certificate: browser-validation trust-status|trust-x509|untrust-x509 --root PATH';;
  menu) menu;;
  browser-validation) shift; exec python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_validation.py" "$@";;
  browser-pcap) shift; exec python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_pcap.py" "$@";;
- browser-measurements) shift; exec python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_measurements.py" "$@";;
+ browser-measurements) shift
+  case "${1:-}" in
+   plan|matrix-smoke|matrix)
+    [[ "$#" == 1 ]] || fail 'Usage: browser-measurements plan|matrix-smoke|matrix'
+    case "$1" in plan) browser_measurements_plan;; matrix-smoke) browser_measurements_matrix 1;; matrix) browser_measurements_matrix 30;; esac;;
+   *) exec python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_measurements.py" "$@";;
+  esac;;
+ sandbox-setup) sandbox_action setup;;
+ sandbox-status) sandbox_action status;;
  doctor) doctor;;
  reconstruct-plan) reconstruct_plan;;
  reconstruct-source) shift; reconstruct_source "$@";;

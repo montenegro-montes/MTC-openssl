@@ -558,3 +558,31 @@ root self-signature verification command in `credentials.json`. The root must
 be a self-issued CA and pass OpenSSL `verify -check_ss_sig`; this cryptographic
 check remains separate from browser/platform trust. Private CA keys are never
 copied into the result directory.
+
+
+## Linux developer Chromium: AppArmor sandbox preparation
+
+Ubuntu/Linux may restrict unprivileged user namespaces, preventing developer
+Chromium builds from creating their sandbox. After building Chromium, configure
+`CHROMIUM_SRC` in `.mt-state/chromium-mtc/paths.env`, then run:
+
+```sh
+bin/browser_client/mt-chromium-mtc sandbox-setup
+bin/browser_client/mt-chromium-mtc sandbox-status
+```
+
+The setup applies only on Linux when
+`/proc/sys/kernel/apparmor_restrict_unprivileged_userns` equals `1`. It targets
+exactly the resolved `CHROMIUM_SRC/out/mtc-release/chrome`, without wildcards.
+It installs `/etc/apparmor.d/mtc-chromium-<path-sha256-prefix>` after syntax
+validation, using explicit `sudo` commands when needed. An identical installed,
+loaded profile is reused. Different existing content is preserved and rejected.
+`doctor` and the build-preparation menu expose the check; setup is explicit.
+Reading kernel policy state may require administrator privileges.
+
+The profile uses `flags=(unconfined)` and `userns,` to permit this developer
+executable to create Chromium's own sandbox. AppArmor remains enabled, the
+system-wide restriction is unchanged, and no browser sandbox bypass is added.
+macOS is unaffected. Re-run setup if the configured executable path changes.
+This checks policy presence, not a live browser sandbox launch.
+See [Chromium's AppArmor guidance](https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md).

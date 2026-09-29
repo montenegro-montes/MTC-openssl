@@ -499,26 +499,31 @@ def nss_database():
     return home_db if home_db.is_dir() else Path(os.environ.get('XDG_DATA_HOME', str(Path.home()/'.local/share')))/'pki/nssdb'
 
 
-def nss_certificates(db):
+def nss_certificates(db, *, trusted_only=False, preferred=None):
     listing = command(['certutil', '-L', '-d', 'sql:'+str(db)])
     entries = []
     for line in listing.stdout.splitlines():
         match = re.match(r'^(.*?)\s+([A-Za-z]*,[A-Za-z]*,[A-Za-z]*)\s*$', line)
         if match:
             nickname, trust = match.groups()
-            pem = command(['certutil', '-L', '-d', 'sql:'+str(db), '-n', nickname, '-a'])
-            entries.append((nickname, trust, certificate_sha256(pem.stdout.encode())))
+            entries.append((nickname, trust))
     require(len({e[0] for e in entries}) == len(entries), 'Ambiguous NSS nicknames; inspect database manually')
-    return entries
+    for nickname, trust in sorted(entries, key=lambda e: e[0] != preferred):
+        if trusted_only and 'C' not in trust.split(',')[0]:
+            continue
+        pem = command(['certutil', '-L', '-d', 'sql:'+str(db), '-n', nickname, '-a'])
+        yield nickname, trust, certificate_sha256(pem.stdout.encode())
 
 
-def trust_action(action, repo, profile=PROFILE, depth=2):
-    # Same discovery/ranking as run; deliberately no generation fallback.
-    x, _ = discover(x509_paths(repo), lambda p: validate_x509(p, profile=profile, depth=depth))
-    require(x is not None, 'No valid existing X.509 fixture; no CA generated')
-    root = Path(x['root']); system = platform.system()
+def trust_action(action, root, image='mt-tls-mtc:local'):
+    root = Path(root).expanduser()
+    require(root.is_file() and not root.is_symlink(), 'Select a regular root certificate with --root PATH')
+    root = root.resolve()
+    root_bytes = root.read_bytes()
+    root_hash = hashlib.sha256(root_bytes).hexdigest()
+    system = platform.system()
     require(system in ('Darwin', 'Linux'), 'Trust management supports Darwin and Linux only')
-    fingerprint = certificate_sha256(root.read_bytes())
+    fingerprint = certificate_sha256(root_bytes)
     require(shutil.which('security' if system == 'Darwin' else 'certutil'),
             'Missing trust backend: install security (macOS) or NSS certutil (Linux) manually')
     def trusted():
@@ -528,17 +533,29 @@ def trust_action(action, repo, profile=PROFILE, depth=2):
                     'Legacy NSS database; migrate it manually first')
             return (db/'cert9.db').exists() and any(
                 fp == fingerprint and 'C' in flags.split(',')[0]
-                for _, flags, fp in nss_certificates(db))
+                for _, flags, fp in nss_certificates(db, trusted_only=True, preferred='Chromium-MTC-lab-'+fingerprint))
         # Verify this exact root independently of any alternative leaf chain.
         result = command(['security', 'verify-cert', '-L', '-p', 'ssl', '-c', root], check=False)
-        return result.returncode == 0 and root_trust(x)['status'] == 'TRUSTED'
+        return result.returncode == 0
 
     before = trusted()
     evidence = dict(platform=system, root_path=str(root), root_sha256=fingerprint,
                     trusted_before=before, action=action, trusted_after=before)
     try:
         if action != 'trust-status' and not (action == 'trust-x509' and before):
-            require(sha(root) == x['root_sha256'], 'Root changed since fixture validation')
+            require(sha(root) == root_hash, 'Selected root changed since fingerprint verification')
+            if action == 'trust-x509':
+                # Validate the selected root without selecting a leaf/profile/depth.
+                with docker_temporary_directory('browser-root-') as temp:
+                    Path(temp, 'root.pem').write_bytes(root_bytes)
+                    details = docker_openssl(temp, ['x509', '-in', 'root.pem', '-noout',
+                                                   '-subject', '-issuer', '-nameopt', 'RFC2253', '-ext', 'basicConstraints'], image).stdout
+                    names = dict(line.split('=', 1) for line in details.splitlines() if '=' in line)
+                    require('CA:TRUE' in details and names.get('subject') is not None
+                            and names['subject'] == names.get('issuer'), 'Selected certificate is not a self-issued CA root')
+                    docker_openssl(temp, ['verify', '-no-CApath', '-no-CAstore', '-check_ss_sig',
+                                          '-CAfile', 'root.pem', 'root.pem'], image)
+                require(sha(root) == root_hash, 'Selected root changed during validation')
             if system == 'Darwin':
                 keychain = Path.home()/'Library/Keychains/login.keychain-db'
                 require(keychain.is_file(), 'Login keychain missing; configure/unlock it manually')
@@ -554,7 +571,7 @@ def trust_action(action, repo, profile=PROFILE, depth=2):
                         command(['security', 'delete-certificate', '-t', '-Z', fingerprint, keychain])
             else:
                 db = nss_database(); evidence['database'] = str(db)
-                entries = nss_certificates(db) if (db/'cert9.db').exists() else []
+                entries = list(nss_certificates(db)) if (db/'cert9.db').exists() else []
                 matches = [e for e in entries if e[2] == fingerprint]
                 parent = db
                 while not parent.exists():
@@ -584,7 +601,7 @@ def trust_action(action, repo, profile=PROFILE, depth=2):
                         pem = command(['certutil', '-L', '-d', 'sql:'+str(db), '-n', nickname, '-a'])
                         require(certificate_sha256(pem.stdout.encode()) == fingerprint, 'NSS certificate changed; deletion refused')
                         command(['certutil', '-D', '-d', 'sql:'+str(db), '-n', nickname])
-        evidence['trusted_after'] = trusted()
+        evidence['trusted_after'] = before if action == 'trust-status' else trusted()
         if action == 'trust-x509':
             require(evidence['trusted_after'], 'Root is still NOT TRUSTED; inspect backend permissions/settings manually')
         elif action == 'untrust-x509':
@@ -617,7 +634,7 @@ def root_trust(x):
             for i, cert in enumerate(certs):
                 p = Path(temp)/f'{i}.pem'; p.write_bytes(cert); args += ['-c', str(p)]
             result = command(args+['-c', str(root)], check=False)
-        manual = 'bin/browser_client/mt-chromium-mtc browser-validation trust-x509'
+        manual = shlex.join(['bin/browser_client/mt-chromium-mtc', 'browser-validation', 'trust-x509', '--root', str(root)])
         return dict(status='TRUSTED' if result.returncode == 0 else 'UNTRUSTED_OR_UNAVAILABLE', method='security verify-cert -L ssl (no explicit trust override)',
                     returncode=result.returncode, diagnostic=(result.stdout+result.stderr)[-2000:], manual_command=manual)
     if system == 'Linux':
@@ -1114,6 +1131,7 @@ def main(argv=None):
     parser.add_argument('action', choices=('plan', 'credentials', 'status', 'run', 'cleanup',
                                            'trust-status', 'trust-x509', 'untrust-x509'))
     parser.add_argument('case', nargs='?', choices=(*CASES, 'all'))
+    parser.add_argument('--root', type=Path, help='Exact PEM root required for trust-status/trust-x509/untrust-x509; no fixture discovery')
     parser.add_argument('--profile', choices=PROFILES, default=PROFILE)
     parser.add_argument('--depth', type=int, choices=(2, 3, 4, 5), default=2)
     parser.add_argument('--x509-fixture-set')
@@ -1127,6 +1145,8 @@ def main(argv=None):
     parser.add_argument('--timeout', type=int, default=60)
     parser.add_argument('--image', default='mt-tls-mtc:local', help='Existing image used only for generation fallback')
     args = parser.parse_args(argv)
+    trust_operation = args.action in ('trust-status', 'trust-x509', 'untrust-x509')
+    require((args.root is not None) == trust_operation, '--root PATH is required only for trust-status/trust-x509/untrust-x509')
     require(not args.x509_fixture_set or args.action == 'run',
             '--x509-fixture-set requires run')
     require(not args.x509_spki_capability or (args.action == 'run' and args.case == 'x509-positive'),
@@ -1139,7 +1159,7 @@ def main(argv=None):
     require((args.action == 'run') == bool(args.case), 'run requires CASE; other actions take no case')
     require(not (args.case == 'all' and args.browser_mode == 'headed'), 'Run all requires headless automated validation')
     if args.action in ('trust-status', 'trust-x509', 'untrust-x509'):
-        return trust_action(args.action, REPO, args.profile, args.depth)
+        return trust_action(args.action, args.root, args.image)
     if args.action == 'plan':
         print('PRINT ONLY: discover -> strictly validate -> reuse; generate only if no valid candidate.')
         print('Search: artifacts/mtc, artifacts/x509, artifacts/cert-chain-scaling')
