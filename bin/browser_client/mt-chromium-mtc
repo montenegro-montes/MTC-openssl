@@ -10,12 +10,19 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 load() { [[ -f "$STATE/paths.env" ]] || fail 'Run init first.'; source "$STATE/paths.env"; }
 init() {
  mkdir -p "$STATE"
- [[ ! -e "$STATE/paths.env" ]] || { echo 'Existing configuration preserved.'; return; }
+ if [[ -e "$STATE/paths.env" ]]; then
+  load
+  if [[ -n "${FIXTURE:-}" ]]; then
+   check_fixture || fail 'Invalid existing fixture configuration preserved. Run step 20 with --fixture PATH or --generate explicitly.'
+  else
+   [[ -z "${VALIDATION:-}" && -z "${ANCHOR:-}" ]] || fail 'Incomplete fixture selection; run step 20 --fixture PATH or --generate.'
+  fi
+  echo 'Existing configuration preserved; step 20 selects or explicitly generates fixtures.'; return
+ fi
  local chromium_src="$HOME/Desktop/chromium-mtc/src"
  if [[ "$(uname -s)" == Linux ]]; then chromium_src="$HOME/chromium-mtc-rebuild/src"; fi
- local fixture="$REPO/artifacts/mtc/browser-server-mtc-example-com-ecdsa-p256-n16-20260925T082751Z-24938"
  (set -o noclobber; printf 'CHROMIUM_SRC=%q\nFIXTURE=%q\nVALIDATION=%q\nANCHOR=%q\nHOSTNAME_LAB=%q\nCONTAINER=%q\n' \
- "$chromium_src" "$fixture" "$fixture-validation/validation.json" "$fixture-chromium.json" server.mtc.example.com mtc-browser-server > "$STATE/paths.env")
+ "$chromium_src" "" "" "" server.mtc.example.com mtc-browser-server > "$STATE/paths.env")
 }
 step_name() {
  local s
@@ -23,6 +30,7 @@ step_name() {
  fail "Unknown step: $1"
 }
 check_fixture() {
+ [[ -n "${FIXTURE:-}" && -n "${VALIDATION:-}" && -n "${ANCHOR:-}" ]] || fail 'No fixture selected. Run step 20 --fixture PATH or --generate.'
  python3 - "$FIXTURE" "$VALIDATION" "$HOSTNAME_LAB" "$STATE" <<'PY'
 import hashlib,json,sys
 from pathlib import Path
@@ -39,6 +47,40 @@ assert image.startswith('sha256:')
 print('PASS existing fixture hashes, hostname and ECDSA-P256/N=16 landmark evidence')
 PY
 }
+select_fixture() (
+ local temporary step
+ case "${1:-}" in
+  --fixture)
+   [[ "$#" == 2 ]] || fail 'Usage: run 20 --fixture PATH'
+   FIXTURE=$(CDPATH= cd -- "$2" && pwd) || fail "Fixture directory missing: $2";;
+  --generate)
+   [[ "$#" == 1 ]] || fail 'Usage: run 20 --generate'
+   FIXTURE="$REPO/artifacts/mtc/browser-${HOSTNAME_LAB//./-}-ecdsa-p256-n16-$(date -u +%Y%m%dT%H%M%SZ)-$$";;
+  '')
+   [[ "$#" == 0 && -n "$FIXTURE" ]] || fail 'Choose explicitly: run 20 --fixture PATH or run 20 --generate'
+   check_fixture; exit "$?";;
+  *) fail 'Usage: run 20 [--fixture PATH|--generate]';;
+ esac
+ [[ ! -f "$STATE/container-id" ]] || fail 'Cleanup the workflow-owned server before changing fixture selection.'
+ VALIDATION="$FIXTURE-validation/validation.json"
+ ANCHOR="$FIXTURE-chromium.json"
+ if [[ "$1" == --generate ]]; then
+  [[ ! -e "$FIXTURE" && ! -e "${VALIDATION%/validation.json}" && ! -e "$ANCHOR" ]] || fail 'Generation output exists; preserved.'
+  python3 "$REPO/campaigns/browser_client/chromium_mtc/fixtures.py" generate \
+   --output "$FIXTURE" --server-hostname "$HOSTNAME_LAB" --execute || exit "$?"
+  python3 "$REPO/campaigns/browser_client/chromium_mtc/fixtures.py" validate \
+   --fixtures "$FIXTURE" --output "${VALIDATION%/validation.json}" --server-hostname "$HOSTNAME_LAB" --execute || exit "$?"
+ fi
+ check_fixture || exit "$?"
+ temporary=$(mktemp "$STATE/paths.env.XXXXXX")
+ trap 'rm -f "$temporary"' EXIT
+ printf 'CHROMIUM_SRC=%q\nFIXTURE=%q\nVALIDATION=%q\nANCHOR=%q\nHOSTNAME_LAB=%q\nCONTAINER=%q\n' \
+  "$CHROMIUM_SRC" "$FIXTURE" "$VALIDATION" "$ANCHOR" "$HOSTNAME_LAB" "$CONTAINER" > "$temporary"
+ # Invalidate downstream evidence before publishing the new selection.
+ for step in "${STEPS[@]:2}"; do rm -f "$STATE/$step.done"; done
+ mv -- "$temporary" "$STATE/paths.env"
+ echo "Selected fixture: $FIXTURE"
+)
 owned() { [[ "$(docker inspect -f '{{index .Config.Labels "mtc.workflow"}}' "$CONTAINER")" == "$STATE" ]]; }
 start_server() {
  local prerequisite
@@ -70,6 +112,8 @@ start_server() {
 }
 run_step() {
  local step=$1
+ shift
+ [[ "$step" == 20.* || "$#" == 0 ]] || fail 'Only step 20 accepts --fixture PATH or --generate.'
  case "$step" in
   00.*) for cmd in python3 git docker; do command -v "$cmd" >/dev/null || fail "Missing $cmd"; done; docker info >/dev/null;;
   10.*) python3 - "$CHROMIUM_SRC" "$STATE" <<'PY'
@@ -98,7 +142,7 @@ d=dict(executable=str(exe),chromium_commit=commit(src),boringssl_commit=commit(s
 (state/'chromium.json').write_text(json.dumps(d,indent=2)+'\n');print(json.dumps(d,indent=2))
 PY
  ;;
-  20.*) [[ -d "$FIXTURE" ]] || fail 'Known fixture missing. Generate explicitly with fixtures.py into a fresh timestamped output, then update paths.env.'; check_fixture;;
+  20.*) select_fixture "$@"; load;;
   30.*) check_fixture;;
   40.*) check_fixture
    python3 - "$REPO" "$FIXTURE" "$ANCHOR" <<'PY'
@@ -669,7 +713,7 @@ MENU
 )
 
 case "${1:-help}" in
- help|--help|-h) echo 'Usage: mt-chromium-mtc menu|init|status|plan|doctor|browser-validation plan|credentials|status|trust-status|trust-x509|untrust-x509|run CASE|cleanup|browser-pcap plan|requirements|status|run CASE|browser-measurements plan|requirements|status|run --pairs N|reconstruct-plan|reconstruct-source plan|status|run STEP [--dest PATH]|prepare-build plan|status|run STEP|install-deps [--dest PATH]|build plan|status|run chromium [--dest PATH]|show STEP|run STEP|resume|cleanup';;
+ help|--help|-h) echo 'Usage: mt-chromium-mtc menu|init|status|plan|doctor|browser-validation plan|credentials|status|trust-status|trust-x509|untrust-x509|run CASE|cleanup|browser-pcap plan|requirements|status|run CASE|browser-measurements plan|requirements|status|run --pairs N|reconstruct-plan|reconstruct-source plan|status|run STEP [--dest PATH]|prepare-build plan|status|run STEP|install-deps [--dest PATH]|build plan|status|run chromium [--dest PATH]|show STEP|run STEP|resume|cleanup'; echo 'Step 20: run 20 --fixture PATH (validated existing fixture) or run 20 --generate (explicit generation and validation). No automatic fixture selection.';;
  menu) menu;;
  browser-validation) shift; exec python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_validation.py" "$@";;
  browser-pcap) shift; exec python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_pcap.py" "$@";;
@@ -687,7 +731,7 @@ case "${1:-help}" in
   docker container inspect -f '{{.Name}} running={{.State.Running}} image={{.Image}}' "$CONTAINER" 2>/dev/null || echo 'Container unavailable (absent or Docker inaccessible)';;
  run|resume|cleanup) load; mkdir "$STATE/lock" 2>/dev/null || fail 'Workflow locked; inspect before retrying.'; trap 'rmdir "$STATE/lock"' EXIT
   case "$1" in
-   run) run_step "$(step_name "${2:?Step required}")";;
+   run) run_step "$(step_name "${2:?Step required}")" "${@:3}";;
    resume) for step in "${STEPS[@]}"; do if [[ -f "$STATE/$step.done" ]]; then echo "SKIP $step"; else run_step "$step"; fi; done;;
    cleanup) if docker container inspect "$CONTAINER" >/dev/null 2>&1; then owned || fail 'Foreign container preserved'; docker rm -f "$CONTAINER"; fi
     rm -f "$STATE/60.start-mtc-positive-server.done" "$STATE/container-id"
