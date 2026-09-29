@@ -101,9 +101,11 @@ The Chromium JSON must come from the same newly generated fixture.
 
 ## Local hostname resolution
 
-The driver checks the existing `/etc/hosts` entry and local resolution. It never
-modifies this file. If missing, manually add `127.0.0.1 server.mtc.example.com`
-once, then rerun step 50. Existing entries are never owned by the workflow.
+Step 50 verifies an existing correct `/etc/hosts` entry. If the hostname is
+absent, it shows and appends `127.0.0.1 server.mtc.example.com` using `sudo tee -a`.
+It refuses to modify conflicting entries and reports them for manual correction.
+It then rechecks the file and requires local resolution exclusively to
+`127.0.0.1`. Repeated runs do not add duplicates; cleanup preserves the entry.
 
 The browser can then access:
 
@@ -184,7 +186,7 @@ bin/browser_client/mt-chromium-mtc cleanup
 
 `show STEP` displays implementation/commands; `run STEP` executes one step.
 Steps: 00 preflight, 10 existing Chromium detection, 20 fixture selection,
-30 validation-evidence verification, 40 anchor export/check, 50 hostname check,
+30 validation-evidence verification, 40 anchor export/check, 50 hostname configuration,
 60 positive server start. `resume` skips every stage with an existing `.done` marker. Use `run STEP`
 to explicitly recheck a completed stage; `status` checks container state. Stopped/foreign containers require inspection;
 they are never silently replaced. No retries of TLS samples occur.

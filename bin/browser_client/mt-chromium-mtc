@@ -163,13 +163,35 @@ print('PASS anchor:',out)
 PY
  ;;
   50.*) python3 - "$HOSTNAME_LAB" <<'PY'
-import shlex,socket,sys
+import socket,subprocess,sys
 from pathlib import Path
-host=sys.argv[1];matches=[line.split('#')[0].split() for line in Path('/etc/hosts').read_text().splitlines()]
-assert any(p and p[0]=='127.0.0.1' and host in p[1:] for p in matches), "Run manually: printf '%s\\n' " + shlex.quote('127.0.0.1 '+host) + ' | sudo tee -a /etc/hosts'
-assert all(p[0]=='127.0.0.1' for p in matches if host in p[1:]), 'Conflicting hosts entry'
-assert {a[4][0] for a in socket.getaddrinfo(host,4433)}=={'127.0.0.1'}, 'Resolution differs from loopback'
-print('PASS existing hosts entry; not owned or modified by this workflow')
+host=sys.argv[1];hosts=Path('/etc/hosts')
+def read_entries():
+ text=hosts.read_text()
+ entries=[(line,line.split('#')[0].split()) for line in text.splitlines()]
+ matches=[(line,p) for line,p in entries if host.lower() in [a.lower().rstrip('.') for a in p[1:]]]
+ conflicts=[line for line,p in matches if p[0]!='127.0.0.1']
+ if conflicts:
+  sys.exit('ERROR: Conflicting /etc/hosts entries:\n'+'\n'.join(conflicts)+
+           '\n'+host+' must resolve exclusively to 127.0.0.1. Resolve conflicting entries manually.')
+ return text,matches
+text,matches=read_entries()
+if not matches:
+ entry='127.0.0.1 '+host
+ print('Adding to /etc/hosts using sudo tee -a: '+entry,flush=True)
+ subprocess.run(['sudo','tee','-a','/etc/hosts'],
+                input=('\n' if text and not text.endswith('\n') else '')+entry+'\n',
+                text=True,check=True,stdout=subprocess.DEVNULL)
+_,matches=read_entries()
+if not matches:
+ sys.exit('ERROR: Required loopback mapping missing from /etc/hosts.')
+try:
+ addresses={a[4][0] for a in socket.getaddrinfo(host,4433)}
+except OSError as error:
+ sys.exit('ERROR: Cannot resolve '+host+': '+str(error))
+if addresses!={'127.0.0.1'}:
+ sys.exit('ERROR: '+host+' must resolve exclusively to 127.0.0.1; resolved: '+str(sorted(addresses)))
+print('PASS /etc/hosts mapping and resolution exclusively to 127.0.0.1')
 PY
  ;;
   60.*) start_server;;
@@ -689,7 +711,7 @@ menu_submenu() {
    labels=('Plan' 'Status' 'Build Chromium'); commands=(plan status 'run chromium');;
   setup)
    title='Existing Chromium / MTC setup'
-   labels=('00 Preflight' '10 Detect existing Chromium' '20 Select or generate MTC fixture' '30 Validate MTC fixture' '40 Export MTC anchor' '50 Check hostname configuration' '60 Start MTC positive server' 'Status' 'Resume from next pending step')
+   labels=('00 Preflight' '10 Detect existing Chromium' '20 Select or generate MTC fixture' '30 Validate MTC fixture' '40 Export MTC anchor' '50 Configure hostname' '60 Start MTC positive server' 'Status' 'Resume from next pending step')
    commands=('run 00' 'run 10' 'run 20' 'run 30' 'run 40' 'run 50' 'run 60' status resume);;
   trust)
    title='X.509 trust management'; prefix=(browser-validation)
