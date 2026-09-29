@@ -140,6 +140,12 @@ def certificate_der(pem):
     return base64.b64decode(re.sub(rb'\s+', b'', blocks[0].split(b'-----')[2]), validate=True)
 
 
+def docker_temporary_directory(prefix):
+    root = REPO / '.mt-state' / 'chromium-tmp'
+    root.mkdir(parents=True, exist_ok=True)
+    return tempfile.TemporaryDirectory(prefix=prefix, dir=root)
+
+
 def docker_openssl(directory, args, image='mt-tls-mtc:local'):
     return command(['docker', 'run', '--rm', '--pull', 'never', '--network', 'none',
                     '--user', f'{os.getuid()}:{os.getgid()}', '-e', 'LC_ALL=C',
@@ -173,7 +179,7 @@ def certificate_info(directory, name, profile, image, *, signature=True):
     run = lambda args: docker_openssl(directory, args, image).stdout
     text = run(['x509', '-in', name, '-noout', '-text'])
     public = run(['x509', '-in', name, '-pubkey', '-noout'])
-    with tempfile.TemporaryDirectory(prefix='browser-public-') as temp:
+    with docker_temporary_directory('browser-public-') as temp:
         Path(temp, 'public.pem').write_text(public)
         check_public_profile(docker_openssl(temp, ['pkey', '-pubin', '-in', 'public.pem', '-text', '-noout'], image).stdout, profile)
     if signature:
@@ -199,7 +205,7 @@ def certificate_info(directory, name, profile, image, *, signature=True):
 
 def web_leaf(cert_path, key_path, *, profile=PROFILE, image='mt-tls-mtc:local', signature=False):
     require(not Path(cert_path).is_symlink() and not Path(key_path).is_symlink(), 'Symlink credential rejected')
-    with tempfile.TemporaryDirectory(prefix='browser-leaf-') as temp:
+    with docker_temporary_directory('browser-leaf-') as temp:
         shutil.copyfile(cert_path, Path(temp)/'cert.pem')
         shutil.copyfile(key_path, Path(temp)/'key.pem'); (Path(temp)/'key.pem').chmod(0o600)
         cert = certificate_info(temp, 'cert.pem', profile, image, signature=signature)
@@ -252,7 +258,7 @@ def validate_mtc(fixture, profile=PROFILE, image='mt-tls-mtc:local'):
         require(len(matched) == 1, 'Unknown checkpoint signer')
         name, spki = matched[0]
         message = core.message(name, ca_id, 0, size, root_hash, timestamp)
-        with tempfile.TemporaryDirectory(prefix='browser-checkpoint-') as temp:
+        with docker_temporary_directory('browser-checkpoint-') as temp:
             for filename, data in [('public.der', spki), ('message.bin', message), ('signature.bin', signature)]:
                 Path(temp, filename).write_bytes(data)
             public = docker_openssl(temp, ['pkey', '-pubin', '-inform', 'DER', '-in', 'public.der', '-text', '-noout'], image).stdout
@@ -309,7 +315,7 @@ def validate_x509(fixture, *, profile=PROFILE, depth=2, image='mt-tls-mtc:local'
     require(len(chain) == depth-2, 'X509 intermediate count does not match requested depth')
     certificates = [cert_path.read_bytes(), *chain, root_path.read_bytes()]
     require(len({certificate_sha256(c) for c in certificates}) == depth, 'Duplicate chain certificate')
-    with tempfile.TemporaryDirectory(prefix='browser-chain-') as temp:
+    with docker_temporary_directory('browser-chain-') as temp:
         for index, pem in enumerate(certificates):
             Path(temp, f'{index}.pem').write_bytes(pem)
         infos = [cert, *(certificate_info(temp, f'{i}.pem', profile, image) for i in range(1, depth))]
@@ -985,7 +991,7 @@ def run_browser(cmd, output, timeout):
 
 
 def x509_spki_pin(selected, image):
-    with tempfile.TemporaryDirectory(prefix='browser-spki-') as temp:
+    with docker_temporary_directory('browser-spki-') as temp:
         shutil.copyfile(selected['cert'], Path(temp)/'leaf.pem')
         script = ('set -eu\numask 077\n'
                   '/opt/mtc/openssl.sh x509 -in leaf.pem -pubkey -noout > public.pem\n'
