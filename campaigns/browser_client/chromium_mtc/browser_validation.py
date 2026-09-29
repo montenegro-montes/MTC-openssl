@@ -700,7 +700,13 @@ def browser_executable(override=None):
     else:
         candidates = [Path.home()/'chromium-mtc-rebuild/src/out/mtc-release/chrome',
                       Path.home()/'Desktop/chromium-mtc/src/out/mtc/Chromium.app/Contents/MacOS/Chromium',
-                      Path.home()/'Desktop/chromium-mtc/src/out/mtc-release/chrome']
+                      Path.home()/'Desktop/chromium-mtc/src/out/mtc-release/chrome',
+                      Path.home()/'chromium-mtc-rebuild/src/out/mtc-release/Chromium.app/Contents/MacOS/Chromium',
+                      Path.home()/'chromium-mtc-rebuild/src/out/mtc/Chromium.app/Contents/MacOS/Chromium',
+                      Path.home()/'Desktop/chromium-mtc/src/out/mtc-release/Chromium.app/Contents/MacOS/Chromium',
+                      Path.home()/'chromium-mtc-rebuild/src/out/mtc/chrome',
+                      Path.home()/'Desktop/chromium-mtc/src/out/mtc/chrome']
+        candidates = [p for p in candidates if p.name == ('Chromium' if platform.system() == 'Darwin' else 'chrome')]
     for p in candidates:
         if p.is_file() and os.access(p, os.X_OK):
             commit = command(['git', '-C', p.parent, 'rev-parse', 'HEAD'], check=False).stdout.strip() or None

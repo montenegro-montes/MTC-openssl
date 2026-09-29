@@ -11,9 +11,11 @@ load() { [[ -f "$STATE/paths.env" ]] || fail 'Run init first.'; source "$STATE/p
 init() {
  mkdir -p "$STATE"
  [[ ! -e "$STATE/paths.env" ]] || { echo 'Existing configuration preserved.'; return; }
+ local chromium_src="$HOME/Desktop/chromium-mtc/src"
+ if [[ "$(uname -s)" == Linux ]]; then chromium_src="$HOME/chromium-mtc-rebuild/src"; fi
  local fixture="$REPO/artifacts/mtc/browser-server-mtc-example-com-ecdsa-p256-n16-20260925T082751Z-24938"
  (set -o noclobber; printf 'CHROMIUM_SRC=%q\nFIXTURE=%q\nVALIDATION=%q\nANCHOR=%q\nHOSTNAME_LAB=%q\nCONTAINER=%q\n' \
- "$HOME/Desktop/chromium-mtc/src" "$fixture" "$fixture-validation/validation.json" "$fixture-chromium.json" server.mtc.example.com mtc-browser-server > "$STATE/paths.env")
+ "$chromium_src" "$fixture" "$fixture-validation/validation.json" "$fixture-chromium.json" server.mtc.example.com mtc-browser-server > "$STATE/paths.env")
 }
 step_name() {
  local s
@@ -71,16 +73,22 @@ run_step() {
  case "$step" in
   00.*) for cmd in python3 git docker; do command -v "$cmd" >/dev/null || fail "Missing $cmd"; done; docker info >/dev/null;;
   10.*) python3 - "$CHROMIUM_SRC" "$STATE" <<'PY'
-import hashlib,json,os,re,subprocess,sys
+import hashlib,json,os,platform,re,subprocess,sys
 from pathlib import Path
-src,state=map(Path,sys.argv[1:]);exe=src/'out/mtc/Chromium.app/Contents/MacOS/Chromium'
-assert exe.is_file() and os.access(exe,os.X_OK), 'Existing Chromium missing; no build will be attempted'
-args=(src/'out/mtc/args.gn').read_text()
+src,state=map(Path,sys.argv[1:])
+system=platform.system()
+assert system in ('Darwin','Linux'), 'Existing Chromium detection supports macOS and Linux'
+binary='Chromium.app/Contents/MacOS/Chromium' if system=='Darwin' else 'chrome'
+outputs=('mtc','mtc-release') if system=='Darwin' else ('mtc-release','mtc')
+output=next((src/'out'/name for name in outputs if (src/'out'/name/binary).is_file() and os.access(src/'out'/name/binary,os.X_OK)),None)
+assert output is not None, 'Existing Chromium missing under '+str(src/'out')+'; no build will be attempted'
+exe=output/binary
+args=(output/'args.gn').read_text()
 def commit(p):return subprocess.check_output(['git','-C',str(p),'rev-parse','HEAD'],text=True).strip()
 def flag(k):
  m=re.search(r'^\s*'+k+r'\s*=\s*(true|false)\s*(?:#.*)?$',args,re.M)
  if m:return m.group(1)=='true'
- ninja=src/'out/mtc/obj/base/base.ninja'
+ ninja=output/'obj/base/base.ninja'
  if k=='is_component_build' and ninja.is_file():return '-DCOMPONENT_BUILD' in ninja.read_text().splitlines()[0]
  return 'not explicit in args.gn'
 h=hashlib.sha256()
@@ -165,7 +173,7 @@ Verify exact commits, Chromium's BoringSSL gitlink, and authoritative source tre
   BoringSSL: $BORINGSSL_PATCHED_TREE
 Explicit source interface: reconstruct-source plan|status|run STEP [--dest ABSOLUTE_PATH]
 Stages 100–160 reconstruct only these two source repositories and pinned depot_tools.
-Next explicit phase: prepare-build plan (DEPS, Linux dependencies and GN).
+Next explicit phase: prepare-build plan (DEPS, platform dependencies and GN).
 Compilation is available only through build run chromium; see build plan.
 Normal resume cannot execute reconstruction or build stages.
 PLAN
@@ -306,7 +314,11 @@ if '--dest' in args:
  i=args.index('--dest'); require(args.count('--dest')==1 and i+1<len(args),'Use --dest ABSOLUTE_PATH once')
  destination=Path(args[i+1]); require(destination.is_absolute(),'An absolute --dest is required'); del args[i:i+2]
 dest=destination.resolve(); action=args.pop(0) if args else 'plan'
+system=platform.system(); machine=platform.machine()
+is_mac=system=='Darwin'
 steps=['170.verify-reconstructed-source','180.prepare-chromium-checkout-layout','190.sync-pinned-deps','200.check-linux-build-dependencies','210.configure-linux-release','220.verify-build-configuration']
+if is_mac:
+ steps[3]='200.check-macos-build-dependencies'; steps[4]='210.configure-macos-release'
 step=None
 if action=='run':
  require(len(args)==1,'One step/target required')
@@ -319,6 +331,8 @@ require(action!='install-deps' or namespace=='prepare-build','Use prepare-build 
 src=dest/'src'; boring=src/'third_party/boringssl/src'; depot=dest/'depot_tools'
 state=dest/'.mtc-build-state'; source_state=dest/'.mtc-source-state'; out=src/'out/mtc-release'
 gn_args='is_debug = false\nis_component_build = false\nsymbol_level = 1\nuse_remoteexec = false\n'
+if is_mac: gn_args+='target_cpu = "'+('arm64' if machine=='arm64' else 'x64')+'"\n'
+executable=out/('Chromium.app/Contents/MacOS/Chromium' if is_mac else 'chrome')
 layout="""# Owned by the Chromium MTC reconstruction workflow.
 solutions = [{
     'name': 'src',
@@ -330,11 +344,15 @@ solutions = [{
 target_os = ['linux']
 target_os_only = True
 """
+if is_mac: layout=layout.replace("target_os = ['linux']", "target_os = ['mac']")
 sync=[str(depot/'gclient'),'sync','--nohooks','--noprehooks']
 bootstrap=[str(depot/'ensure_bootstrap')]
 hooks=[str(depot/'gclient'),'runhooks']
 check=[str(src/'build/install-build-deps.sh'),'--quick-check']
 install=[str(src/'build/install-build-deps.sh')]
+mac_checks=[['xcodebuild','-version'], ['xcodebuild','-checkFirstLaunchStatus'],
+            ['xcrun','--sdk','macosx','--show-sdk-path'], ['xcrun','--find','clang']]
+if is_mac: check=mac_checks[0]
 gen=[str(depot/'gn'),'gen','out/mtc-release']
 build=[str(depot/'autoninja'),'-C','out/mtc-release','chrome']
 if action=='plan':
@@ -343,8 +361,8 @@ if action=='plan':
   print('\n'.join(steps))
   print('180: unmanaged src; exclude src/third_party/boringssl/src via custom_deps=None.')
   print('190 (cwd='+str(dest)+'): '+shlex.join(sync))
-  print('200 (check only): '+shlex.join(check))
-  print('Optional explicit installation: prepare-build install-deps')
+  print('200 (check only): '+(' && '.join(map(shlex.join,mac_checks)) if is_mac else shlex.join(check)))
+  print('macOS: install full Xcode and finish its first-launch setup manually; install-deps checks readiness.' if is_mac else 'Optional explicit installation: prepare-build install-deps')
   print('210 (cwd='+str(src)+'): '+shlex.join(bootstrap)+' && '+shlex.join(hooks)+' && '+shlex.join(gen))
   print('GN args:\n'+gn_args.rstrip())
   print('220: verify source, layout, GN args/build.ninja and no recorded compilation/artifacts.')
@@ -353,7 +371,8 @@ if action=='plan':
   print('Resolved executable: '+str(depot/'autoninja'))
   print('Requires current stages 170–220, exact sources/depot_tools, dependency check and generated GN configuration.')
  print('Environment: DEPOT_TOOLS_UPDATE=0; pinned depot_tools first on PATH.')
- print('Ubuntu 24.04 x86_64 only. Normal resume cannot execute this phase.'); sys.exit(0)
+ print('Build platform: '+system+' '+machine+'; output: '+str(executable))
+ print('Supported: macOS Intel/Apple Silicon with Xcode, or Ubuntu 24.04 x86_64. Normal resume cannot execute this phase.'); sys.exit(0)
 for p in (repo,Path.home()/'Desktop/chromium-mtc',Path.home()/'Desktop/depot_tools'):
  p=p.resolve(); require(dest!=p and p not in dest.parents and dest not in p.parents,'Destination overlaps a protected checkout')
 identity={'destination':str(dest),'versions':v,'workflow':'chromium-mtc-source-v1'}
@@ -364,6 +383,7 @@ for path in (src,boring,depot,state,source_state,out): require(path.resolve()==p
 # Bind evidence to configuration, implementation and the last source verification.
 source_done=source_state/'160.verify-source-trees.done'
 context={'owner':identity,'driver_sha256':digest(repo/'bin/browser_client/mt-chromium-mtc'),'args':gn_args,'layout':layout,
+         'platform':system,'architecture':machine,
          'source_verification_mtime_ns':source_done.stat().st_mtime_ns if source_done.is_file() else None}
 def record_path(s): return state/(s+'.json')
 def recorded(s):
@@ -383,9 +403,11 @@ if action=='status':
   else: print('NO SUCCESSFUL BUILD RECORDED')
   if (state/'build-attempt.json').is_file(): print('Last attempt: '+(state/'build-attempt.json').read_text().strip())
  print('Read-only recorded status; no tools run and no live source verification.'); sys.exit(0)
-require(platform.system()=='Linux' and platform.machine()=='x86_64','Execution requires Ubuntu 24.04 x86_64; plan/status are portable')
-os_release=dict(line.split('=',1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)
-require(os_release.get('ID','').strip('"')=='ubuntu' and os_release.get('VERSION_ID','').strip('"')=='24.04','Execution requires Ubuntu 24.04')
+require((is_mac and machine in ('x86_64','arm64')) or (system=='Linux' and machine=='x86_64'),
+        'Build requires macOS Intel/Apple Silicon or Ubuntu 24.04 x86_64')
+if not is_mac:
+ os_release=dict(line.split('=',1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)
+ require(os_release.get('ID','').strip('"')=='ubuntu' and os_release.get('VERSION_ID','').strip('"')=='24.04','Linux build requires Ubuntu 24.04')
 require(owner.is_file() and source_done.is_file(),'Complete reconstruct-source through 160 first')
 require(not any(c.isspace() for c in str(dest)),'Chromium checkout path must not contain whitespace')
 env=dict(os.environ,DEPOT_TOOLS_UPDATE='0',DEPOT_TOOLS_DIR=str(depot),DEPOT_TOOLS_BOOTSTRAP_PYTHON3='1',PATH=str(depot)+os.pathsep+os.environ.get('PATH',''))
@@ -416,7 +438,7 @@ def verify_output():
  require(proof['build_ninja_sha256']==digest(out/'build.ninja'),'Generated build.ninja changed; rerun preparation')
 def no_compilation():
  require(not (state/'build-attempt.json').exists(),'Build already attempted; 220 cannot certify a pre-compilation state')
- for name in ('chrome','.ninja_log','.siso_deps','.siso_log'):
+ for name in ('chrome','Chromium.app','.ninja_log','.siso_deps','.siso_log'):
   require(not (out/name).exists(),'Compilation artifact already exists: '+name)
 def run(command,cwd):
  print('RUN (cwd='+str(cwd)+'): '+shlex.join(command),flush=True)
@@ -428,17 +450,23 @@ def run(command,cwd):
   raise SystemExit('ERROR: Cannot execute '+shlex.join(command)+': '+str(error)) from None
 def check_dependencies():
  # Keep upstream diagnostics available without flooding the terminal.
- log=state/'linux-dependencies-check.log'
+ log=state/('macos-dependencies-check.log' if is_mac else 'linux-dependencies-check.log')
  require(not log.is_symlink(),'Symlink dependency log rejected')
  with log.open('w') as output:
-  result=subprocess.run(check,cwd=src,env=env,stdout=output,stderr=subprocess.STDOUT)
+  for command in (mac_checks if is_mac else [check]):
+   try: result=subprocess.run(command,cwd=src,env=env,stdout=output,stderr=subprocess.STDOUT)
+   except OSError as error:
+    raise SystemExit('ERROR: Missing build dependency: '+str(error)+'. '+('Install full Xcode and complete its first-launch setup.' if is_mac else 'Run prepare-build install-deps.')) from None
+   if result.returncode: break
  if result.returncode:
   command=['bin/browser_client/mt-chromium-mtc','prepare-build','install-deps']
   if dest!=(Path.home()/'chromium-mtc-rebuild').resolve(): command+=['--dest',str(dest)]
+  if is_mac:
+   raise SystemExit('ERROR: Xcode/macOS SDK check failed. Install/select full Xcode, accept its license and complete first-launch setup. Details: '+str(log))
   raise SystemExit('ERROR: Linux build dependency check failed.\n'
                    'Run: '+shlex.join(command)+'\n'
                    'Details: '+str(log))
- print('PASS Linux build dependencies')
+ print('PASS '+('macOS Xcode/SDK' if is_mac else 'Linux')+' build dependencies')
 def invalidate(index):
  for s in steps[index:]:
   p=record_path(s)
@@ -456,15 +484,18 @@ try:
  state.mkdir(exist_ok=True); verify_sources()
  if action=='install-deps':
   prerequisites(3); verify_layout(); invalidate(3)
-  run(install,src); check_dependencies(); verify_sources()
-  save(state/'dependency-install.json',{'timestamp':now(),'command':install,'context':context})
+  if is_mac:
+   print('Xcode installation is manual; checking the selected Xcode and SDK.')
+  else: run(install,src)
+  check_dependencies(); verify_sources()
+  save(state/'dependency-install.json',{'timestamp':now(),'command':mac_checks if is_mac else install,'context':context})
   print('Installation checked; run 200, 210 and 220 explicitly.'); sys.exit(0)
  if namespace=='build':
   prerequisites(len(steps)); verify_layout(); verify_output(); check_dependencies(); verify_sources()
   attempt={'timestamp':now(),'command':build,'status':'started'}; save(state/'build-attempt.json',attempt)
   try:
    run(build,src); verify_sources(); exact_file(out/'args.gn',gn_args)
-   exe=out/'chrome'; require(exe.is_file() and not exe.is_symlink() and os.access(exe,os.X_OK),'Build returned without Chromium executable')
+   exe=executable; require(exe.is_file() and not exe.is_symlink() and os.access(exe,os.X_OK),'Build returned without Chromium executable')
    save(state/'build-result.json',{'timestamp':now(),'context':context,'chromium_commit':v['CHROMIUM_PATCHED_COMMIT'],'chromium_tree':v['CHROMIUM_PATCHED_TREE'],'boringssl_commit':v['BORINGSSL_PATCHED_COMMIT'],'boringssl_tree':v['BORINGSSL_PATCHED_TREE'],'depot_tools_commit':v['DEPOT_TOOLS_COMMIT'],'gn_args':gn_args,'command':build,'display_command':'autoninja -C out/mtc-release chrome','cwd':str(src),'executable':str(exe),'executable_sha256':digest(exe)})
    attempt['status']='success'
   except BaseException:
@@ -539,8 +570,8 @@ menu_submenu() {
    labels=('100 Verify reconstruction inputs' '110 Prepare depot_tools' '120 Prepare Chromium base' '130 Prepare BoringSSL base' '140 Import preserved commits' '150 Checkout patched source' '160 Verify source trees' 'Status' 'Plan')
    commands=('run 100' 'run 110' 'run 120' 'run 130' 'run 140' 'run 150' 'run 160' status plan);;
   preparation)
-   title='Linux build preparation'; prefix=(prepare-build)
-   labels=('170 Verify reconstructed source' '180 Prepare Chromium checkout layout' '190 Sync pinned dependencies' '200 Check Linux build dependencies' '210 Configure Linux release' '220 Verify build configuration' 'Status' 'Plan' 'Install build dependencies')
+   title='Build preparation (macOS / Linux)'; prefix=(prepare-build)
+   labels=('170 Verify reconstructed source' '180 Prepare Chromium checkout layout' '190 Sync pinned dependencies' '200 Check platform build dependencies' '210 Configure release build' '220 Verify build configuration' 'Status' 'Plan' 'Install build dependencies')
    commands=('run 170' 'run 180' 'run 190' 'run 200' 'run 210' 'run 220' status plan install-deps);;
   build)
    title='Build Chromium'; prefix=(build)
@@ -602,7 +633,7 @@ Chromium / MTC Plants-05 Workflow
 3. Initialize / configuration
 4. Overall status
 5. Source reconstruction              [100-160]
-6. Linux build preparation            [170-220]
+6. Build preparation (macOS / Linux)  [170-220]
 7. Build Chromium
 8. Existing Chromium / MTC setup      [00-60]
 9. X.509 trust management
@@ -620,7 +651,7 @@ MENU
     printf '\nExisting Chromium / MTC setup\n'; menu_invoke readonly status
     printf '\nBrowser functional validation\n'; menu_invoke readonly browser-validation status
     printf '\nSource reconstruction\n'; menu_invoke readonly reconstruct-source status
-    printf '\nLinux build preparation\n'; menu_invoke readonly prepare-build status
+    printf '\nBuild preparation (macOS / Linux)\n'; menu_invoke readonly prepare-build status
     printf '\nChromium build\n'; menu_invoke readonly build status;;
    5) menu_submenu source;;
    6) menu_submenu preparation;;
