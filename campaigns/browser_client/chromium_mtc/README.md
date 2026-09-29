@@ -591,3 +591,23 @@ system-wide restriction is unchanged, and no browser sandbox bypass is added.
 macOS is unaffected. Re-run setup if the configured executable path changes.
 This checks policy presence, not a live browser sandbox launch.
 See [Chromium's AppArmor guidance](https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md).
+
+
+### Explicit MTC fixture reuse in the controlled driver
+
+`mt-chromium-mtc browser-validation run ...` (delegated to
+`mt-chromium-tests`) and setup's `browser-validation credentials` pass
+`--mtc-fixture` and `--mtc-validation` from
+`.mt-state/chromium-mtc/paths.env`. Steps 20/30 must already have selected and
+checked the fixture and its successful functional validation evidence.
+Missing or stale evidence fails; there is no MTC discovery or generation fallback.
+The fast path checks the complete recorded fixture hashes, profile, hostname,
+landmark identity, certificate validity and image provenance, and records
+`origin=reused-prevalidated` plus the validation-file SHA-256. Anchor checking
+and export remain unchanged.
+
+Direct `browser_validation.py` invocation without both options retains its
+existing discovery/cryptographic validation/generation behavior. X.509 discovery,
+PCAP and measurement routes are unchanged. The evidence is local trusted input;
+hash checks detect stale fixture data, not an attacker rewriting both data and
+its validation evidence.

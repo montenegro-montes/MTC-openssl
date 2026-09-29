@@ -303,6 +303,69 @@ def validate_mtc(fixture, profile=PROFILE, image='mt-tls-mtc:local'):
                 cert_sha256=sha(cert_path), key_sha256=sha(key_path), trust_sha256=sha(directory/'trust.bin'), **leaf)
 
 
+def prevalidated_mtc(fixture, validation, profile=PROFILE):
+    fixture, validation = Path(fixture).absolute(), Path(validation).absolute()
+    for path in (fixture, validation):
+        require(not any(p.is_symlink() for p in (path, *path.parents)), 'Symlink fixture/evidence path rejected')
+    require(fixture.is_dir() and validation.is_file(), 'Selected MTC fixture/validation missing; rerun setup steps 20/30')
+    evidence = read(validation)
+    require(evidence.get('passed') is True and evidence.get('server_hostname') == HOST,
+            'Selected MTC validation must PASS for the browser hostname')
+    require(not (validation.parent/'failure.json').exists(), 'Failed validation evidence present')
+    for field in ('fixture', 'fixtures', 'fixture_directory'):
+        if field in evidence:
+            require(Path(evidence[field]).resolve() == fixture.resolve(), 'Validation refers to another fixture')
+    # A complete inventory is required: cryptographic checks are being reused, not repeated.
+    require(not any(p.is_symlink() for p in fixture.rglob('*')), 'Symlink fixture contents rejected')
+    check_saved_hashes(fixture, evidence.get('fixture_hashes'), complete=True)
+    manifest = read(fixture/'manifest.json')
+    require(manifest.get('server_hostname') == HOST, 'MTC manifest hostname mismatch')
+    require(profile in manifest.get('profiles', []) and 16 in manifest.get('sizes', []), 'MTC profile/tree size mismatch')
+    directory = fixture/'batch16/mtc'/profile
+    meta = read(directory/'manifest.json')
+    require(meta.get('profile') == profile and meta.get('tree_size') == 16
+            and meta.get('draft') == core.DRAFT and meta.get('merkle_hash') == 'SHA-256', 'MTC metadata mismatch')
+    check_saved_hashes(directory, read(directory/'fixture-sha256.json'))
+    cells = [c for c in evidence.get('cells', []) if c.get('profile') == profile
+             and c.get('tree_size') == 16 and c.get('mtc_mode') == 'landmark' and c.get('success') is True]
+    require(bool(cells), 'Selected validation lacks a successful profile/N=16/landmark cell')
+    image = evidence.get('provenance', {}).get('image_id')
+    require(isinstance(image, str) and re.fullmatch(r'sha256:[0-9a-f]{64}', image), 'Missing pinned MTC image')
+    for cell in cells:
+        require(cell.get('fixture_hash') == sha(directory/'manifest.json'), 'Validation cell fixture hash mismatch')
+        require(cell.get('image_id') == image and cell.get('draft') == core.DRAFT, 'Validation cell provenance mismatch')
+    for recorded in (manifest.get('provenance', {}), meta.get('provenance', {})):
+        for field in ('image_id', 'source_hashes'):
+            if field in recorded:
+                require(recorded[field] == evidence.get('provenance', {}).get(field), 'MTC provenance mismatch: '+field)
+    ca_id = meta.get('ca_id')
+    require(isinstance(ca_id, str) and bool(ca_id), 'Missing MTC CA identity')
+    cert_path, key_path, trust = directory/'landmark-0000.pem', fixture/'population'/profile/'0.key', directory/'trust.bin'
+    require(all(p.is_file() for p in (cert_path, key_path, trust)), 'Missing selected MTC credential/trust')
+    anchor = parse_landmark(trust.read_bytes())
+    requested, selected = f'{ca_id}.2.1.1', f'{ca_id}.1.1.1'
+    require(anchor['ca_id'] == ca_id and anchor['landmark']['tree_size'] == 16
+            and anchor['min_serial'] == 1 << 48 and anchor['max_serial'] == (1 << 48)+15
+            and anchor['landmark']['requested_trust_anchor_id'] == requested
+            and anchor['landmark']['selected_trust_anchor_id'] == selected, 'MTC trust identity mismatch')
+    outer, tbs = core.certificate_parts(certificate_der(cert_path.read_bytes()))
+    require(int.from_bytes(tbs[1][1], 'big') == 1 << 48 and outer[1][2] == core.ALG
+            and tbs[2][2] == core.ALG and tbs[3][2] == core.name(ca_id), 'MTC leaf 0 algorithm/issuer mismatch')
+    dates = core.items(tbs[4][1])
+    require(len(dates) == 2 and all(t[0] in (23, 24) for t in dates), 'Invalid certificate validity')
+    before, after = [datetime.strptime(t[1].decode(), '%y%m%d%H%M%SZ' if t[0] == 23 else '%Y%m%d%H%M%SZ').replace(tzinfo=timezone.utc) for t in dates]
+    require(before <= datetime.now(timezone.utc) <= after, 'Expired/not-yet-valid certificate')
+    return dict(fixture=str(fixture.resolve()), cert=str(cert_path.resolve()), key=str(key_path.resolve()),
+                trust=str(trust.resolve()), profile=profile, tree_size=16, mode='landmark', leaf=0, hostname=HOST,
+                validation_evidence=str(validation.resolve()), validation_sha256=sha(validation),
+                complete_evidence=True, fixture_hash_status='MATCH', origin='reused-prevalidated',
+                ca_id=ca_id, requested_tai=requested, selected_tai=selected, image_id=image,
+                cert_sha256=sha(cert_path), key_sha256=sha(key_path), trust_sha256=sha(trust),
+                SAN=[HOST], KU=['Digital Signature'], EKU=['serverAuth'],
+                not_before=before.isoformat(), not_after=after.isoformat(), hostname_validation=True, key_match=True,
+                verification_source='Selected successful functional validation and matching complete fixture hashes')
+
+
 def validate_x509(fixture, *, profile=PROFILE, depth=2, image='mt-tls-mtc:local',
                   fixture_set=None):
     require(profile in PROFILES and depth in (2, 3, 4, 5), 'Unsupported profile/depth')
@@ -661,10 +724,16 @@ def root_trust(x):
 
 
 def prepare_credentials(repo, output, image, profile=PROFILE, depth=2,
-                        x509_fixture_set=None):
+                        x509_fixture_set=None, mtc_fixture=None, mtc_validation=None):
     require(profile in PROFILES and depth in (2, 3, 4, 5), "Unsupported profile/depth")
-    mtc_paths = [p.parent for p in (repo/'artifacts/mtc').glob('*/manifest.json')]
-    mtc, ma = select_or_generate(mtc_paths, lambda p: validate_mtc(p, profile, image), lambda: generate_mtc(repo, output, image, profile), output/'mtc-discovery.json')
+    require((mtc_fixture is None) == (mtc_validation is None), 'Supply both --mtc-fixture and --mtc-validation')
+    if mtc_fixture is not None:
+        mtc = prevalidated_mtc(mtc_fixture, mtc_validation, profile)
+        ma = [dict(path=mtc['fixture'], valid=True, origin=mtc['origin'], validation_evidence=mtc['validation_evidence'])]
+        write(output/'mtc-discovery.json', ma)
+    else:
+        mtc_paths = [p.parent for p in (repo/'artifacts/mtc').glob('*/manifest.json')]
+        mtc, ma = select_or_generate(mtc_paths, lambda p: validate_mtc(p, profile, image), lambda: generate_mtc(repo, output, image, profile), output/'mtc-discovery.json')
     mtc.update(choose_anchor(mtc, output))
     global CA, SELECTED, REQUESTED
     CA, SELECTED, REQUESTED = mtc['ca_id'], mtc['selected_tai'], mtc['requested_tai']
@@ -1134,6 +1203,8 @@ def main(argv=None):
     parser.add_argument('--root', type=Path, help='Exact PEM root required for trust-status/trust-x509/untrust-x509; no fixture discovery')
     parser.add_argument('--profile', choices=PROFILES, default=PROFILE)
     parser.add_argument('--depth', type=int, choices=(2, 3, 4, 5), default=2)
+    parser.add_argument('--mtc-fixture', type=Path, help='Explicit prevalidated MTC fixture; requires --mtc-validation')
+    parser.add_argument('--mtc-validation', type=Path, help='Existing validation.json for the selected MTC fixture')
     parser.add_argument('--x509-fixture-set')
     parser.add_argument('--chromium', type=Path)
     parser.add_argument('--x509-spki-capability', action='store_true',
@@ -1145,6 +1216,8 @@ def main(argv=None):
     parser.add_argument('--timeout', type=int, default=60)
     parser.add_argument('--image', default='mt-tls-mtc:local', help='Existing image used only for generation fallback')
     args = parser.parse_args(argv)
+    require((args.mtc_fixture is None) == (args.mtc_validation is None), 'Supply both --mtc-fixture and --mtc-validation')
+    require(args.mtc_fixture is None or args.action in ('run', 'credentials'), 'Explicit MTC evidence requires run or credentials')
     trust_operation = args.action in ('trust-status', 'trust-x509', 'untrust-x509')
     require((args.root is not None) == trust_operation, '--root PATH is required only for trust-status/trust-x509/untrust-x509')
     require(not args.x509_fixture_set or args.action == 'run',
@@ -1194,7 +1267,7 @@ def main(argv=None):
         output = new_result(REPO); print('Result directory: '+str(output), flush=True)
         credentials = prepare_credentials(
             REPO, output, args.image, args.profile, args.depth,
-            args.x509_fixture_set)
+            args.x509_fixture_set, args.mtc_fixture, args.mtc_validation)
         trust = credentials['x509']['root_trust']
         print('MTC '+credentials['mtc']['origin']+': '+credentials['mtc']['fixture'])
         print('X509 '+credentials['x509']['origin']+': '+credentials['x509']['fixture'])

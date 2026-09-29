@@ -1,0 +1,272 @@
+#!/usr/bin/env bash
+# Test entrypoint; installation and credential generation belong to mt-chromium-setup.
+set -euo pipefail
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+MENU_CALL_DIR=$PWD
+cd "$REPO"
+STATE="$REPO/.mt-state/chromium-mtc"
+fail() { echo "ERROR: $*" >&2; exit 1; }
+source "$REPO/bin/browser_client/mt-chromium-menu.sh"
+browser_measurements_plan() {
+ cat <<'PLAN'
+Supported browser matrix:
+5 profiles × 4 X.509 depths = 20 cells
+Profiles: ecdsa-p256 ecdsa-p384 mldsa44 mldsa65 mldsa87
+X.509 depths: 2 3 4 5
+Smoke:
+1 pair/cell = 20 pairs = 40 browser runs
+Formal:
+30 pairs/cell = 600 pairs = 1200 browser runs
+MTC remains N=16 landmark leaf 0 for every cell; it does not vary with depth.
+Fixture set: chromium-x509-depth-matrix-v1; externally installed Chromium CA policy.
+No fixture generation or policy installation. Each failed cell is recorded; remaining cells continue.
+P-521 remains capability-negative: Chromium does not advertise ecdsa_secp521r1_sha512 (0x0603)
+in its server-signature verification preferences, so it is excluded from this formal browser matrix.
+PLAN
+}
+
+browser_measurements_matrix() (
+ local pairs=$1 root profile depth log status result_directory passed=0 failed=0
+ [[ "$pairs" == 1 || "$pairs" == 30 ]] || fail 'Supported matrix requires 1 or 30 pairs/cell.'
+ mkdir -p "$REPO/artifacts/results"
+ root=$(mktemp -d "$REPO/artifacts/results/chromium-browser-matrix-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")
+ printf 'profile\tdepth\tpairs\tstatus\tresult_directory\tlog\n' > "$root/index.tsv"
+ browser_measurements_plan > "$root/plan.txt"
+ printf 'Selected pairs/cell: %s\n' "$pairs" >> "$root/plan.txt"
+ echo "Matrix directory: $root"
+ for profile in ecdsa-p256 ecdsa-p384 mldsa44 mldsa65 mldsa87; do
+  for depth in 2 3 4 5; do
+   log="$root/$profile-d$depth.log"
+   printf 'Cell: %s D=%s pairs=%s\n' "$profile" "$depth" "$pairs"
+   # Reuse the measurement driver, but fail instead of generating missing/invalid fixtures.
+   if python3 -B - "$REPO" "$profile" "$depth" "$pairs" <<'PY' 2>&1 | tee "$log"
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(sys.argv[1])/'campaigns/browser_client/chromium_mtc'))
+import browser_validation as validation
+import browser_measurements as measurements
+def no_generation(*args, **kwargs):
+    raise ValueError('Matrix requires existing valid fixtures; prepare them explicitly before retrying this cell')
+validation.generate_mtc = validation.generate_x509 = no_generation
+sys.argv = ['browser_measurements.py', 'run', '--profile', sys.argv[2], '--depth', sys.argv[3],
+            '--pairs', sys.argv[4], '--x509-fixture-set', 'chromium-x509-depth-matrix-v1',
+            '--x509-chromium-ca-policy']
+raise SystemExit(measurements.main())
+PY
+   then status=PASS; passed=$((passed+1))
+   else status=FAIL; failed=$((failed+1))
+   fi
+   result_directory=$(sed -n 's/^Result directory: //p' "$log" | head -n 1)
+   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$profile" "$depth" "$pairs" "$status" "$result_directory" "$log" >> "$root/index.tsv"
+  done
+ done
+ printf 'PASS %s/20\nFAIL %s/20\nIndex: %s/index.tsv\n' "$passed" "$failed" "$root"
+ [[ "$failed" == 0 ]]
+)
+
+preflight() {
+ python3 -B - "$REPO" "$@" <<'PY'
+import argparse, base64, getpass, json, platform, plistlib, subprocess, sys
+from pathlib import Path
+repo=Path(sys.argv[1])
+sys.path.insert(0,str(repo/'campaigns/browser_client/chromium_mtc'))
+import browser_validation as bv
+import browser_pcap as pcap
+parser=argparse.ArgumentParser(description='Read-only readiness; no installation, generation or capture.')
+parser.add_argument('--capture',action='store_true')
+parser.add_argument('--profile',choices=bv.PROFILES)
+parser.add_argument('--depth',type=int,choices=(2,3,4,5))
+args=parser.parse_args(sys.argv[2:])
+profiles=(args.profile,) if args.profile else ('ecdsa-p256','ecdsa-p384','mldsa44','mldsa65','mldsa87')
+depths=(args.depth,) if args.depth else (2,3,4,5)
+setup='bin/browser_client/mt-chromium-setup'
+state=repo/'.mt-state/chromium-mtc'
+failures=[]
+def check(label, instruction, fn):
+ try:
+  fn()
+  print('[PASS] '+label)
+ except (ValueError,OSError,KeyError,TypeError,subprocess.SubprocessError) as error:
+  failures.append(label)
+  print('[FAIL] '+label+': '+str(error)+'\nRequired setup:\n'+setup+' '+instruction)
+def require(ok,message):
+ if not ok: raise ValueError(message)
+def chromium():
+ data=bv.read(state/'chromium.json')
+ actual=bv.browser_executable(data['executable'])
+ require(actual['sha256']==data['sha256'],'Executable changed since detection')
+ require(actual['commit']==data['chromium_commit'],'Chromium source commit changed')
+ pins=dict(line.split('=',1) for line in (repo/'campaigns/browser_client/chromium_mtc/versions/chromium-mtc.env').read_text().splitlines() if line and not line.startswith('#'))
+ require(actual['commit']==pins['CHROMIUM_PATCHED_COMMIT'],'Unexpected Chromium commit')
+ require(data['boringssl_commit']==pins['BORINGSSL_PATCHED_COMMIT'],'Unexpected recorded BoringSSL commit')
+ src=Path(subprocess.check_output(['git','-C',str(Path(actual['executable']).parent),'rev-parse','--show-toplevel'],text=True).strip())
+ boring=subprocess.check_output(['git','-C',str(src/'third_party/boringssl/src'),'rev-parse','HEAD'],text=True).strip()
+ require(boring==data['boringssl_commit'],'BoringSSL source commit changed')
+ require(not (src.parent/'.mtc-source-state/lock').exists(),'Source/build lock present; inspect owner before retrying')
+check('Recorded Chromium executable/build','run 10 (after build run chromium if needed)',chromium)
+def hostname():
+ rows=[line.split('#',1)[0].split() for line in Path('/etc/hosts').read_text().splitlines()]
+ addresses={p[0] for p in rows if bv.HOST in [v.lower().rstrip('.') for v in p[1:]]}
+ require(addresses=={'127.0.0.1'},'Required exclusive /etc/hosts mapping missing')
+ bv.check_hostname()
+check('Laboratory hostname','run 50',hostname)
+def docker():
+ for cmd in (['docker','info'],['docker','image','inspect','mt-tls-mtc:local']):
+  subprocess.run(cmd,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=30)
+check('Docker daemon and existing test image','doctor (prepare the existing test image explicitly if missing)',docker)
+def locks():
+ paths=[state/'lock',repo/'.mt-state/chromium-browser-validation.lock']
+ require(not any(p.exists() for p in paths),'Lock present: '+', '.join(str(p) for p in paths if p.exists())+'; inspect active owner/stale state; no lock removed')
+check('No workflow locks','status',locks)
+for profile in profiles:
+ def mtc():
+  errors=[]
+  for manifest in (repo/'artifacts/mtc').glob('*/manifest.json'):
+   try:
+    meta=bv.read(manifest)
+    if meta.get('server_hostname')!=bv.HOST or profile not in meta.get('profiles',[]) or 16 not in meta.get('sizes',[]): continue
+    directory=manifest.parent/'batch16/mtc'/profile
+    bv.check_saved_hashes(directory,bv.read(directory/'fixture-sha256.json'))
+    require((directory/'landmark-0000.pem').is_file() and (manifest.parent/'population'/profile/'0.key').is_file(),'Leaf 0 certificate/key missing')
+    anchor=bv.parse_landmark((directory/'trust.bin').read_bytes())
+    require(anchor['landmark']['tree_size']==16,'Expected N=16')
+    return
+   except (ValueError,OSError,KeyError,TypeError) as error: errors.append(str(error))
+  raise ValueError('No intact N=16 landmark leaf 0 fixture. '+'; '.join(errors))
+ check('MTC fixture '+profile,'browser-validation credentials --profile '+profile,mtc)
+roots=set()
+for profile in profiles:
+ for depth in depths:
+  def x509():
+   candidates=[]
+   for fixture in bv.x509_paths(repo):
+    manifest=fixture/'manifest.json'
+    if not manifest.is_file(): continue
+    meta=bv.read(manifest)
+    if (meta.get('fixture_set'),meta.get('profile'),meta.get('depth'))!=('chromium-x509-depth-matrix-v1',profile,depth): continue
+    require(meta.get('hostname')==bv.HOST,'Wrong hostname: '+str(fixture))
+    bv.check_saved_hashes(fixture,meta['files_sha256'])
+    require(all((fixture/n).is_file() for n in ('root.pem','server.pem','server.key')),'Missing certificate/key: '+str(fixture))
+    chain=fixture/'intermediates.pem'
+    count=len(bv.pem_certificates(chain.read_bytes())) if chain.is_file() and chain.stat().st_size else 0
+    require(count==depth-2,'Intermediate count mismatch: '+str(fixture))
+    digest=bv.certificate_sha256((fixture/'root.pem').read_bytes())
+    require(digest==meta['root_der_sha256'],'Root fingerprint mismatch')
+    candidates.append(digest)
+   require(bool(candidates),'Formal fixture missing')
+   require(len(set(candidates))==1,'Ambiguous formal roots; resolve fixture selection explicitly')
+   roots.update(candidates)
+  check(f'Formal X.509 {profile} D={depth}',
+        f'x509-fixtures generate --profile {profile} --fixture-set chromium-x509-depth-matrix-v1 --output NEW_MATRIX_DIRECTORY',x509)
+def policy():
+ require(bool(roots),'No verified formal roots available')
+ documents=[]
+ if platform.system()=='Linux':
+  documents=[json.loads(p.read_text()) for p in sorted(Path('/etc/chromium/policies/managed').glob('*.json'))]
+ elif platform.system()=='Darwin':
+  for p in (Path('/Library/Managed Preferences/org.chromium.Chromium.plist'),
+            Path('/Library/Managed Preferences')/getpass.getuser()/'org.chromium.Chromium.plist'):
+   if p.is_file(): documents.append(plistlib.loads(p.read_bytes()))
+ values=[d['CACertificates'] for d in documents if 'CACertificates' in d]
+ require(bool(values),'Chromium CACertificates policy unavailable')
+ # Do not pretend conflicting policy values form one effective union.
+ for value in values:
+  require(isinstance(value,list),'Invalid CACertificates policy')
+  hashes={bv.hashlib.sha256(base64.b64decode(v,validate=True)).hexdigest() for v in value}
+  require(roots<=hashes,'Policy lacks selected formal root fingerprints')
+check('Chromium CA policy available for formal roots','trust-setup',policy)
+if args.capture:
+ def capture():
+  tools=pcap.requirements()
+  require(tools['interface'] and tools['tshark'] and (tools['dumpcap'] or tools['tcpdump']),'Capture backend/tshark unavailable')
+  print('Capture permissions: NOT CHECKED (no capture started).')
+ check('Capture tools','doctor (install capture tools/grant loopback access through your administrator)',capture)
+print('Read-only readiness only; cryptographic validation and effective browser policy remain runtime checks.')
+raise SystemExit(1 if failures else 0)
+PY
+}
+campaign() {
+ local module=$1
+ shift
+ if [[ "$module" == browser_validation && "${1:-}" == run ]]; then
+  selected_mtc_arguments "$@"
+  set -- "$@" "${MTC_ARGUMENTS[@]}"
+ fi
+ # Test entrypoints cannot fall back to generating credentials.
+ python3 -B - "$REPO" "$module" "$@" <<'PY'
+import importlib, sys
+from pathlib import Path
+sys.path.insert(0,str(Path(sys.argv[1])/'campaigns/browser_client/chromium_mtc'))
+import browser_validation as bv
+def no_generation(*args, **kwargs):
+    raise ValueError('Missing valid fixtures. Required setup: bin/browser_client/mt-chromium-setup browser-validation credentials [--profile PROFILE --depth DEPTH]')
+bv.generate_mtc=bv.generate_x509=no_generation
+module=importlib.import_module(sys.argv[2])
+sys.argv=[module.__file__,*sys.argv[3:]]
+raise SystemExit(module.main())
+PY
+}
+menu() (
+ [[ -t 0 ]] || fail 'menu requires an interactive TTY on stdin.'
+ trap 'printf "\n"; exit 130' INT
+ local selection
+ while true; do
+  cat <<'MENU'
+Chromium / MTC — Tests / experiments
+1. Preflight (read-only, includes capture requirements)
+2. Tests status
+3. Browser functional validation
+4. Browser PCAP validation
+5. Browser measurements
+6. Network-condition experiments [NOT IMPLEMENTED]
+0. Exit
+MENU
+  read -r -p 'Select an option: ' selection || exit 0
+  case "$selection" in
+   1) menu_invoke readonly preflight --capture;;
+   2) menu_invoke readonly status;;
+   3) menu_submenu validation;;
+   4) menu_submenu pcap;;
+   5) menu_submenu measurements;;
+   6) echo 'This phase is not implemented yet.';;
+   0) exit 0;;
+   *) echo 'Invalid option.';;
+  esac
+ done
+)
+case "${1:-help}" in
+ help|--help|-h) cat <<'HELP'
+Usage: mt-chromium-tests menu|status|preflight [--profile PROFILE] [--depth D] [--capture]
+  browser-validation plan|status|run CASE [existing campaign options]
+  browser-pcap plan|requirements|status|run CASE [existing campaign options]
+  browser-measurements plan|requirements|status|run [existing campaign options]
+  browser-measurements matrix-smoke|matrix
+  network-experiments (not implemented)
+Preflight is read-only. Defaults check the supported formal matrix (5 profiles, D=2..5).
+Missing fixtures must be prepared with mt-chromium-setup; tests never generate them.
+HELP
+ ;;
+ menu) menu;;
+ preflight) shift; preflight "$@";;
+ status)
+  campaign browser_validation status
+  campaign browser_pcap status
+  campaign browser_measurements status;;
+ browser-validation|browser-pcap|browser-measurements)
+  namespace=$1; shift
+  case "${1:-}" in
+   plan|requirements|status|run|matrix-smoke|matrix|--help|-h) ;;
+   *) fail 'Expected a test action first; configuration belongs to mt-chromium-setup browser-validation.';;
+  esac
+  if [[ "$namespace" == browser-measurements ]]; then
+   case "${1:-}" in
+    plan|matrix-smoke|matrix)
+     [[ "$#" == 1 ]] || fail 'Usage: browser-measurements plan|matrix-smoke|matrix'
+     case "$1" in plan) browser_measurements_plan;; matrix-smoke) browser_measurements_matrix 1;; matrix) browser_measurements_matrix 30;; esac
+     exit $?;;
+   esac
+  fi
+  campaign "${namespace//-/_}" "$@";;
+ network-experiments) echo 'This phase is not implemented yet.';;
+ *) fail 'Unknown command; use help';;
+esac
