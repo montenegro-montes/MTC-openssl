@@ -27,6 +27,48 @@ configure_paths() {
 prepare_fixtures() (
  source "$REPO/.mt-state/cert-scaling/paths.env"
  [[ ! -d "$REPO/.mt-state/cert-scaling/lock" && ! -d "$REPO/.mt-state/cert-scaling/batch.lock" ]] || fail 'A certification stage or batch is active.'
+ echo 'Preparing X.509 chain fixtures D=2,3,4,5.'
+ if [[ ! -e "$CHAIN_FIXTURES" && ! -L "$CHAIN_FIXTURES" ]]; then
+  "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 20 || exit "$?"
+ fi
+ # Check every cell before validation; never repair an existing partial fixture root.
+ python3 -B - "$CHAIN_FIXTURES" <<'PYCHAIN'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, 'campaigns/scaling/cert_chain_scaling')
+from config import PROFILES, DEPTHS
+from result_state import validate_fixture
+root = Path(sys.argv[1])
+for profile in PROFILES:
+ for depth in DEPTHS:
+  directory = root/profile/f'depth-{depth}'
+  try:
+   validate_fixture(directory, profile, depth)
+   metadata = json.loads((directory/'manifest.json').read_text())
+   for name in ('root.pem','root.key','server.pem','server.key','intermediates.pem','server-chain.pem'):
+    if not (directory/name).is_file() or name not in metadata['files_sha256']: raise ValueError('Missing file/hash: '+name)
+  except Exception as error:
+   raise SystemExit(f'ERROR: {profile} D={depth}: {directory}: {error}. Fixtures preserved; inspect and select a fresh CHAIN_FIXTURES/CHAIN_VALID path.')
+PYCHAIN
+ [[ "$?" == 0 ]] || exit 1
+ if [[ ! -e "$CHAIN_VALID" && ! -L "$CHAIN_VALID" ]]; then
+  "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 30 || exit "$?"
+ fi
+ python3 -B - "$CHAIN_VALID" "$CHAIN_FIXTURES" <<'PYCHAIN'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, 'campaigns/scaling/cert_chain_scaling')
+from config import PROFILES, DEPTHS
+report = json.loads(Path(sys.argv[1]).read_text())
+root = Path(sys.argv[2]).resolve()
+expected = {(str(root/p/f'depth-{d}'), p, d) for p in PROFILES for d in DEPTHS}
+checks = report.get('checks', [])
+actual = {(str(Path(c['fixture']).resolve()), c['profile'], c['depth']) for c in checks if c.get('chain_valid') is True}
+if report.get('passed') is not True or actual != expected or len(checks) != len(expected):
+ raise SystemExit('ERROR: Existing CHAIN_VALID is failed/incomplete or belongs to other fixtures. Evidence preserved; select fresh paths after inspection.')
+print('PASS X.509 D=2..5 fixtures and existing chain validation')
+PYCHAIN
+ [[ "$?" == 0 ]] || exit 1
  echo 'Preparing N=16 fixtures and functional TLS validation (nine profiles, both modes).'
  if [[ ! -e "$MTC16" ]]; then
   "$REPO/bin/cryptographic_scaling/mt-cert-scaling" run 50 || exit "$?"
@@ -48,6 +90,35 @@ except Exception as error:
     raise SystemExit('ERROR: Existing N=16 evidence cannot be reused: '+str(error)+'. Outputs are preserved; inspect them and select fresh MTC16/MTC_VALID paths as needed.')
 print('PASS N=16 fixtures, image, source hashes and functional validation')
 PY
+ local performance_clients="$REPO/artifacts/validation/handshake-performance-mutual-v2"
+ if [[ ! -e "$performance_clients" && ! -L "$performance_clients" ]]; then
+  python3 "$REPO/campaigns/validation/protocol_validation/mutual_authentication/generate_fixtures.py" \
+   --output "$performance_clients" --performance-clients --execute || exit "$?"
+ fi
+ python3 -B - "$performance_clients" <<'PYCLIENTS'
+import hashlib, json, sys
+from pathlib import Path
+sys.path.insert(0, 'campaigns/scaling/cert_chain_scaling')
+from config import PROFILES
+root = Path(sys.argv[1])
+try:
+ manifest = json.loads((root/'manifest.json').read_text())
+ assert set(manifest['profiles']) == set(PROFILES) and manifest['mtc_tree_size'] == 16
+ files = manifest['file_sha256']
+ for profile in PROFILES:
+  for name in ('x509/client.pem','x509/client.key','x509/client-ca.pem','mtc-source/client-0000.key',
+               'mtc-n16/landmark-0000.pem','mtc-n16/standalone-0000.pem','mtc-n16/trust.bin',
+               'mtc-n16/authority.bin','mtc-n16/manifest.json'):
+   assert f'profiles/{profile}/{name}' in files
+ for name, digest in files.items():
+  path = Path(name)
+  assert not path.is_absolute() and '..' not in path.parts
+  assert hashlib.sha256((root/path).read_bytes()).hexdigest() == digest, name
+except Exception as error:
+ raise SystemExit(f'ERROR: Incomplete/invalid mutual fixtures preserved at {root}: {error}. Inspect before preparing a fresh path.')
+print('PASS mutual client fixture completeness/hashes; no TLS measurement executed')
+PYCLIENTS
+ [[ "$?" == 0 ]] || exit 1
  local FIX KEY PROFILE
  source "$REPO/.mt-state/protocol-validation/paths.env"
  [[ "${PROFILE:-pq}" == mldsa65 && "$FIX" == "$MTC16/batch16/mtc/mldsa65" && "$KEY" == "$MTC16/population/mldsa65/0.key" ]] || fail 'Existing protocol paths/profile differ from the prepared Paper-1 fixtures. They were preserved; inspect mt-protocol-validation status before changing them.'
@@ -86,7 +157,7 @@ report_action() (
 list() {
  local i
  for i in "${!IMAGES[@]}"; do printf '%s  %-30s %s\n' "$((i+1))" "${IMAGES[i]}" "${FILES[i]}"; done
- echo 'ALL also generates N=16 fixtures and runs their functional TLS validation. Numbered stages prepare images only.'
+ echo 'ALL also prepares/validates X.509 D=2..5 chains and N=16 fixtures, and prepares mutual clients. Numbered stages prepare images only.'
 }
 python_ready() {
  bash "$REPO/bin/base/mt-doctor" --offline --quiet
@@ -128,9 +199,9 @@ prepare() (
  configure_paths || exit "$?"
  if [[ "$selection" == ALL ]]; then
   prepare_fixtures || exit "$?"
-  echo 'Prerequisites ready: images, configuration, N=16 fixtures and functional TLS validation. Continue with mt-protocol-validation.'
+  echo 'Prerequisites ready: images, configuration, X.509 D=2..5 chains, N=16 validation and mutual clients. Continue with mt-protocol-validation.'
  else
-  echo 'Selected images and configuration prepared. Use run ALL to prepare and validate N=16 fixtures automatically.'
+  echo 'Selected images and configuration prepared. Use run ALL to prepare X.509 D=2..5 chains, N=16 fixtures and mutual clients.'
  fi
 )
 menu() {
@@ -152,6 +223,6 @@ case "${1:-menu}" in
  show) [[ "${2:-}" =~ ^[1-7]$ ]] || fail 'Stage required: 1..7'; i=$(($2-1)); printf 'docker build -f %q -t %q .\n' "${FILES[i]}" "${IMAGES[i]}";;
  status) mt_compose_ready || exit 1; python_ready; for image in "${IMAGES[@]}"; do if docker image inspect "$image" >/dev/null 2>&1; then echo "AVAILABLE $image"; else echo "MISSING $image"; fi; done;;
  reset-all) [[ "$#" == 1 ]] || fail 'reset-all requires interactive confirmation; no options accepted.'; mt_docker_ready || exit 1; python3 "$REPO/scripts/maintenance/reset_lab.py";;
- help|--help|-h) echo 'Usage: mt-prepare [menu|init|list|status|show N|run N|run ALL|rebuild N|rebuild ALL|reset-all]'; echo 'Prepares base, MTC, capture, endpoint-profiling, mutual-profiling and network images. Existing images are reused; rebuild is explicit. run/rebuild initialize missing launcher paths after successful preparation; ALL also generates and validates N=16 fixtures using functional TLS; init configures paths without Docker. init/run/rebuild write a specific JSON summary and an explained HTML report below artifacts/results and artifacts/reports. reset-all requires the literal confirmation RESET ALL and deletes artifacts, launcher state and laboratory Docker resources without creating a backup.';;
+ help|--help|-h) echo 'Usage: mt-prepare [menu|init|list|status|show N|run N|run ALL|rebuild N|rebuild ALL|reset-all]'; echo 'Prepares base, MTC, capture, endpoint-profiling, mutual-profiling and network images. Existing images are reused; rebuild is explicit. run/rebuild initialize missing launcher paths after successful preparation; ALL also generates and validates X.509 D=2..5 chains and N=16 fixtures, and prepares mutual clients; init configures paths without Docker. init/run/rebuild write a specific JSON summary and an explained HTML report below artifacts/results and artifacts/reports. reset-all requires the literal confirmation RESET ALL and deletes artifacts, launcher state and laboratory Docker resources without creating a backup.';;
  *) fail 'Unknown command; use help.';;
 esac

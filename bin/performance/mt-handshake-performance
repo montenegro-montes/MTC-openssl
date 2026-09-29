@@ -138,7 +138,7 @@ validate_depth_fixtures() {
   if [[ -z "${X509_CHAIN_FIXTURES:-}" && -f "$REPO/.mt-state/cert-scaling/paths.env" ]]; then
     X509_CHAIN_FIXTURES=$(sed -n 's/^CHAIN_FIXTURES=//p' "$REPO/.mt-state/cert-scaling/paths.env")
   fi
-  [[ "${X509_CHAIN_FIXTURES:-}" == artifacts/* ]] || fail 'Set X509_CHAIN_FIXTURES to existing cert_chain_scaling fixtures below artifacts/. No fixtures generated.'
+  [[ "${X509_CHAIN_FIXTURES:-}" == artifacts/* ]] || fail "Missing chain root: profile=${PROFILES[0]}, D=${X509_DEPTHS[0]}, expected <CHAIN_FIXTURES>/${PROFILES[0]}/depth-${X509_DEPTHS[0]}. Run bin/base/mt-prepare run ALL and configure X509_CHAIN_FIXTURES below artifacts/."
   python3 -B - "$REPO" "$X509_CHAIN_FIXTURES" "${X509_DEPTHS[*]}" "${PROFILES[*]}" <<'PYDEPTH'
 import json, re, sys
 from pathlib import Path
@@ -150,15 +150,18 @@ for depth in map(int,sys.argv[3].split()):
  if depth==2: continue  # Preserve original population credentials, including in All.
  for profile in sys.argv[4].split():
   directory=root/profile/f'depth-{depth}'
-  validate_fixture(directory,profile,depth)
-  meta=json.loads((directory/'manifest.json').read_text())
-  names=['root.pem','server.pem','server.key','intermediates.pem','server-chain.pem']
-  if not all(n in meta['files_sha256'] for n in names): raise ValueError('Incomplete fixture hashes: '+str(directory))
-  def certs(name): return re.findall(rb'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', (directory/name).read_bytes(),re.S)
-  root_certs,leaf,intermediates,chain=[certs(n) for n in ('root.pem','server.pem','intermediates.pem','server-chain.pem')]
-  if not (len(root_certs)==len(leaf)==1 and len(intermediates)==depth-2 and chain==leaf+intermediates and root_certs[0] not in chain
-          and meta['transmitted_certificates']==depth-1 and meta['root_transmitted'] is False):
-   raise ValueError('Invalid depth/transmitted chain: '+str(directory))
+  try:
+   validate_fixture(directory,profile,depth)
+   meta=json.loads((directory/'manifest.json').read_text())
+   names=['root.pem','server.pem','server.key','intermediates.pem','server-chain.pem']
+   if not all(n in meta['files_sha256'] for n in names): raise ValueError('Incomplete fixture hashes: '+str(directory))
+   def certs(name): return re.findall(rb'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', (directory/name).read_bytes(),re.S)
+   root_certs,leaf,intermediates,chain=[certs(n) for n in ('root.pem','server.pem','intermediates.pem','server-chain.pem')]
+   if not (len(root_certs)==len(leaf)==1 and len(intermediates)==depth-2 and chain==leaf+intermediates and root_certs[0] not in chain
+           and meta['transmitted_certificates']==depth-1 and meta['root_transmitted'] is False):
+    raise ValueError('Invalid depth/transmitted chain: '+str(directory))
+  except Exception as error:
+   raise SystemExit(f'ERROR: Chain fixture profile={profile}, D={depth}, expected {directory}: {error}. Run bin/base/mt-prepare run ALL. Existing invalid fixtures are preserved for inspection.')
 print('PASS existing chain fixture hashes/counts; TLS execution NOT CHECKED')
 PYDEPTH
 }
@@ -200,7 +203,7 @@ create_configuration() {
   mkdir -p "$(dirname "$config")"
   config_template | sed -e "s/^KEM=x25519$/KEM=$KEM/" -e "s/^X509_DEPTH=2$/X509_DEPTH=$X509_DEPTH/" > "$config"
   select_active_config "$config"
-  echo "Created $config with key establishment $KEM_LABEL ($KEM_GROUP). A run will replace the placeholders automatically from the active validated fixtures."
+  echo "Created $config with key establishment $KEM_LABEL ($KEM_GROUP). A run will replace placeholders from existing validated fixtures; prepare them first with bin/base/mt-prepare run ALL."
 }
 
 load_config() {
@@ -225,7 +228,7 @@ load_config() {
       mtc-n16/standalone-0000.pem mtc-n16/trust.bin mtc-n16/authority.bin \
       mtc-n16/manifest.json; do
       [[ -f "$REPO/$MUTUAL_CLIENT_ROOT/profiles/$profile/$relative" ]] \
-        || fail "Missing mutual client fixture: $MUTUAL_CLIENT_ROOT/profiles/$profile/$relative"
+        || fail "Missing mutual client fixture: $MUTUAL_CLIENT_ROOT/profiles/$profile/$relative. Run bin/base/mt-prepare run ALL first."
     done
   done
   [[ "${MTC_ROOT:-}" == artifacts/* && -f "$REPO/$MTC_ROOT/manifest.json" ]] || fail 'MTC_ROOT must contain the active N=16 fixture root.'
@@ -270,13 +273,10 @@ load_fixture_paths() {
 
 ensure_dependencies() {
   local performance_clients="$REPO/artifacts/validation/handshake-performance-mutual-v2"
-  "$REPO/bin/base/mt-prepare" run ALL
-  [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] || fail 'mt-prepare did not create the certificate-scaling configuration.'
+  [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] || fail 'Missing certificate-scaling configuration. Run bin/base/mt-prepare run ALL first.'
   load_fixture_paths
-  if [[ ! -f "$performance_clients/manifest.json" ]]; then
-    python3 "$REPO/campaigns/validation/protocol_validation/mutual_authentication/generate_fixtures.py" \
-      --output "$performance_clients" --performance-clients --execute
-  fi
+  [[ -f "$MTC16/manifest.json" && -f "$MTC_VALID/validation.json" ]] || fail 'Missing N=16 fixtures/validation. Run bin/base/mt-prepare run ALL first.'
+  [[ -f "$performance_clients/manifest.json" ]] || fail "Missing mutual fixtures: $performance_clients. Run bin/base/mt-prepare run ALL first."
 }
 
 ensure_kem_supported() {
@@ -293,12 +293,7 @@ ensure_kem_supported() {
 ensure_retry_group_support() {
   local help
   help=$(docker run --rm --network none --entrypoint /opt/mtc/retry-peer "$IMAGE" --help 2>&1 || true)
-  if [[ "$help" != *MTC_TLS_GROUP* ]]; then
-    printf 'The retry peer predates configurable key establishment; rebuilding the MTC image once.\n'
-    "$REPO/bin/base/mt-prepare" rebuild 2
-    help=$(docker run --rm --network none --entrypoint /opt/mtc/retry-peer "$IMAGE" --help 2>&1 || true)
-  fi
-  [[ "$help" == *MTC_TLS_GROUP* ]] || fail 'The retry peer still lacks configurable key establishment after rebuild.'
+  [[ "$help" == *MTC_TLS_GROUP* ]] || fail 'Retry peer lacks configurable TLS-group support. Run bin/base/mt-prepare rebuild 2 explicitly, then retry.'
 }
 
 write_automatic_config() {
@@ -690,7 +685,7 @@ status_config() {
   fi
   printf 'ACTIVE CONFIGURATION\nConfiguration: %s\n' "$config"
   if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config" || ! grep -q '^MUTUAL_CLIENT_ROOT=' "$config"; then
-    echo 'Status: INCOMPLETE (the first measurement will prepare dependencies and configure it automatically).'
+    echo 'Status: INCOMPLETE (run bin/base/mt-prepare run ALL first; measurement only derives configuration from existing fixtures).'
   else
     echo 'Status: CONFIGURED'
   fi
@@ -703,12 +698,12 @@ status_config() {
   if [[ -n "$mtc_root" && "$mtc_root" != *REPLACE* && -f "$REPO/$mtc_root/manifest.json" ]]; then
     printf 'Server fixtures: READY (%s)\n' "$mtc_root"
   else
-    echo 'Server fixtures: PENDING (prepared automatically before the first measurement)'
+    echo 'Server fixtures: PENDING (run bin/base/mt-prepare run ALL first)'
   fi
   if [[ -n "$mutual_root" && -f "$REPO/$mutual_root/manifest.json" ]]; then
     printf 'Matching mutual-client fixtures: READY (%s)\n' "$mutual_root"
   else
-    echo 'Matching mutual-client fixtures: PENDING (prepared automatically before the first measurement)'
+    echo 'Matching mutual-client fixtures: PENDING (run bin/base/mt-prepare run ALL first)'
   fi
 }
 
@@ -820,7 +815,7 @@ case "$command" in
     requested_output=${3:-$(default_performance_output)}
     check_depth_mode
     validate_depth_fixtures
-    # Check every output before preparing dependencies or starting any cell.
+    # Check every output before checking dependencies or starting any cell.
     for depth in "${X509_DEPTHS[@]}"; do
       candidate=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$(depth_output "$requested_output" "$depth")")
       [[ "$candidate" == "$REPO"/artifacts/results/* && ! -e "$candidate" ]] || fail "Invalid or existing output: $candidate"
