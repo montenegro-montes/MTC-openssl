@@ -5,6 +5,7 @@ import hashlib
 import os
 from pathlib import Path
 import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ import tempfile
 
 RESTRICTION = Path('/proc/sys/kernel/apparmor_restrict_unprivileged_userns')
 PROFILES = Path('/sys/kernel/security/apparmor/profiles')
+POLICY_DIR = Path('/etc/apparmor.d')
 
 
 def profile_for(executable):
@@ -44,6 +46,33 @@ def loaded(name, privileged=False):
     return name+' (unconfined)' in text.splitlines()
 
 
+
+def check_attachments(executable, managed_name):
+    # Inspect explicit attachments only; do not infer glob/variable expansions.
+    token = r'(?:"[^"\n]*"|[^\s{}"]+)'
+    header = re.compile(
+        rf'^\s*(?:profile\s+)?(?P<first>{token})'
+        rf'(?:[ \t]+(?P<attachment>(?!flags\s*=){token}))?'
+        r'\s*(?:flags\s*=\s*\([^)]*\)\s*)?\{', re.MULTILINE)
+    for source in sorted(POLICY_DIR.rglob('*')):
+        if not source.is_file() or 'cache' in source.relative_to(POLICY_DIR).parts:
+            continue
+        try:
+            text = source.read_text()
+        except PermissionError:
+            text = run(['cat', str(source)], privileged=True, capture=True).stdout
+        for match in header.finditer(text):
+            name = match['first'].strip('"')
+            attachment = (match['attachment'] or match['first']).strip('"')
+            if attachment == str(executable) and name != managed_name:
+                raise ValueError(
+                    f'Executable: {executable}\nConflicting profile: {name}\n'
+                    f'Conflicting file: {source}\n'
+                    'Two profiles attached to the same executable can produce '
+                    '"conflicting profile attachments". Ask your administrator to '
+                    'resolve the conflict; no profiles have been installed or changed.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('setup', 'status'))
@@ -63,11 +92,12 @@ def main():
     if binary is None:
         raise ValueError('apparmor_parser missing; install the AppArmor tools through your administrator. No fallback applied.')
     name, content = profile_for(executable)
-    target = Path('/etc/apparmor.d')/name
+    target = POLICY_DIR/name
+    check_attachments(executable, name)
     if target.is_symlink():
         raise ValueError('Symlink policy preserved; administrator inspection required: '+str(target))
     installed = target.is_file() and target.read_text() == content
-    active = loaded(name, privileged=args.action == 'setup')
+    active = loaded(name, privileged=True)
     print(f'Executable: {executable}\nProfile: {target}\nInstalled exact policy: {installed}\nLoaded: {active}')
     if args.action == 'status':
         if not (installed and active):

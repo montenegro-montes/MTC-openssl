@@ -578,7 +578,10 @@ It installs `/etc/apparmor.d/mtc-chromium-<path-sha256-prefix>` after syntax
 validation, using explicit `sudo` commands when needed. An identical installed,
 loaded profile is reused. Different existing content is preserved and rejected.
 `doctor` and the build-preparation menu expose the check; setup is explicit.
-Reading kernel policy state may require administrator privileges.
+Both commands explicitly use `sudo cat` if kernel policy state is not readable
+by the current user; the driver itself need not run as root. They reject another
+explicit attachment to the same executable found in /etc/apparmor.d before
+installing/loading a policy. Conflicting files are reported and left unchanged.
 
 The profile uses `flags=(unconfined)` and `userns,` to permit this developer
 executable to create Chromium's own sandbox. AppArmor remains enabled, the
