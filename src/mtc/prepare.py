@@ -14,6 +14,23 @@ def sign(path,data,family):
     tmp=path.parent/'sign-input.tmp';tmp.write_bytes(data)
     try:return command('pkeyutl','-sign','-rawin','-inkey',path,'-in',tmp,*(['-digest',profile['digest']] if profile['digest'] else []))
     finally:tmp.unlink()
+def checkpoint_signature(ident,key,caid,n,checkpoint,timestamp,family):
+    return ident,sign(key,message(ident,caid,0,n,checkpoint,timestamp),family)
+def authority_config(caid,ids,public,n):
+    """Existing local MCF1 authority encoding; not a certificate wire format."""
+    if not 1<=n<=1024 or len(ids)!=2 or len(public)!=2:raise ValueError('MCF1 configuration')
+    config=b'MCF1'+vec(caid.encode(),1)+bytes([len(ids)])
+    for ident,spki in zip(ids,public):config+=vec(ident.encode(),1)+vec(spki)
+    return config+uint(1,2)+uint(1<<48,8)+uint((1<<48)+n-1,8)
+def checkpoint_config(authority,entries,timestamp,cp_sigs):
+    """Existing trust.bin layout, including its local landmark-slot field.
+
+    Offline snapshots reuse this container, not a mutable landmark allocation.
+    """
+    n=len(entries);subtrees=cover(0,n)
+    config=authority+uint(1,4)+uint(n,6)+uint(timestamp,8)+root(entries)+signatures(cp_sigs)+bytes([len(subtrees)])
+    for start,end in subtrees:config+=uint(start,6)+uint(end,6)+root(entries[start:end])
+    return config
 def not_after(tbs):
     validity=items(content(tbs,0x30))[4]
     times=items(content(validity[2],0x30))
@@ -49,7 +66,7 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
     for ident,key in zip(ids,keys):
         mirror=[(log/f'{i:06d}.entry').read_bytes() for i in range(n)]
         assert root(mirror)==checkpoint
-        cp_sigs.append((ident,sign(key,message(ident,caid,0,n,checkpoint,timestamp),family)))
+        cp_sigs.append(checkpoint_signature(ident,key,caid,n,checkpoint,timestamp,family))
         for start,end in subtrees:
             sub_sigs.setdefault((start,end),[]).append((ident,sign(key,message(ident,caid,start,end,root(mirror[start:end])),family)))
     for i,t in enumerate(tbs):
@@ -60,13 +77,9 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
             (out/f'{mode}-{i:04d}.der').write_bytes(cert);(out/f'{mode}-{i:04d}.pem').write_bytes(pem(cert))
     # OOB configuration: keys, serial limits, signed checkpoint and its two covering subtrees.
     # This file is a lab storage format, never sent as an MTC certificate.
-    config=b'MCF1'+vec(caid.encode(),1)+bytes([len(ids)])
-    for ident,spki in zip(ids,public):config+=vec(ident.encode(),1)+vec(spki)
-    config+=uint(1,2)+uint(1<<48,8)+uint((1<<48)+n-1,8)
+    config=authority_config(caid,ids,public,n)
     (out/'authority.bin').write_bytes(config)
-    config+=uint(1,4)
-    config+=uint(n,6)+uint(timestamp,8)+checkpoint+signatures(cp_sigs)+bytes([len(subtrees)])
-    for start,end in subtrees:config+=uint(start,6)+uint(end,6)+root(entries[start:end])
+    config=checkpoint_config(config,entries,timestamp,cp_sigs)
     (out/'trust.bin').write_bytes(config)
     (out/'landmarks.txt').write_text(f'1\n{n} {expiration}\n0 0\n')
     sizes={}
