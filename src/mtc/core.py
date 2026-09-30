@@ -1,13 +1,13 @@
-"""Independent MTC -05 wire and DER construction, SHA-256 profile.
+"""Independent MTC -06 wire and DER construction, SHA-256 profile.
 No code or wire formats imported from the older experimental Merkle protocol.
 """
 import base64
 import hashlib
 import struct
-DRAFT='draft-ietf-plants-merkle-tree-certs-05'
+DRAFT='draft-ietf-plants-merkle-tree-certs-06'
 TA_DRAFT='draft-ietf-tls-trust-anchor-ids-04'
 PROOF_OID='1.3.6.1.4.1.44363.47.0'
-NAME_OID='1.3.6.1.4.1.44363.47.1'
+NAME_OID='1.3.6.1.4.1.44363.47.3'
 H=lambda x:hashlib.sha256(x).digest()
 def uint(n,size):return n.to_bytes(size,'big')
 def vec(x,size=2):return uint(len(x),size)+x
@@ -48,7 +48,7 @@ def integer(n):
     return der(2,(b'\0' if x[0]&128 else b'')+x)
 def seq(*x):return der(0x30,b''.join(x))
 ALG=seq(oid(PROOF_OID))
-def name(caid):return seq(der(0x31,seq(oid(NAME_OID),der(12,caid.encode()))))
+def name(caid):return seq(der(0x31,seq(oid(NAME_OID),der(13,relid(caid)))))
 def from_pem(data):return base64.b64decode(b''.join(data.splitlines()[1:-1]))
 def pem(data):
     b=base64.b64encode(data)
@@ -97,15 +97,16 @@ def evaluate(leaf,index,start,end,proof):
     if sn:raise ValueError('short proof')
     return r
 def cover(start,end):
-    if not start<end:raise ValueError('interval')
-    if end-start==1:return [(start,end)]
+    if not 0<=start<=end<1<<48:raise ValueError('interval')
+    if end-start<=1:return [(start,end),(end,end)]
     last=end-1;mask=(1<<((start^last).bit_length()-1))-1;mid=last&~mask
     left=start&~((1<<(~start&mask).bit_length())-1)
     return [(left,mid),(mid,end)]
 def message(cosigner,caid,start,end,r,timestamp=0,log=1):
     return b'subtree/v1\n\0'+vec(('oid/1.3.6.1.4.1.'+cosigner).encode(),1)+uint(timestamp,8)+vec(('oid/1.3.6.1.4.1.'+caid+'.0.'+str(log)).encode(),1)+uint(start,8)+uint(end,8)+r
-def signatures(values):
-    return vec(b''.join(vec(relid(i),1)+vec(s) for i,s in sorted(values,key=lambda x:(len(relid(x[0])),relid(x[0])))))
+def signatures(values,outer_width=2):
+    # MCF1 retains uint16; only MTCProof uses a uint24 outer vector.
+    return vec(b''.join(vec(relid(i),1)+vec(s) for i,s in sorted(values,key=lambda x:(len(relid(x[0])),relid(x[0])))),outer_width)
 def proof(start,end,path,sigs=(),extensions=b''):
-    return vec(extensions)+uint(start,6)+uint(end,6)+vec(b''.join(path))+signatures(sigs)
+    return vec(extensions)+uint(start,6)+uint(end,6)+vec(b''.join(path))+signatures(sigs,3)
 def certificate(tbs,p):return seq(tbs,ALG,der(3,b'\0'+p))

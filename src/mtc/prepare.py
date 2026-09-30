@@ -1,5 +1,6 @@
 """Create immutable MTC issuance snapshots from an explicit X.509 population."""
 import json,shutil,subprocess,time
+from datetime import datetime, timezone
 from pathlib import Path
 from core import *
 from crypto_profiles import crypto_profile, PAPER1_PROFILES, TREE_HASH
@@ -13,6 +14,16 @@ def sign(path,data,family):
     tmp=path.parent/'sign-input.tmp';tmp.write_bytes(data)
     try:return command('pkeyutl','-sign','-rawin','-inkey',path,'-in',tmp,*(['-digest',profile['digest']] if profile['digest'] else []))
     finally:tmp.unlink()
+def not_after(tbs):
+    validity=items(content(tbs,0x30))[4]
+    times=items(content(validity[2],0x30))
+    if len(times)!=2:raise ValueError('Invalid certificate validity')
+    tag,value,_=times[1];text=value.decode('ascii')
+    if tag==23 and len(text)==13:
+        text=('19' if int(text[:2])>=50 else '20')+text
+    elif tag!=24 or len(text)!=15:raise ValueError('Invalid notAfter encoding')
+    if not text.endswith('Z') or not text[:-1].isdigit():raise ValueError('Invalid notAfter encoding')
+    return int(datetime.strptime(text,'%Y%m%d%H%M%SZ').replace(tzinfo=timezone.utc).timestamp())
 def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
     profile=crypto_profile(family)
     if not 1<=n<=1024:raise ValueError('Unsupported MTC population')
@@ -32,6 +43,7 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
     log=out/'log';log.mkdir()
     for i,e in enumerate(entries):(log/f'{i:06d}.entry').write_bytes(e)
     checkpoint=root(entries);timestamp=int(time.time());subtrees=cover(0,n)
+    expiration=max(timestamp+1,max(not_after(t) for t in tbs))
     # Each local cosigner independently reconstructs its entire initial view.
     cp_sigs=[];sub_sigs={}
     for ident,key in zip(ids,keys):
@@ -56,7 +68,7 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
     config+=uint(n,6)+uint(timestamp,8)+checkpoint+signatures(cp_sigs)+bytes([len(subtrees)])
     for start,end in subtrees:config+=uint(start,6)+uint(end,6)+root(entries[start:end])
     (out/'trust.bin').write_bytes(config)
-    (out/'landmarks.txt').write_text(f'1 1\n{n}\n0\n')
+    (out/'landmarks.txt').write_text(f'1\n{n} {expiration}\n0 0\n')
     sizes={}
     for mode in ['standalone','landmark']:
         cert=(out/f'{mode}-0000.der').read_bytes();outer,t=certificate_parts(cert)
@@ -70,10 +82,11 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
     meta={'draft':DRAFT,'trust_anchor_draft':TA_DRAFT,'status':'MTC-experimental','tree_size':n,'crypto_family':family,'ca_id':caid,
         'cosigner_ids':ids,'cosigner_policy':'CA AND one additional local cosigner; no public transparency claim',
         'subtrees':subtrees,'landmarks':[0,n],'checkpoint':{'tree_size':n,'timestamp':timestamp,'hash':checkpoint.hex()},
+        'latest_landmark':1,'landmark_expirations':[0,expiration],
         'ca_spki_sha256':H(public[0]).hex(),'cosigner_spki_sha256':H(public[1]).hex(),
         'input_sha256':{str(p):H(p.read_bytes()).hex() for p in originals},**source_metadata,
         'setup_ms':(time.perf_counter()-begin)*1000,'sizes':sizes,'trust_file_bytes':len(config),
-        'ca_key_note':'Separate from directly-signing X509 CA as required by MTC -05 section 5.4',
+        'ca_key_note':'Separate from directly-signing X509 CA as required by MTC -06 section 5.4',
         'changed_fields':['issuer','serialNumber','signature algorithm','signatureValue','old authorityKeyIdentifier omitted']}
     if family in PAPER1_PROFILES:meta.update(profile=family,standard_name=profile['standard_name'],implementation_algorithm=profile['implementation_algorithm'],security_level=profile['security_level'],merkle_hash=TREE_HASH,mtc_modes=['landmark','standalone'])
     if metadata:meta.update(metadata)

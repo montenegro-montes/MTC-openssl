@@ -6,6 +6,16 @@ static void expect(const unsigned char *actual,size_t n,const char *text){
     assert(id_encode(text,expected,&size));assert(n==size&&!memcmp(actual,expected,n));
 }
 int main(void){
+    unsigned char leaf[32]={0},out[32];
+    assert(valid_subtree(0,0)&&valid_subtree(1,1));
+    assert(valid_subtree((1ULL<<48)-1,(1ULL<<48)-1));
+    assert(valid_subtree(0,(1ULL<<47)+1)&&valid_subtree(0,(1ULL<<48)-1));
+    assert(!valid_subtree(1ULL<<46,(1ULL<<47)+1));
+    assert(!valid_subtree(1ULL<<46,(1ULL<<48)-1));
+    assert(!valid_subtree(0,1ULL<<48)&&!valid_subtree(2,1));
+    assert(!mtc_eval(leaf,0,0,0,NULL,0,out));
+    assert(!mtc_eval(leaf,1,1,1,NULL,0,out));
+    assert(mtc_eval(leaf,0,0,1,NULL,0,out)&&!memcmp(leaf,out,32));
     MTCConfig c={0};strcpy(c.caid,"32473.101");c.log=1;c.number=1;
     assert(config_signals(&c));
     expect(c.signal,c.signal_len,"32473.101");

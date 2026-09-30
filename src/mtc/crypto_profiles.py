@@ -1,5 +1,5 @@
 """Paper-1 signer profiles; historical classic/pq retain their original meaning."""
-DRAFT = 'draft-ietf-plants-merkle-tree-certs-05'
+DRAFT = 'draft-ietf-plants-merkle-tree-certs-06'
 TREE_HASH = 'SHA-256'
 TREE_SIZES = (1, 4, 16, 64, 256, 1024)
 

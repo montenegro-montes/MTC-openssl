@@ -34,9 +34,12 @@ def malformed_proofs(cert):
     outer,t=certificate_parts(cert);tbs=outer[0][2];p=outer[2][1][1:]
     out={'missing':certificate(tbs,b''),'truncated':certificate(tbs,p[:-1]),'trailing':certificate(tbs,p+b'\0'),
          'malformed-length':certificate(tbs,b'\xff\xff'+p[2:]),'wrong-subtree':certificate(tbs,p[:2]+b'\xff'*6+p[8:])}
+    sigoff=16+int.from_bytes(p[14:16],'big')
+    out['signatures-length']=certificate(tbs,p[:sigoff]+b'\xff'*3+p[sigoff+3:])
+    out['truncated-signatures-length']=certificate(tbs,p[:sigoff+2])
     v=bytearray(p);v[16]^=1;out['modified-proof']=certificate(tbs,bytes(v))
-    if len(p)>200:
+    if int.from_bytes(p[sigoff:sigoff+3],'big'):
         v=bytearray(p);v[-1]^=1;out['bad-cosignature']=certificate(tbs,bytes(v))
-        off=16+int.from_bytes(p[14:16],'big')+2;off+=1+p[off]+2
+        off=sigoff+3;off+=1+p[off]+2
         v=bytearray(p);v[off]^=1;out['bad-CA-signature']=certificate(tbs,bytes(v))
     return out

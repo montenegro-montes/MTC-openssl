@@ -5,7 +5,7 @@
 #define MTC_MAX 65536
 /* Provisional Chromium/BoringSSL trust_anchors codepoint; not final IANA. */
 #define MTC_EXT 0xca34
-#define MTC_DRAFT "draft-ietf-plants-merkle-tree-certs-05"
+#define MTC_DRAFT "draft-ietf-plants-merkle-tree-certs-06"
 typedef struct mtc_config MTCConfig;
 MTCConfig *mtc_load(const char *path, int landmark);
 void mtc_free(MTCConfig *c);

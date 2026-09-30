@@ -30,7 +30,7 @@ static int tlv(Slice *s,TLV *t){
 }
 static int hash(Slice in,unsigned char out[32]){unsigned n;return EVP_Digest(in.p,in.n,out,&n,EVP_sha256(),NULL)&&n==32;}
 static int node(const unsigned char *a,const unsigned char *b,unsigned char out[32]){unsigned char in[65];in[0]=1;memcpy(in+1,a,32);memcpy(in+33,b,32);return hash((Slice){in,65},out);}
-static int valid_subtree(uint64_t start,uint64_t end){uint64_t k=1;if(start>=end||end>=((uint64_t)1<<48))return 0;while(k<end-start)k<<=1;return !(start%k);}
+static int valid_subtree(uint64_t start,uint64_t end){uint64_t k=1;if(start>end||end>=((uint64_t)1<<48))return 0;while(k<end-start)k<<=1;return !(start%k);}
 int mtc_eval(const unsigned char leaf[32],uint64_t index,uint64_t start,uint64_t end,const unsigned char *proof,size_t n,unsigned char out[32]){
     uint64_t fn,sn;if(!valid_subtree(start,end)||index<start||index>=end||n%32)return 0;
     fn=index-start;sn=end-start-1;memcpy(out,leaf,32);
@@ -135,7 +135,7 @@ MTCConfig *mtc_load(const char *path,int landmark){
     }
     if(!number(&s,4,&c->number)||c->number!=1||!number(&s,6,&c->size)||!c->size||c->size>1024||!number(&s,8,&c->timestamp)||!c->timestamp||c->timestamp>(uint64_t)time(NULL)||!take(&s,32,&x))goto end;
     memcpy(c->root,x.p,32);
-    if(c->min!=(1ULL<<48)||c->max!=c->min+c->size-1||!vector(&s,2,&sigs)||!number(&s,1,&v)||v<1||v>2)goto end;
+    if(c->min!=(1ULL<<48)||c->max!=c->min+c->size-1||!vector(&s,2,&sigs)||!number(&s,1,&v)||v!=2)goto end;
     c->nsubs=(unsigned)v;
     for(unsigned i=0;i<c->nsubs;i++){
         Subtree *sub=&c->subs[i];
@@ -143,7 +143,11 @@ MTCConfig *mtc_load(const char *path,int landmark){
         memcpy(sub->hash,x.p,32);
     }
     if(s.n||c->subs[0].start||c->subs[c->nsubs-1].end!=c->size)goto end;
-    if(c->nsubs==1){if(c->size!=1)goto end;memcpy(actual,c->subs[0].hash,32);}
+    if(c->size==1){
+        unsigned char empty[32];
+        if(c->subs[0].end!=1||c->subs[1].start!=1||!hash((Slice){(const unsigned char *)"",0},empty)||CRYPTO_memcmp(empty,c->subs[1].hash,32))goto end;
+        memcpy(actual,c->subs[0].hash,32);
+    }
     else {uint64_t split=1;while((split<<1)<c->size)split<<=1;
         if(c->subs[0].end!=split||c->subs[1].start!=split||!node(c->subs[0].hash,c->subs[1].hash,actual))goto end;}
     if(CRYPTO_memcmp(actual,c->root,32))goto end;
@@ -160,10 +164,22 @@ end:
 }
 static int algorithm(const X509_ALGOR *a){const ASN1_OBJECT *o;int type;char text[80];X509_ALGOR_get0(&o,&type,NULL,a);return type==V_ASN1_UNDEF&&OBJ_obj2txt(text,sizeof(text),o,1)>0&&!strcmp(text,"1.3.6.1.4.1.44363.47.0");}
 static int issuer(X509 *x,const char *id){
-    X509_NAME *name=X509_get_issuer_name(x);X509_NAME_ENTRY *e;char oid[80];ASN1_STRING *v;
-    if(X509_NAME_entry_count(name)!=1)return 0;
-    e=X509_NAME_get_entry(name,0);v=X509_NAME_ENTRY_get_data(e);
-    return OBJ_obj2txt(oid,sizeof(oid),X509_NAME_ENTRY_get_object(e),1)>0&&!strcmp(oid,"1.3.6.1.4.1.44363.47.1")&&ASN1_STRING_type(v)==V_ASN1_UTF8STRING&&ASN1_STRING_length(v)==(int)strlen(id)&&!memcmp(ASN1_STRING_get0_data(v),id,strlen(id));
+    /* Check the DER tag directly: providers may expose RELATIVE-OID as OTHER. */
+    static const unsigned char oid[]={0x2b,0x06,0x01,0x04,0x01,0x82,0xda,0x4b,0x2f,0x03};
+    unsigned char expected[80],*der=NULL;size_t length;int ok=0;
+    int n=i2d_X509_NAME(X509_get_issuer_name(x),&der);Slice s;TLV t;
+    if(n<=0||!id_encode(id,expected,&length))goto end;
+    s=(Slice){der,(size_t)n};
+    if(!tlv(&s,&t)||s.n||t.tag!=0x30)goto end;
+    s=t.body;
+    if(!tlv(&s,&t)||s.n||t.tag!=0x31)goto end;
+    s=t.body;
+    if(!tlv(&s,&t)||s.n||t.tag!=0x30)goto end;
+    s=t.body;
+    if(!tlv(&s,&t)||t.tag!=6||t.body.n!=sizeof(oid)||memcmp(t.body.p,oid,sizeof(oid)))goto end;
+    if(!tlv(&s,&t)||s.n||t.tag!=0x0d||t.body.n!=length||memcmp(t.body.p,expected,length))goto end;
+    ok=1;
+end:OPENSSL_free(der);return ok;
 }
 static int leaf_hash(X509 *x,Slice extensions,unsigned char out[32]){
     unsigned char *der=NULL,keyhash[32],header[3],octet[2]={4,32};int n=i2d_re_X509_tbs(x,&der),ok=0;unsigned count=0,size;
@@ -189,7 +205,7 @@ int mtc_verify(X509 *x,MTCConfig *c){
     X509_get0_signature(&signature,&alg,x);
     if(!algorithm(alg)||(signature->flags&7)||signature->length<0||!ASN1_INTEGER_get_uint64(&serial,X509_get_serialNumber(x))||serial<c->min||serial>c->max||(serial>>48)!=c->log)return 0;
     index=serial&0xffffffffffffULL;p=(Slice){signature->data,(size_t)signature->length};
-    if(!vector(&p,2,&extensions)||extensions.n||!number(&p,6,&start)||!number(&p,6,&end)||!vector(&p,2,&proof)||!vector(&p,2,&sigs)||p.n)return 0;
+    if(!vector(&p,2,&extensions)||extensions.n||!number(&p,6,&start)||!number(&p,6,&end)||!vector(&p,2,&proof)||!vector(&p,3,&sigs)||p.n)return 0;
     if(!leaf_hash(x,extensions,leaf)||!mtc_eval(leaf,index,start,end,proof.p,proof.n,root))return 0;
     if(c->landmark){
         if(sigs.n)return 0;
