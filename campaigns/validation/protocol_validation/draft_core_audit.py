@@ -24,7 +24,7 @@ def main():
     captured = io.StringIO()
     result = {
         "draft": DRAFT,
-        "scope": "core draft vectors C.1, C.2 and C.4",
+        "scope": "core draft vectors C.1, C.2 and C.4; draft-06 certificate-format/MTCProof encoding; RFC 9162 consistency",
         "claim": "core-vector agreement; not complete draft conformance",
         "source": "src/mtc/test_core.py",
     }

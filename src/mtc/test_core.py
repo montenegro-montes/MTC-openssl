@@ -67,6 +67,81 @@ assert root([entry(old)])!=root([entry(new)])
 assert root([entry(old),b'x'])!=root([entry(new),b'x'])
 print('draft-06 wire/issuer/empty/singleton/boundary tests PASS; issuer DER:',expected.hex())
 
+# Draft-06 Section 6.2 certificate-format/MTCProof encoding.
+# Keep this byte-level and deterministic: no OpenSSL or generated fixtures.
+exts = b'\x12\x34'
+path = [b'a' * 32, b'b' * 32]
+sigs = [('32473.101', b'ca-signature'), ('32473.102', b'cosigner-signature')]
+start, end = 0x010203040506, 0x01020304050a
+
+p = core.proof(start, end, path, sigs, exts)
+off = 0
+
+ext_len = int.from_bytes(p[off:off+2], 'big')
+assert ext_len == len(exts)
+off += 2
+assert p[off:off+ext_len] == exts
+off += ext_len
+
+assert int.from_bytes(p[off:off+6], 'big') == start
+off += 6
+assert int.from_bytes(p[off:off+6], 'big') == end
+off += 6
+
+proof_len = int.from_bytes(p[off:off+2], 'big')
+off += 2
+assert proof_len == 64
+assert p[off:off+proof_len] == b''.join(path)
+off += proof_len
+
+sig_len = int.from_bytes(p[off:off+3], 'big')
+off += 3
+assert sig_len == len(p) - off
+assert sig_len > 0
+
+# The outer signatures vector is uint24; each SubtreeSignature signature is uint16.
+sig_block = p[off:]
+q = 0
+seen = []
+while q < len(sig_block):
+    id_len = sig_block[q]
+    q += 1
+    ident = sig_block[q:q+id_len]
+    q += id_len
+    individual_len = int.from_bytes(sig_block[q:q+2], 'big')
+    q += 2
+    individual = sig_block[q:q+individual_len]
+    q += individual_len
+    assert individual
+    seen.append(ident)
+assert q == len(sig_block)
+assert seen == sorted(seen, key=lambda x: (len(x), x))
+assert len(seen) == len(set(seen))
+
+# Landmark-relative MTCProof has no subtree signatures.
+landmark = core.proof(0, 1, [], (), b'')
+assert landmark[16:] == b'\0\0\0'
+
+# Log-entry extensions and MTCProof extensions match for the implemented empty case.
+assert entry(new)[:2] == b'\0\0'
+empty_proof = core.proof(0, 1, [])
+assert empty_proof[:2] == b'\0\0'
+
+# signatureValue contains the MTCProof directly as the BIT STRING payload.
+cert = certificate(new, p)
+outer, cert_tbs = certificate_parts(cert)
+assert outer[2][0] == 3
+bit_string = outer[2][1]
+assert bit_string[0] == 0
+assert bit_string[1:] == p
+
+# Draft-06 serial construction and proof AlgorithmIdentifier.
+assert cert_tbs[1][2] == integer((1 << 48) | 0)
+assert cert_tbs[2][2] == ALG
+assert outer[1][2] == ALG
+
+print('draft-06 certificate-format/MTCProof encoding tests PASS')
+
 # RFC 9162 prefix consistency; deterministic entries, no generated fixtures.
 history=[bytes([i]) for i in range(16)]
 old_root,new_root=root(history[:8]),root(history)
