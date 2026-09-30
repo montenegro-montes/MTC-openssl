@@ -14,6 +14,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--execute', action='store_true')
     parser.add_argument('--profiles', nargs='+', choices=PROFILES, default=PROFILES)
+    parser.add_argument('--mtc-root', type=Path, required=True,
+                        help='MTC fixture root containing batch16/mtc and population')
     parser.add_argument('--server-image', default='mt-tls-mtc:local')
     parser.add_argument('--client-image', default='mt-browser-boringssl:wire')
     args = parser.parse_args()
@@ -37,6 +39,7 @@ def main():
                 with (out / f'{label}.log').open('w') as log:
                     result = subprocess.run([sys.executable, str(HERE / 'run-tls-smoke.py'),
                         '--execute', '--profile', profile, '--mode', mode,
+                       '--mtc-root', str(args.mtc_root),
                         '--server-image', args.server_image, '--client-image', args.client_image],
                         stdout=log, stderr=subprocess.STDOUT)
                 text = (out / f'{label}.log').read_text()

@@ -10,7 +10,7 @@ import os,sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src/mtc"))
 
-from crypto_profiles import PAPER1_PROFILES, LEGACY_PROFILE_MAP
+from crypto_profiles import SIGNATURE_PROFILES, LEGACY_PROFILE_MAP
 
 PROFILES = {
     name: dict(
@@ -20,7 +20,7 @@ PROFILES = {
         standard_name=p["standard_name"],
         **({"curve": p["curve"], "digest": p["digest"]} if p["curve"] else {}),
     )
-    for name, p in PAPER1_PROFILES.items()
+    for name, p in SIGNATURE_PROFILES.items()
 }
 
 CHAIN_PROFILES = {
@@ -86,5 +86,5 @@ TLS = {
 
 TREE_SIZE = 16
 IMAGE = os.environ.get("MTC_PROFILE_IMAGE", "mt-tls-mtc-profile:local")
-MTC_PROFILE_MAP = {name: name for name in PAPER1_PROFILES}
+MTC_PROFILE_MAP = {name: name for name in SIGNATURE_PROFILES}
 LEGACY_MTC_PROFILE_MAP = dict(LEGACY_PROFILE_MAP)

@@ -11,11 +11,6 @@ sys.path.insert(0, str(REPO / "campaigns"))
 
 from common.image_chain import derived_from, ensure
 
-VALIDATION_FIXTURE = Path(
-    "artifacts/cert-chain-scaling/fixtures-20260914T113933Z/"
-    "mldsa65/depth-2"
-)
-
 REQUIRED_FIXTURE_FILES = [
     "root.pem",
     "server.pem",
@@ -44,7 +39,7 @@ def verify(root):
                 raise RuntimeError("preservation mismatch: " + path)
 
 
-def init(root):
+def init(root, validation_fixture):
     if root.exists():
         raise SystemExit("refusing overwrite")
 
@@ -63,12 +58,17 @@ def init(root):
         },
     )
 
-    fixture_root = REPO / VALIDATION_FIXTURE
+    fixture_root = validation_fixture.resolve()
+
+    if not fixture_root.is_relative_to(REPO / "artifacts"):
+        raise RuntimeError(
+            "Native/PCAP validation fixture must be under artifacts"
+        )
 
     if not fixture_root.is_dir():
         raise RuntimeError(
             "Native/PCAP validation fixture directory missing: "
-            + str(VALIDATION_FIXTURE)
+            + str(fixture_root)
         )
 
     missing = [
@@ -303,6 +303,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("stage", choices=["init", "tests"])
     parser.add_argument("root", type=Path)
+    parser.add_argument(
+        "--fixture",
+        type=Path,
+        help="validated fixture directory used by the Native/PCAP experiment",
+    )
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -311,7 +316,9 @@ def main():
         raise SystemExit("root must be under artifacts/results")
 
     if args.stage == "init":
-        init(root)
+        if args.fixture is None:
+            parser.error("--fixture is required for init")
+        init(root, args.fixture)
     else:
         if not root.is_dir():
             raise SystemExit("experiment root does not exist")

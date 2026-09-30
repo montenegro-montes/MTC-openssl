@@ -80,8 +80,8 @@ replaced. Existing N=16 and advanced results remain separate and immutable.
 A plot failure preserves CSVs; choose a new output path for another attempt.
 Matplotlib must be available in the Python environment used by the launcher.
 
-New configurations use `artifacts/results/paper1-crossover-n16-DATE` and
-`artifacts/results/paper1-crossover-advanced-DATE`. Existing configurations retain
+New configurations use `artifacts/results/mtc-crossover-n16-DATE` and
+`artifacts/results/mtc-crossover-advanced-DATE`. Existing configurations retain
 STATIC_ROOT; ADVANCED_ROOT defaults to STATIC_ROOT plus `-advanced` without
 rewriting the state file. If STATIC_ROOT already contains previous analysis,
 select a fresh path with `set STATIC_ROOT PATH` before requesting another quick
@@ -124,7 +124,7 @@ are complete. No builds or changes should overlap a frozen scientific run.
 
 Option6 (**MTC protocol**) opens the separate
 [protocol workflow](../../protocol_validation/README.md), also accessible through
-`bin/cryptographic_scaling/mt-cert-scaling protocol`. New configurations select Paper-1 mldsa65 from the saved N=16 fixture root.
+`bin/cryptographic_scaling/mt-cert-scaling protocol`. New configurations select mldsa65 from the saved N=16 MTC fixture root.
 Historical configurations retain legacy pq; crossover results are not required.
 
 Define fresh immutable locations:

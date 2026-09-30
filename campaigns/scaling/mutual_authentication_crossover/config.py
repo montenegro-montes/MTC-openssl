@@ -6,7 +6,7 @@ import sys
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "src/mtc"))
-from crypto_profiles import PAPER1_PROFILES, TREE_SIZES
+from crypto_profiles import SIGNATURE_PROFILES, TREE_SIZES
 
 EXPERIMENT = "mutual-auth-crossover"
 SERVER_ONLY_FIXTURES = Path(os.environ.get(
@@ -30,7 +30,7 @@ PROFILES = {
         "digest": profile["digest"],
         "mtc_id": f'{profile["ca_id"]}.1.1.1',
     }
-    for name, profile in PAPER1_PROFILES.items()
+    for name, profile in SIGNATURE_PROFILES.items()
 }
 CHAIN_PROFILES = ("direct-server", "ca-server")
 MTC_SOURCE_CHAIN_PROFILE = "ca-server"

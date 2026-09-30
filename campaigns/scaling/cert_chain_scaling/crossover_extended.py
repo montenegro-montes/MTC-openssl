@@ -15,7 +15,7 @@ from landmark_size_model import audit, model, crossover, intervals, MAXIMUM_SUPP
 from size_analysis import tls_certificate_message_size, REPO
 from config import PROFILES
 from core import certificate_parts, DRAFT
-from crypto_profiles import PAPER1_PROFILES, TREE_SIZES
+from crypto_profiles import SIGNATURE_PROFILES, TREE_SIZES
 
 
 EFFECTIVE_THRESHOLDS_PCT = (1, 5, 10)
@@ -169,7 +169,7 @@ def run(a):
         meta=inputs.json(directory/'manifest.json')
         require(meta['tree_size']==16 and meta['draft']==DRAFT and meta['merkle_hash']=='SHA-256','wrong N16/draft/hash anchor')
         for key in ('profile','ca_id','standard_name','implementation_algorithm','security_level'):
-            require(meta[key]==PAPER1_PROFILES[profile][key],'MTC profile mismatch')
+            require(meta[key]==SIGNATURE_PROFILES[profile][key],'MTC profile mismatch')
         require(meta['provenance']['image_id']==gate['provenance']['image_id'], 'N16 image/gate mismatch')
         for name in ('src/mtc/core.py','src/mtc/tls.c','src/mtc/mtc.c'):
             require(hashlib.sha256(inputs.read(REPO/name)).hexdigest()==meta['provenance']['source_hashes'][name], 'serializer/native semantics differ from validated anchor')

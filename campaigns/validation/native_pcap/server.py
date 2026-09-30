@@ -16,8 +16,7 @@ from pathlib import Path
 PORT = 4434
 OPENSSL = "/opt/measurement/openssl.sh"
 FIXTURE = Path(
-    "/work/cert-chain-scaling/fixtures-20260914T113933Z/"
-    "mldsa65/depth-2"
+    os.environ["MEASUREMENT_FIXTURE_ROOT"]
 )
 
 

@@ -12,7 +12,6 @@ from trust_ids import configured_ids
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
-DEFAULT = REPO / 'artifacts/mtc/n16-x25519-20260923T134045Z'
 
 
 def command(args, timeout=30):
@@ -33,16 +32,21 @@ def main():
     parser.add_argument('--client-image', default='mt-browser-boringssl:wire')
     parser.add_argument('--profile', choices=['ecdsa-p256', 'ecdsa-p384', 'ecdsa-p521', 'mldsa44', 'mldsa65', 'mldsa87'], default='ecdsa-p256')
     parser.add_argument('--mode', choices=['standalone', 'landmark'], default='standalone')
+    parser.add_argument('--mtc-root', type=Path,
+                        help='MTC fixture root containing batch16/mtc and population')
     parser.add_argument('--fixture', type=Path)
     parser.add_argument('--key', type=Path)
     parser.add_argument('--ordinary-cert', type=Path)
     args = parser.parse_args()
+    if args.mtc_root is None and (args.fixture is None or args.key is None):
+        parser.error('--mtc-root is required unless both --fixture and --key are supplied')
     if not args.execute:
         print(f'PLAN: {args.profile}/{args.mode}; 4 isolated TLS connections: valid, wrong hostname, altered proof, missing negotiation.')
         print('No Docker or TLS executed. Add --execute to run.')
         return
-    fixture = (args.fixture or DEFAULT / 'batch16/mtc' / args.profile).resolve()
-    key = (args.key or DEFAULT / 'population' / args.profile / '0.key').resolve()
+    root = args.mtc_root.resolve() if args.mtc_root is not None else None
+    fixture = (args.fixture or root / 'batch16/mtc' / args.profile).resolve()
+    key = (args.key or root / 'population' / args.profile / '0.key').resolve()
     ordinary = (args.ordinary_cert or key.with_suffix('.pem')).resolve()
     cert_name = args.mode + '-0000.pem'
     trust_name = 'trust.bin' if args.mode == 'landmark' else 'authority.bin'

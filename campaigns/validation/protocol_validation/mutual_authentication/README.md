@@ -92,23 +92,24 @@ Generate the independent fixture set first. Without `--execute`, this command
 only prints its plan:
 
 ```bash
-python3 campaigns/validation/protocol_validation/mutual_authentication/generate_fixtures.py
-python3 campaigns/validation/protocol_validation/mutual_authentication/generate_fixtures.py --execute
+MUTUAL_ROOT="artifacts/validation/<new-mutual-fixture-root>"
+
+python3 campaigns/validation/protocol_validation/mutual_authentication/generate_fixtures.py --output "$MUTUAL_ROOT"
+python3 campaigns/validation/protocol_validation/mutual_authentication/generate_fixtures.py --output "$MUTUAL_ROOT" --execute
 ```
 
 Generation uses `mt-tls-mtc:local` without network access and refuses to
 overwrite an existing output. It creates classical X.509, ML-DSA X.509, one
 trusted MTC client domain and a separate untrusted MTC client domain, plus a
-SHA-256 manifest under `artifacts/validation/mutual-auth-manual/`.
+SHA-256 manifest under the explicitly selected `$MUTUAL_ROOT`.
 
-Normally no separate generation command is necessary:
-`bin/base/mt-protocol-validation mutual-auth` detects and prepares these
-dependencies before starting the preflight.
+The fixture root is an explicit input. Generate it once and reuse that
+immutable root for the protocol-validation preflight.
 
 From the repository root:
 
 ```bash
-python3 campaigns/validation/protocol_validation/mutual_authentication/preflight.py --json
+python3 campaigns/validation/protocol_validation/mutual_authentication/preflight.py --manual-root "$MUTUAL_ROOT" --mtc-root "$MTC_ROOT" --json
 ```
 
 Expected result:

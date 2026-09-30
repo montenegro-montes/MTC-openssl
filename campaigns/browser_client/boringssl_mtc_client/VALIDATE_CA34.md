@@ -126,7 +126,8 @@ First run one profile/mode, with its four existing positive/negative cases:
 
 ```bash
 python3 campaigns/browser_client/boringssl_mtc_client/run-tls-smoke.py \
-  --execute --profile ecdsa-p256 --mode standalone \
+  --execute --mtc-root "$MTC_ROOT" \
+  --profile ecdsa-p256 --mode standalone \
   --server-image mt-tls-mtc:ca34 --client-image mt-browser-boringssl:ca34
 ```
 
@@ -134,7 +135,8 @@ Only if it passes, run all six profiles, two modes and four cases (48 total):
 
 ```bash
 python3 campaigns/browser_client/boringssl_mtc_client/run-tls-matrix.py \
-  --execute --server-image mt-tls-mtc:ca34 --client-image mt-browser-boringssl:ca34
+  --execute --mtc-root "$MTC_ROOT" \
+  --server-image mt-tls-mtc:ca34 --client-image mt-browser-boringssl:ca34
 ```
 
 Expected: `MATRIX: 12 suites PASS, 0 suites FAIL`. This does not execute Chromium

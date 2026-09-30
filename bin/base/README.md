@@ -196,7 +196,7 @@ mt-protocol-validation
 
 ### Protocol-validation fixture consistency
 
-After preparing the N=16 fixtures, `mt-prepare` checks that the current `mt-protocol-validation` configuration points to the expected Paper-1 fixture set.
+After preparing the N=16 fixtures, `mt-prepare` checks that the current `mt-protocol-validation` configuration points to the expected MTC fixture set.
 
 The current prerequisite check expects the initial protocol-validation configuration to use:
 

@@ -3,12 +3,14 @@ services:
     image: ${VALIDATION_NETWORK_IMAGE:-mt-tls-network:latency}
     volumes:
       - ../../campaigns/validation/native_pcap:/opt/native-pcap-validation:ro
+      - ${VALIDATION_FIXTURE_HOST:?Set VALIDATION_FIXTURE_HOST}:/work/fixture:ro
     command: ["python3", "/opt/native-pcap-validation/server.py"]
 
   client:
     image: ${VALIDATION_NETWORK_IMAGE:-mt-tls-network:latency}
     volumes:
       - ../../campaigns/validation/native_pcap:/opt/native-pcap-validation:ro
+      - ${VALIDATION_FIXTURE_HOST:?Set VALIDATION_FIXTURE_HOST}:/work/fixture:ro
     environment:
       PYTHONPATH: /opt/measurement
       VALIDATION_NETWORK_FAMILY: ${VALIDATION_NETWORK_FAMILY:-latency}

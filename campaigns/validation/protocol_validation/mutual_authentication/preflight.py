@@ -559,8 +559,7 @@ def main():
         help="emit machine-readable JSON summary",
     )
     parser.add_argument(
-        "--manual-root", type=Path,
-        default=REPO / "artifacts/validation/mutual-auth-manual",
+        "--manual-root", type=Path, required=True,
         help="X.509 and MTC client fixture root",
     )
     parser.add_argument(

@@ -26,24 +26,6 @@ REPO = Path(__file__).resolve().parents[4]
 
 DEFAULT_PEER = Path("/tmp/mtc-retry-peer-measure")
 
-DEFAULT_TRUST = (
-    REPO
-    / "artifacts/mtc/n16-20260914T113933Z/"
-      "batch16/mtc/ecdsa-p256/trust.bin"
-)
-
-DEFAULT_CERT = (
-    REPO
-    / "artifacts/mtc/n16-20260914T113933Z/"
-      "batch16/mtc/ecdsa-p256/landmark-0000.pem"
-)
-
-DEFAULT_KEY = (
-    REPO
-    / "artifacts/mtc/n16-20260914T113933Z/"
-      "population/ecdsa-p256/0.key"
-)
-
 HOSTNAME = "server"
 
 SCENARIOS = {}
@@ -721,19 +703,19 @@ def main():
     parser.add_argument(
         "--trust",
         type=Path,
-        default=DEFAULT_TRUST,
+        required=True,
     )
 
     parser.add_argument(
         "--cert",
         type=Path,
-        default=DEFAULT_CERT,
+        required=True,
     )
 
     parser.add_argument(
         "--key",
         type=Path,
-        default=DEFAULT_KEY,
+        required=True,
     )
 
     parser.add_argument(

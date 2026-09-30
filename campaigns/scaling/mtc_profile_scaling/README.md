@@ -63,7 +63,7 @@ Afterward, with `CHAIN_FIXTURES` pointing to the separately validated nine-profi
 X.509 certificate-chain fixtures, run the static comparison manually:
 
 ```sh
-python3 campaigns/scaling/cert_chain_scaling/size_analysis.py "$CHAIN_FIXTURES" --mtc-fixtures "$MTC_ALL" --output "artifacts/results/paper1-crossover-$STAMP"
+python3 campaigns/scaling/cert_chain_scaling/size_analysis.py "$CHAIN_FIXTURES" --mtc-fixtures "$MTC_ALL" --output "artifacts/results/mtc-crossover-$STAMP"
 ```
 
 Analysis compares identical algorithm names and verifies the MTC profile metadata
@@ -81,8 +81,8 @@ Never reuse output directories. Private keys and observations stay in `artifacts
 
 Do not install or run capture tools as part of preparation. For later representative
 `pq-mtc-experimental-landmark` and `pq-mtc-experimental-standalone` captures, keep
-those historical labels and their ML-DSA-65 identities. New Paper-1 ML-DSA-65
-uses `mldsa65` and IDs 32473.112 / 32473.212 instead; do not relabel old captures.
+those historical labels and their ML-DSA-65 identities. The current ML-DSA-65
+profile uses `mldsa65` and IDs 32473.112 / 32473.212 instead; do not relabel old captures.
 
 Check these fields against `src/mtc/core.py`, `mtc.c` and `tls.c`:
 

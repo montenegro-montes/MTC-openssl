@@ -16,7 +16,7 @@ REPO=Path(__file__).resolve().parents[3]
 sys.path.insert(0,str(REPO/'src/mtc'))
 import core
 import prepare
-from crypto_profiles import PAPER1_PROFILES, TREE_SIZES, TREE_HASH, DRAFT
+from crypto_profiles import SIGNATURE_PROFILES, TREE_SIZES, TREE_HASH, DRAFT
 from local_log import LocalLog
 from snapshots import export_snapshot, authenticate_snapshot, verify_snapshot_consistency
 HERE=Path(__file__).resolve().parent
@@ -63,7 +63,7 @@ def provenance():
 
 def gate(report,fixtures,image_id):
     data=read(report)
-    wanted={(name,mode) for name in PAPER1_PROFILES for mode in ('landmark','standalone')}
+    wanted={(name,mode) for name in SIGNATURE_PROFILES for mode in ('landmark','standalone')}
     rows=data.get('cells',[])
     if data.get('server_hostname','server')!='server':raise ValueError('Campaign gate requires the default server hostname')
     if not data.get('passed') or len(rows)!=18 or {(x['profile'],x['mtc_mode']) for x in rows}!=wanted:
@@ -84,7 +84,7 @@ def server_hostname(value):
 
 
 def populate(directory,name,count,server_hostname='server'):
-    p=PAPER1_PROFILES[name];directory.mkdir(parents=True,exist_ok=True)
+    p=SIGNATURE_PROFILES[name];directory.mkdir(parents=True,exist_ok=True)
     digest=['-'+p['digest']] if p['digest'] else []
     ca_key=directory/'ca.key';ca=directory/'ca.pem'
     if not ca.exists():
@@ -104,7 +104,7 @@ def populate(directory,name,count,server_hostname='server'):
 
 def generate(args):
     require_current_mtc_image()
-    sizes=sorted(set(args.sizes));prov=provenance();profiles=args.profile or list(PAPER1_PROFILES)
+    sizes=sorted(set(args.sizes));prov=provenance();profiles=args.profile or list(SIGNATURE_PROFILES)
     hostname_meta={'server_hostname':args.server_hostname} if args.server_hostname!='server' else {}
     if sizes!=[16] or args.seed_fixtures:gate(args.validated_n16,args.seed_fixtures,prov['image_id'])
     os.umask(0o077);args.output.mkdir(parents=True,exist_ok=False)
@@ -184,7 +184,7 @@ def generate(args):
                 signer_keys=keys,
                 metadata={
                     'provenance':prov,
-                    'population':'Paper-1 independent same-algorithm X.509 population',
+                    'population':'independent same-algorithm X.509 population',
                     **hostname_meta
                 },
                 **options)
@@ -199,7 +199,7 @@ def generate(args):
 
 
 def check_fixture(directory,name,n):
-    p=PAPER1_PROFILES[name];meta=read(directory/'manifest.json');saved=read(directory/'fixture-sha256.json')
+    p=SIGNATURE_PROFILES[name];meta=read(directory/'manifest.json');saved=read(directory/'fixture-sha256.json')
     required={'manifest.json','authority.bin','trust.bin','cosigner-0.spki','cosigner-1.spki'}
     required.update(f'{mode}-{i:04d}.der' for mode in ('landmark','standalone') for i in range(n))
     if not required<=saved.keys():raise ValueError('Incomplete fixture hash manifest')
@@ -218,7 +218,7 @@ def check_fixture(directory,name,n):
 
 
 def tls_once(directory,population,name,mode,output,server_hostname='server'):
-    p=PAPER1_PROFILES[name];output.mkdir(parents=True,exist_ok=False)
+    p=SIGNATURE_PROFILES[name];output.mkdir(parents=True,exist_ok=False)
     # Reserve an ephemeral port without making a probe connection/handshake.
     with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
     ident=p['ca_id']+('.1.1.1' if mode=='landmark' else '')
@@ -251,7 +251,7 @@ def tls_once(directory,population,name,mode,output,server_hostname='server'):
 
 
 def validate(args):
-    prov=provenance();profiles=args.profile or list(PAPER1_PROFILES);modes=args.mode or ['landmark','standalone']
+    prov=provenance();profiles=args.profile or list(SIGNATURE_PROFILES);modes=args.mode or ['landmark','standalone']
     if args.tree_size!=16:raise ValueError('Only the first N=16 functional gate is prepared')
     # Refuse stale binaries even when repository source is bind-mounted.
     require_current_mtc_image()
@@ -265,7 +265,7 @@ def validate(args):
         # Finish parsing, public-key policy and real signature checks for all
         # profiles before starting either TLS mode (manual validation steps 2–4).
         for name in profiles:
-            p=PAPER1_PROFILES[name];directory=args.fixtures/'batch16/mtc'/name
+            p=SIGNATURE_PROFILES[name];directory=args.fixtures/'batch16/mtc'/name
             meta=check_fixture(directory,name,16)
             if meta['provenance']['image_id']!=prov['image_id'] or meta['provenance']['source_hashes']!=prov['source_hashes']:
                 raise ValueError('Fixture generation used different image/source')
@@ -282,7 +282,7 @@ def validate(args):
                          '-in',message,'-sigfile',signature,*digest])
         for mode in modes:
             for name in profiles:
-                p=PAPER1_PROFILES[name];directory=args.fixtures/'batch16/mtc'/name
+                p=SIGNATURE_PROFILES[name];directory=args.fixtures/'batch16/mtc'/name
                 tls_once(directory,args.fixtures/'population'/name,name,mode,args.output/(name+'-'+mode),args.server_hostname)
                 cells.append(dict(profile=name,standard_name=p['standard_name'],implementation_algorithm=p['implementation_algorithm'],
                     security_level=p['security_level'],tree_size=16,mtc_mode=mode,draft=DRAFT,success=True,handshakes=1,
@@ -301,7 +301,7 @@ def main(argv=None):
     parser.add_argument('action',choices=['generate','validate']);parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--fixtures',type=Path);parser.add_argument('--sizes',type=int,nargs='+',choices=TREE_SIZES,default=[16])
     parser.add_argument('--validated-n16',type=Path);parser.add_argument('--seed-fixtures',type=Path)
-    parser.add_argument('--profile',action='append',choices=PAPER1_PROFILES);parser.add_argument('--mode',action='append',choices=['landmark','standalone'])
+    parser.add_argument('--profile',action='append',choices=SIGNATURE_PROFILES);parser.add_argument('--mode',action='append',choices=['landmark','standalone'])
     parser.add_argument('--tree-size',type=int,choices=TREE_SIZES,default=16)
     parser.add_argument('--image',default='mt-tls-mtc:local');parser.add_argument('--execute',action='store_true');parser.add_argument('--inside',action='store_true',help=argparse.SUPPRESS)
     parser.add_argument('--server-hostname',type=server_hostname,default='server',help='Leaf-0 CN/SAN and validation hostname; requires new fixtures')
@@ -320,7 +320,7 @@ def main(argv=None):
         parser.error('Validation is N=16 only; duplicate selections are not allowed')
     if not args.execute:
         print('PREPARATION ONLY:',args.action,'N='+str(args.sizes if args.action=='generate' else 16),
-              'profiles='+str(args.profile or list(PAPER1_PROFILES)), 'server_hostname='+args.server_hostname, 'modes='+str(args.mode or ['landmark','standalone']))
+              'profiles='+str(args.profile or list(SIGNATURE_PROFILES)), 'server_hostname='+args.server_hostname, 'modes='+str(args.mode or ['landmark','standalone']))
         return
     if args.inside:
         (generate if args.action=='generate' else validate)(args);return

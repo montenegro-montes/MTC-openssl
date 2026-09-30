@@ -53,13 +53,17 @@ The MTC timing fields are extracted from `MTC_SETUP` and `MTC_VERIFY` lines obse
 
 ## Smoke run
 
-From the repository root:
+From the repository root, select the fixture roots explicitly:
 
 ```bash
+MUTUAL_ROOT="artifacts/validation/<mutual-fixture-root>"
+MTC_ROOT="artifacts/mtc/<mtc-fixture-root>"
 ROOT="artifacts/results/mutual-auth-measurement-smoke-$(date -u +%Y%m%dT%H%M%SZ)"
 
 python3 campaigns/performance/mutual_authentication/run.py \
   --root "$ROOT" \
+  --mutual-root "$MUTUAL_ROOT" \
+  --mtc-root "$MTC_ROOT" \
   --preflight
 ```
 
@@ -70,10 +74,14 @@ The smoke run executes one round for each of the five positive cases.
 Example:
 
 ```bash
+MUTUAL_ROOT="artifacts/validation/<mutual-fixture-root>"
+MTC_ROOT="artifacts/mtc/<mtc-fixture-root>"
 ROOT="artifacts/results/mutual-auth-measurement-$(date -u +%Y%m%dT%H%M%SZ)"
 
 python3 campaigns/performance/mutual_authentication/run.py \
   --root "$ROOT" \
+  --mutual-root "$MUTUAL_ROOT" \
+  --mtc-root "$MTC_ROOT" \
   --rounds 30
 ```
 

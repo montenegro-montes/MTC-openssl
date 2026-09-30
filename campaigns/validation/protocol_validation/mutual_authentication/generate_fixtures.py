@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[4]
-DEFAULT_OUTPUT = Path("artifacts/validation/mutual-auth-manual")
 IMAGE = "mt-tls-mtc:local"
 OPENSSL = "/opt/openssl/bin/openssl"
 PROFILES = (
@@ -181,7 +180,7 @@ def generate(output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--image", default=IMAGE)
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--performance-clients", action="store_true")

@@ -5,8 +5,10 @@ handshakes. It provides native timing, packet-capture measurements, mutual
 authentication cases and the nine-profile Trust Anchor Retry matrix. Simple and
 mutual MTC measurements each include landmark and standalone credentials.
 For mutual authentication, the client and server use the same one of the nine
-signature profiles in each scenario. Dedicated client fixtures are prepared
-automatically under `artifacts/validation/handshake-performance-mutual-v2/`.
+signature profiles in each scenario. Dedicated client fixtures use the `MUTUAL_CLIENT_ROOT` configured for the
+performance campaign. Fixture roots are supplied explicitly or derived by the
+fixture-preparation workflow; the runner does not depend on a historical
+fixture directory.
 The handshake report presents absolute results for every profile and case. Its
 Native and PCAP tables include sample count, mean, sample standard deviation,
 median and a 95% Student t confidence interval for the mean; it does not use a
@@ -48,11 +50,7 @@ loading fixture paths. Newly written PCAP CSV rows include `key_establishment`
 and `openssl_group`, matching native rows. These columns record configuration;
 they are not an independent decoding of ServerHello key_share.
 
-Historical run `handshake-performance-x25519-mlkem512-20260923T170822Z-800`
-has an inconsistent directory label: its summary/configured-group logs report
-X25519, and inspected OpenSSL client logs report `Server Temp Key: X25519`.
-Do not use it as X25519+ML-KEM512 evidence or rewrite its artifacts. Old PCAP
-CSVs lack the new columns. Existing performance configurations may already have
-been rewritten to `KEM=x25519`; correcting the runner does not restore their
-original selection. Review the intended KEM before any new run.
-The correction was inspected only; no tests or measurements were executed.
+Historical artifacts may contain directory labels that do not match the
+key-establishment group recorded by their configuration and OpenSSL logs.
+Directory names must not be treated as protocol evidence. Existing artifacts
+must not be rewritten; verify their recorded configuration before reuse.

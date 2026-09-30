@@ -26,6 +26,7 @@ configure_paths() {
 }
 prepare_fixtures() (
  source "$REPO/.mt-state/cert-scaling/paths.env"
+ PERFORMANCE_MUTUAL_FIXTURES=${PERFORMANCE_MUTUAL_FIXTURES:-artifacts/validation/handshake-performance-mutual-$STAMP}
  [[ ! -d "$REPO/.mt-state/cert-scaling/lock" && ! -d "$REPO/.mt-state/cert-scaling/batch.lock" ]] || fail 'A certification stage or batch is active.'
  echo 'Preparing X.509 chain fixtures D=2,3,4,5.'
  if [[ ! -e "$CHAIN_FIXTURES" && ! -L "$CHAIN_FIXTURES" ]]; then
@@ -90,7 +91,7 @@ except Exception as error:
     raise SystemExit('ERROR: Existing N=16 evidence cannot be reused: '+str(error)+'. Outputs are preserved; inspect them and select fresh MTC16/MTC_VALID paths as needed.')
 print('PASS N=16 fixtures, image, source hashes and functional validation')
 PY
- local performance_clients="$REPO/artifacts/validation/handshake-performance-mutual-v2"
+ local performance_clients="$REPO/$PERFORMANCE_MUTUAL_FIXTURES"
  if [[ ! -e "$performance_clients" && ! -L "$performance_clients" ]]; then
   python3 "$REPO/campaigns/validation/protocol_validation/mutual_authentication/generate_fixtures.py" \
    --output "$performance_clients" --performance-clients --execute || exit "$?"
@@ -121,7 +122,7 @@ PYCLIENTS
  [[ "$?" == 0 ]] || exit 1
  local FIX KEY PROFILE
  source "$REPO/.mt-state/protocol-validation/paths.env"
- [[ "${PROFILE:-pq}" == mldsa65 && "$FIX" == "$MTC16/batch16/mtc/mldsa65" && "$KEY" == "$MTC16/population/mldsa65/0.key" ]] || fail 'Existing protocol paths/profile differ from the prepared Paper-1 fixtures. They were preserved; inspect mt-protocol-validation status before changing them.'
+ [[ "${PROFILE:-mldsa65}" == mldsa65 && "$FIX" == "$MTC16/batch16/mtc/mldsa65" && "$KEY" == "$MTC16/population/mldsa65/0.key" ]] || fail 'Existing protocol paths/profile differ from the prepared MTC fixtures. They were preserved; inspect mt-protocol-validation status before changing them.'
  [[ -f "$FIX/manifest.json" && -f "$KEY" ]] || fail 'Prepared protocol fixtures or server key are missing.'
 )
 configure() (

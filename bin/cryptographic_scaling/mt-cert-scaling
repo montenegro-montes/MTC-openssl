@@ -29,7 +29,7 @@ Usage: bin/cryptographic_scaling/mt-cert-scaling [COMMAND]
   set VARIABLE PATH         select an input path or a fresh output path
 
 Variables: CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID
-           MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT TLS_ROOT
+           PERFORMANCE_MUTUAL_FIXTURES MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT TLS_ROOT
            MUTUAL_SERVER_FIXTURES MUTUAL_FIXTURES MUTUAL_RESULTS MUTUAL_ANALYSIS MUTUAL_EXACT MUTUAL_BOUNDARY BOUNDARY_ROOT
 Stages accept a number (80) or full name (80.crossover).
   cross                     N=16 crossover + plots (stage 80)
@@ -45,11 +45,11 @@ TLS depth validation is manual: run 110 or tls-depth-validation.
 For a previous manual campaign, use init with its name and set its paths.
 HELP
 }
-load() { [[ -f "$CONFIG" ]] || fail 'Run init [NAME] first.'; source "$CONFIG"; configure_kem "${KEM:-x25519}"; ADVANCED_ROOT=${ADVANCED_ROOT:-${STATIC_ROOT}-advanced}; TLS_ROOT=${TLS_ROOT:-artifacts/results/cert-chain-tls-$STAMP}; MUTUAL_SERVER_FIXTURES=${MUTUAL_SERVER_FIXTURES:-artifacts/scaling/mutual-auth-crossover/server-x509-$STAMP}; MUTUAL_FIXTURES=${MUTUAL_FIXTURES:-artifacts/scaling/mutual-auth-crossover/fixtures-$STAMP}; MUTUAL_RESULTS=${MUTUAL_RESULTS:-artifacts/results/mutual-auth-crossover-$STAMP}; MUTUAL_ANALYSIS=${MUTUAL_ANALYSIS:-artifacts/results/mutual-auth-crossover-analysis-$STAMP}; MUTUAL_EXACT=${MUTUAL_EXACT:-artifacts/results/mutual-auth-crossover-exact-$STAMP}; MUTUAL_BOUNDARY=${MUTUAL_BOUNDARY:-artifacts/results/mutual-auth-crossover-boundary-audit-$STAMP}; BOUNDARY_ROOT=${BOUNDARY_ROOT:-artifacts/results/mtc-crossover-boundary-audit-$STAMP}; }
+load() { [[ -f "$CONFIG" ]] || fail 'Run init [NAME] first.'; source "$CONFIG"; configure_kem "${KEM:-x25519}"; PERFORMANCE_MUTUAL_FIXTURES=${PERFORMANCE_MUTUAL_FIXTURES:-artifacts/validation/handshake-performance-mutual-$STAMP}; ADVANCED_ROOT=${ADVANCED_ROOT:-${STATIC_ROOT}-advanced}; TLS_ROOT=${TLS_ROOT:-artifacts/results/cert-chain-tls-$STAMP}; MUTUAL_SERVER_FIXTURES=${MUTUAL_SERVER_FIXTURES:-artifacts/scaling/mutual-auth-crossover/server-x509-$STAMP}; MUTUAL_FIXTURES=${MUTUAL_FIXTURES:-artifacts/scaling/mutual-auth-crossover/fixtures-$STAMP}; MUTUAL_RESULTS=${MUTUAL_RESULTS:-artifacts/results/mutual-auth-crossover-$STAMP}; MUTUAL_ANALYSIS=${MUTUAL_ANALYSIS:-artifacts/results/mutual-auth-crossover-analysis-$STAMP}; MUTUAL_EXACT=${MUTUAL_EXACT:-artifacts/results/mutual-auth-crossover-exact-$STAMP}; MUTUAL_BOUNDARY=${MUTUAL_BOUNDARY:-artifacts/results/mutual-auth-crossover-boundary-audit-$STAMP}; BOUNDARY_ROOT=${BOUNDARY_ROOT:-artifacts/results/mtc-crossover-boundary-audit-$STAMP}; }
 save() {
  local key
  (umask 077; : > "$CONFIG.tmp"
- for key in STAMP KEM CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT TLS_ROOT MUTUAL_SERVER_FIXTURES MUTUAL_FIXTURES MUTUAL_RESULTS MUTUAL_ANALYSIS MUTUAL_EXACT MUTUAL_BOUNDARY BOUNDARY_ROOT; do
+ for key in STAMP KEM CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID PERFORMANCE_MUTUAL_FIXTURES MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT TLS_ROOT MUTUAL_SERVER_FIXTURES MUTUAL_FIXTURES MUTUAL_RESULTS MUTUAL_ANALYSIS MUTUAL_EXACT MUTUAL_BOUNDARY BOUNDARY_ROOT; do
   printf '%s=%q\n' "$key" "${!key}" >> "$CONFIG.tmp"
  done
  mv "$CONFIG.tmp" "$CONFIG")
@@ -66,6 +66,7 @@ init() {
  SUPPORT="artifacts/cert-chain-scaling/algorithm_support-$TAG.csv"
  MTC16="artifacts/mtc/n16-$TAG"
  MTC_VALID="artifacts/results/mtc-n16-$TAG"
+ PERFORMANCE_MUTUAL_FIXTURES="artifacts/validation/handshake-performance-mutual-$TAG"
  MTC_ALL="artifacts/mtc/all-$TAG"
  STATIC_ROOT="artifacts/results/mtc-crossover-n16-$TAG"
  ADVANCED_ROOT="artifacts/results/mtc-crossover-advanced-$TAG"
@@ -183,7 +184,7 @@ status() {
  load
  local key step state display_state
  printf 'Key establishment: %s (%s)\n' "$KEM_LABEL" "$KEM_GROUP"
- for key in CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT BOUNDARY_ROOT TLS_ROOT MUTUAL_SERVER_FIXTURES MUTUAL_FIXTURES MUTUAL_RESULTS MUTUAL_ANALYSIS MUTUAL_EXACT MUTUAL_BOUNDARY; do
+ for key in CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID PERFORMANCE_MUTUAL_FIXTURES MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT BOUNDARY_ROOT TLS_ROOT MUTUAL_SERVER_FIXTURES MUTUAL_FIXTURES MUTUAL_RESULTS MUTUAL_ANALYSIS MUTUAL_EXACT MUTUAL_BOUNDARY; do
   printf '%-16s %s\n' "$key" "${!key}"
  done
  printf '\nStages (existing output does not imply validation):\n'
@@ -375,7 +376,7 @@ mutual_boundary_audit() (
 set_path() {
  load
  [[ ! -d "$STATE/lock" && ! -d "$STATE/batch.lock" ]] || fail 'Do not change paths while a stage or batch is running.'
- case "$1" in CHAIN_FIXTURES|CHAIN_VALID|ENVIRONMENT|SUPPORT|MTC16|MTC_VALID|MTC_ALL|STATIC_ROOT|AUDIT|ADVANCED_ROOT|TLS_ROOT|MUTUAL_SERVER_FIXTURES|MUTUAL_FIXTURES|MUTUAL_RESULTS|MUTUAL_ANALYSIS|MUTUAL_EXACT|MUTUAL_BOUNDARY|BOUNDARY_ROOT) ;;
+ case "$1" in CHAIN_FIXTURES|CHAIN_VALID|ENVIRONMENT|SUPPORT|MTC16|MTC_VALID|PERFORMANCE_MUTUAL_FIXTURES|MTC_ALL|STATIC_ROOT|AUDIT|ADVANCED_ROOT|TLS_ROOT|MUTUAL_SERVER_FIXTURES|MUTUAL_FIXTURES|MUTUAL_RESULTS|MUTUAL_ANALYSIS|MUTUAL_EXACT|MUTUAL_BOUNDARY|BOUNDARY_ROOT) ;;
   *) fail 'Unknown path variable.';;
  esac
  [[ -n "$2" ]] || fail 'Empty path.'
@@ -397,6 +398,7 @@ suggest_path() {
   SUPPORT) printf 'artifacts/cert-chain-scaling/algorithm-support-%s.csv' "$stamp";;
   MTC16) printf 'artifacts/mtc/n16-%s' "$stamp";;
   MTC_VALID) printf 'artifacts/results/mtc-n16-%s' "$stamp";;
+  PERFORMANCE_MUTUAL_FIXTURES) printf 'artifacts/validation/handshake-performance-mutual-%s' "$stamp";;
   MTC_ALL) printf 'artifacts/mtc/all-%s' "$stamp";;
   STATIC_ROOT) printf 'artifacts/results/mtc-crossover-n16-%s' "$stamp";;
   AUDIT) printf 'artifacts/results/mtc-crossover-audit-%s.json' "$stamp";;
@@ -414,7 +416,7 @@ suggest_path() {
 }
 menu() {
  local choice value key suggested path_choice path_number index
- local -a path_keys=(CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT BOUNDARY_ROOT TLS_ROOT MUTUAL_SERVER_FIXTURES MUTUAL_FIXTURES MUTUAL_RESULTS MUTUAL_ANALYSIS MUTUAL_EXACT MUTUAL_BOUNDARY)
+ local -a path_keys=(CHAIN_FIXTURES CHAIN_VALID ENVIRONMENT SUPPORT MTC16 MTC_VALID PERFORMANCE_MUTUAL_FIXTURES MTC_ALL STATIC_ROOT AUDIT ADVANCED_ROOT BOUNDARY_ROOT TLS_ROOT MUTUAL_SERVER_FIXTURES MUTUAL_FIXTURES MUTUAL_RESULTS MUTUAL_ANALYSIS MUTUAL_EXACT MUTUAL_BOUNDARY)
  while true; do
   printf '\nCert scaling: 1 New campaign paths  2 Status/progress  3 Show command\n              4 Run stage  5 Change one path\n              6 Run next X pending N=16 stages\n              7 Run complete N=16 workflow (10–60, 80, 85, 90)\n              8 Advanced crossover (N=1, 4, 16, 64, 256)\n              9 Audit calculated crossover boundaries (N-1/N, includes HTML)
              10 TLS depth validation (X.509 D=2–5, includes HTML)

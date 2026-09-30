@@ -3,7 +3,7 @@ import json,shutil,subprocess,time
 from datetime import datetime, timezone
 from pathlib import Path
 from core import *
-from crypto_profiles import crypto_profile, PAPER1_PROFILES, TREE_HASH
+from crypto_profiles import crypto_profile, SIGNATURE_PROFILES, TREE_HASH
 OPENSSL='/opt/openssl/bin/openssl'
 def command(*args,data=None):return subprocess.run([OPENSSL,*map(str,args)],input=data,capture_output=True,check=True).stdout
 def keygen(path,family):
@@ -130,7 +130,7 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
         'setup_ms':(time.perf_counter()-begin)*1000,'sizes':sizes,'trust_file_bytes':len(config),
         'ca_key_note':'Separate from directly-signing X509 CA as required by MTC -06 section 5.4',
         'changed_fields':['issuer','serialNumber','signature algorithm','signatureValue','old authorityKeyIdentifier omitted']}
-    if family in PAPER1_PROFILES:meta.update(profile=family,standard_name=profile['standard_name'],implementation_algorithm=profile['implementation_algorithm'],security_level=profile['security_level'],merkle_hash=TREE_HASH,mtc_modes=['landmark','standalone'])
+    if family in SIGNATURE_PROFILES:meta.update(profile=family,standard_name=profile['standard_name'],implementation_algorithm=profile['implementation_algorithm'],security_level=profile['security_level'],merkle_hash=TREE_HASH,mtc_modes=['landmark','standalone'])
     if metadata:
         if authenticated is not None and set(metadata)&set(meta):
             raise ValueError('Metadata must not override authenticated generation fields')

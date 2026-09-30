@@ -1,4 +1,4 @@
-"""Paper-1 signer profiles; historical classic/pq retain their original meaning."""
+"""MTC signature profiles; historical classic/pq retain their original meaning."""
 DRAFT = 'draft-ietf-plants-merkle-tree-certs-06'
 TREE_HASH = 'SHA-256'
 TREE_SIZES = (1, 4, 16, 64, 256, 1024)
@@ -15,7 +15,7 @@ _ROWS = (
     ('slhdsa192s','SLH-DSA','SLH-DSA-SHA2-192s','slhdsasha2192s',None,None,3,122,222),
     ('slhdsa256s','SLH-DSA','SLH-DSA-SHA2-256s','slhdsasha2256s',None,None,5,123,223),
 )
-PAPER1_PROFILES = {
+SIGNATURE_PROFILES = {
     name:dict(profile=name,family=family,standard_name=standard,
               implementation_algorithm=implementation,curve=curve,digest=digest,
               security_level=level,ca_id=f'32473.{ca}',cosigner_ids=(f'32473.{ca}',f'32473.{cosigner}'))
@@ -23,12 +23,12 @@ PAPER1_PROFILES = {
 }
 LEGACY_PROFILE_MAP = {'ecdsa-p256':'classic','mldsa65':'pq'}
 LEGACY_PROFILES = {
-    'classic':dict(PAPER1_PROFILES['ecdsa-p256'],profile='classic',ca_id='32473.1',cosigner_ids=('32473.1','32473.3')),
-    'pq':dict(PAPER1_PROFILES['mldsa65'],profile='pq',ca_id='32473.2',cosigner_ids=('32473.2','32473.4')),
+    'classic':dict(SIGNATURE_PROFILES['ecdsa-p256'],profile='classic',ca_id='32473.1',cosigner_ids=('32473.1','32473.3')),
+    'pq':dict(SIGNATURE_PROFILES['mldsa65'],profile='pq',ca_id='32473.2',cosigner_ids=('32473.2','32473.4')),
 }
 
 
 def crypto_profile(name):
     if name in LEGACY_PROFILES:return LEGACY_PROFILES[name]
-    if name in PAPER1_PROFILES:return PAPER1_PROFILES[name]
+    if name in SIGNATURE_PROFILES:return SIGNATURE_PROFILES[name]
     raise ValueError('Unknown MTC crypto profile: '+name)

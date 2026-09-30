@@ -15,12 +15,12 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 validate_profile() {
  case "$1" in
   ecdsa-p256|ecdsa-p384|ecdsa-p521|mldsa44|mldsa65|mldsa87|slhdsa128s|slhdsa192s|slhdsa256s) return 0;;
-  *) fail "Unsupported Paper-1 profile: $1";;
+  *) fail "Unsupported MTC profile: $1";;
  esac
 }
-paper1_root() {
+mtc_root() {
  local cert_config="$REPO/.mt-state/cert-scaling/paths.env" root
- [[ -f "$cert_config" ]] || fail 'Run bin/base/mt-prepare init to initialize missing launcher paths, or mt-prepare run ALL to also prepare images. Use init-legacy only for historical pq fixtures.'
+ [[ -f "$cert_config" ]] || fail 'Run bin/base/mt-prepare init to initialize missing launcher paths, or mt-prepare run ALL to also prepare images.'
  root=$( (source "$cert_config"; printf '%s' "$MTC16") )
  case "$root" in artifacts/*) ;; *) fail 'MTC16 must be a relative path under artifacts/.';; esac
  printf '%s\n' "$root"
@@ -30,17 +30,17 @@ validate_leaf() {
  [[ "$leaf" =~ ^[0-9]+$ ]] || fail "Leaf must be an integer in 0..$((LEAF_COUNT-1))."
  (( leaf >= 0 && leaf < LEAF_COUNT )) || fail "Leaf must be in 0..$((LEAF_COUNT-1))."
 }
-configure_paper1_profile() {
+configure_mtc_profile() {
  local profile=$1 leaf=${2:-${LEAF:-0}} root
  validate_profile "$profile"
  validate_leaf "$leaf"
- root=$(paper1_root)
+ root=$(mtc_root)
  PROFILE=$profile
  LEAF=$leaf
  FIX="$root/batch16/mtc/$PROFILE"
  KEY="$root/population/$PROFILE/$LEAF.key"
 }
-load() { [[ -f "$CONFIG" ]] || fail 'Run init first.'; unset PROFILE REVIEW LEAF; source "$CONFIG"; PROFILE=${PROFILE:-pq}; LEAF=${LEAF:-0}; REVIEW=${REVIEW:-artifacts/protocol-review/$STAMP}; }
+load() { [[ -f "$CONFIG" ]] || fail 'Run init first.'; unset PROFILE REVIEW LEAF; source "$CONFIG"; PROFILE=${PROFILE:-mldsa65}; LEAF=${LEAF:-0}; REVIEW=${REVIEW:-artifacts/protocol-review/$STAMP}; }
 save() {
  local key
  (umask 077
@@ -51,11 +51,7 @@ init() {
  [[ ! -e "$CONFIG" ]] || fail 'State already exists; use status and set.'
  STAMP=${1:-$(date -u +%Y%m%dT%H%M%SZ)}
  [[ "$STAMP" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid name.'
- if [[ "${2:-paper1}" == legacy ]]; then
-  PROFILE=pq; LEAF=0; FIX=artifacts/mtc/batch16-v2/pq; KEY=artifacts/certs/pq/server.key
- else
-  configure_paper1_profile mldsa65 0
- fi
+ configure_mtc_profile mldsa65 0
  CAP="artifacts/protocol-validation/$STAMP"
  REVIEW="artifacts/protocol-review/$STAMP"
  mkdir -p "$STATE"; save
@@ -66,7 +62,7 @@ init_profile() {
  [[ ! -e "$CONFIG" ]] || fail 'State already exists for this profile/leaf.'
  STAMP=$1
  [[ "$STAMP" =~ ^[a-zA-Z0-9_-]+$ ]] || fail 'Invalid name.'
- configure_paper1_profile "$2" "${3:-0}"
+ configure_mtc_profile "$2" "${3:-0}"
  local leaf4
  printf -v leaf4 '%04d' "$LEAF"
  CAP="artifacts/protocol-validation/$STAMP/$PROFILE/leaf-$leaf4"
@@ -291,17 +287,11 @@ set_path() {
  case "$1" in FIX|KEY|CAP|PROFILE|LEAF) ;; *) fail 'Variables: FIX KEY CAP PROFILE LEAF';; esac
  [[ ! -d "$CAP" ]] || fail 'Evidence already exists: use new for another campaign; previous state is preserved.'
  if [[ "$1" == PROFILE ]]; then
-  case "$2" in
-   pq|classic) PROFILE=$2; LEAF=0;;
-   *) configure_paper1_profile "$2" "${LEAF:-0}";;
-  esac
+  configure_mtc_profile "$2" "${LEAF:-0}"
   save; return
  fi
  if [[ "$1" == LEAF ]]; then
-  case "$PROFILE" in
-   pq|classic) fail 'LEAF selection is supported only for Paper-1 profiles.';;
-   *) configure_paper1_profile "$PROFILE" "$2";;
-  esac
+  configure_mtc_profile "$PROFILE" "$2"
   save; return
  fi
  # Relative artifact paths keep container and host references identical.
@@ -939,7 +929,7 @@ new_campaign() {
  [[ ! -d "$STATE/lock" && ! -d "$STATE/batch.lock" ]] || fail 'A stage or batch is active or a lock needs inspection.'
  [[ ! -e "artifacts/protocol-validation/$name" ]] || fail 'That campaign output already exists.'
  [[ ! -e "artifacts/protocol-review/$name" ]] || fail 'That protocol-review output already exists.'
- [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] || fail 'Initialize mt-cert-scaling before starting a new Paper-1 protocol campaign.'
+ [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] || fail 'Initialize mt-cert-scaling before starting a new protocol-validation campaign.'
  if [[ -d "$STATE" ]]; then mv "$STATE" "$STATE.saved-$(date -u +%Y%m%dT%H%M%SZ)-$$"; fi
  init "$name"
 }
@@ -958,29 +948,36 @@ render_validation_html() {
  printf 'HTML report: %s\n' "$report"
 }
 mutual_authentication() {
- local root manual="$REPO/artifacts/validation/mutual-auth-manual" output index has_output=0
+ local root manual output index has_output=0
  local extra=()
- ensure_mtc_dependencies
- load
- root=$(paper1_root)
+
  for ((index=1; index<=$#; index++)); do
   if [[ "${!index}" == --manual-root ]]; then
-   index=$((index+1)); manual=${!index:?--manual-root requires a path}
+   index=$((index+1))
+   manual=${!index:?--manual-root requires a path}
   elif [[ "${!index}" == --output ]]; then
-   index=$((index+1)); output=${!index:?--output requires a path}; has_output=1
+   index=$((index+1))
+   output=${!index:?--output requires a path}
+   has_output=1
   fi
  done
+
+ [[ -n "${manual:-}" ]] || fail 'mutual-auth requires --manual-root PATH.'
+ [[ -f "$manual/manifest.json" ]] || fail "Mutual-authentication fixture manifest missing: $manual/manifest.json"
+
+ ensure_mtc_dependencies
+ load
+ root=$(mtc_root)
+
  if [[ "$has_output" == 0 ]]; then
   output="artifacts/results/mutual-auth-preflight-$(date -u +%Y%m%dT%H%M%SZ)"
   extra=(--output "$output")
  fi
- if [[ ! -f "$manual/manifest.json" ]]; then
-  python3 campaigns/validation/protocol_validation/mutual_authentication/generate_fixtures.py \
-   --output "$manual" --execute
- fi
+
  python3 campaigns/validation/protocol_validation/mutual_authentication/preflight.py \
   --mtc-root "$root" --configured-profile "$PROFILE" --configured-leaf "$LEAF" \
   "${extra[@]}" "$@"
+
  render_validation_html mutual "$output"
 }
 retry_validation() {
@@ -1028,7 +1025,6 @@ menu() {
 case "${1:-menu}" in
  init) init "${2:-$(date -u +%Y%m%dT%H%M%SZ)}";;
  init-profile) init_profile "${2:?Campaign name required}" "${3:?Profile required}" "${4:-0}";;
- init-legacy) init "${2:-$(date -u +%Y%m%dT%H%M%SZ)}" legacy;;
  new) new_campaign "${2:-$(date -u +%Y%m%dT%H%M%SZ)}";;
  status) status;;
  list) printf '%s\n' "${STEPS[@]}";;
@@ -1046,6 +1042,6 @@ case "${1:-menu}" in
   esac;;
  set) set_path "${2:?Variable required}" "${3:?Path required}";;
  menu) menu;;
- help|--help|-h) printf 'Usage: %s [menu|init [NAME]|init-profile NAME PROFILE [LEAF]|init-legacy [NAME]|new [NAME]|status|list|profiles|show STAGE|run STAGE|run ALL|run ALL-PROFILES [NAME]|mutual-auth [OPTIONS]|retry preflight [OUTPUT] [OPTIONS]|set FIX/KEY/CAP/PROFILE/LEAF VALUE]\nSTAGE accepts a number (05) or full name (05.draft-core-vectors).\nrun ALL executes all pending stages for the configured profile/leaf, beginning with the pinned draft core vectors.\nrun ALL-PROFILES [NAME] evaluates the draft vectors once, then validates all nine profiles across all 16 N=16 leaves (144 identities, landmark + standalone). It displays elapsed time and an ETA, then writes JSON and HTML reports with host and duration metadata.\nmutual-auth and retry automatically prepare missing images, validated MTC fixtures and mutual-authentication fixtures. Retry runs its bundled peer inside the MTC image and chooses a timestamped output when OUTPUT is omitted. Full retry timing belongs in handshake performance.\nManual workflow: init/status/show do not invoke Docker. No builds or deletion.\n' "$SELF";;
+ help|--help|-h) printf 'Usage: %s [menu|init [NAME]|init-profile NAME PROFILE [LEAF]|new [NAME]|status|list|profiles|show STAGE|run STAGE|run ALL|run ALL-PROFILES [NAME]|mutual-auth [OPTIONS]|retry preflight [OUTPUT] [OPTIONS]|set FIX/KEY/CAP/PROFILE/LEAF VALUE]\nSTAGE accepts a number (05) or full name (05.draft-core-vectors).\nrun ALL executes all pending stages for the configured profile/leaf, beginning with the pinned draft core vectors.\nrun ALL-PROFILES [NAME] evaluates the draft vectors once, then validates all nine profiles across all 16 N=16 leaves (144 identities, landmark + standalone). It displays elapsed time and an ETA, then writes JSON and HTML reports with host and duration metadata.\nmutual-auth and retry automatically prepare missing images, validated MTC fixtures and mutual-authentication fixtures. Retry runs its bundled peer inside the MTC image and chooses a timestamped output when OUTPUT is omitted. Full retry timing belongs in handshake performance.\nManual workflow: init/status/show do not invoke Docker. No builds or deletion.\n' "$SELF";;
  *) fail 'Unknown command; use help.';;
 esac

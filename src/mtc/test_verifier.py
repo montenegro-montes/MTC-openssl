@@ -3,7 +3,9 @@ from pathlib import Path
 from core import *
 import core
 from mutations import malformed_proofs
-BATCH=Path(os.environ.get('MTC_BATCH','/work/mtc/batch16-v2'))
+if 'MTC_BATCH' not in os.environ:
+    raise SystemExit('ERROR: MTC_BATCH must point to the verifier fixture batch')
+BATCH=Path(os.environ['MTC_BATCH'])
 CHECK=os.environ.get('MTC_CHECK','/tmp/mtc-check')
 FAMILIES=os.environ.get('MTC_TEST_FAMILIES','classic,pq').split(',')
 assert len(FAMILIES)==2

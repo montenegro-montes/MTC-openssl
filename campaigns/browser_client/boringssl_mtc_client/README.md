@@ -71,9 +71,10 @@ this BoringSSL client does not implement retry itself.
 - `run-tls-matrix.py`: six profiles, two modes and four cases (48 planned
   connections). Each suite stops on its first failure; other suites continue.
 
-Both Python runners require `--execute` for Docker/TLS; otherwise they print a
-plan. They build the client against an existing library image, not Docker images
-or fixtures. The server has `--network none`; the client shares its namespace.
+Both Python runners require an explicit MTC fixture root via `--mtc-root`;
+`run-tls-smoke.py` also accepts explicit `--fixture` and `--key` inputs instead.
+They require `--execute` for Docker/TLS; otherwise they print a plan. They build
+the client against an existing library image, not Docker images or fixtures. The server has `--network none`; the client shares its namespace.
 No host port is published. Only runner-owned temporary containers are removed.
 Public inputs, mutations, logs, source/input hashes and image IDs are saved in
 new `artifacts/results/browser-mtc-*` directories. Private keys are mounted only

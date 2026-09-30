@@ -578,6 +578,11 @@ def main():
         type=Path,
         help="Native/PCAP validation root under artifacts/results; required for execution modes",
     )
+    parser.add_argument(
+        "--fixture",
+        type=Path,
+        help="ML-DSA-65 depth-2 fixture directory under artifacts",
+    )
     parser.add_argument("--preflight-root",type=Path,help="Immutable approved gate root; full outputs go to a new --root")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--dry-run", action="store_true")
@@ -594,6 +599,20 @@ def main():
 
     if args.root is None:
         raise SystemExit("--root is required for execution")
+
+    if args.fixture is None:
+        raise SystemExit("--fixture is required for execution")
+
+    fixture = args.fixture.resolve()
+    artifacts = (REPO / "artifacts").resolve()
+
+    if not fixture.is_relative_to(artifacts):
+        raise SystemExit("--fixture must be under artifacts")
+    if not fixture.is_dir():
+        raise SystemExit(f"--fixture directory does not exist: {fixture}")
+
+    os.environ["VALIDATION_FIXTURE_HOST"] = str(fixture)
+    os.environ["MEASUREMENT_FIXTURE_ROOT"] = "/work/fixture"
 
     if args.preflight_local:
         execute_local_preflight(args.root)

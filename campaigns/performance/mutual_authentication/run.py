@@ -101,10 +101,7 @@ def base_client_cmd(volumes, env):
     return cmd
 
 
-def case_definitions():
-    manual = REPO / "artifacts/validation/mutual-auth-manual"
-    server_mtc = REPO / "artifacts/mtc/n16-20260914T113933Z"
-
+def case_definitions(manual, server_mtc):
     return [
         {
             "name": "x509_server_x509_client",
@@ -484,12 +481,24 @@ def write_outputs(root, observations, args):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True, type=Path)
+    parser.add_argument("--mutual-root", required=True, type=Path,
+                        help="mutual-authentication fixture root")
+    parser.add_argument("--mtc-root", required=True, type=Path,
+                        help="server MTC fixture root")
     parser.add_argument("--rounds", type=int, default=30)
     parser.add_argument("--preflight", action="store_true")
     args = parser.parse_args()
 
     if args.preflight:
         args.rounds = 1
+
+    manual = args.mutual_root.resolve()
+    server_mtc = args.mtc_root.resolve()
+
+    if not manual.is_dir():
+        raise SystemExit(f"mutual fixture root missing: {manual}")
+    if not server_mtc.is_dir():
+        raise SystemExit(f"MTC fixture root missing: {server_mtc}")
 
     root = args.root
     if not root.is_absolute():
@@ -506,7 +515,7 @@ def main():
     observations = []
     try:
         for round_index in range(args.rounds):
-            for case in case_definitions():
+            for case in case_definitions(manual, server_mtc):
                 print(f"RUN round={round_index} case={case['name']}", flush=True)
                 obs = measure_case(case, round_index)
                 observations.append(obs)

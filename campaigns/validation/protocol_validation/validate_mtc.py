@@ -13,7 +13,7 @@ from semantics import timestamp_checks
 REPO=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(REPO/'src/mtc'))
 import core
-from crypto_profiles import crypto_profile, PAPER1_PROFILES, LEGACY_PROFILES
+from crypto_profiles import crypto_profile, SIGNATURE_PROFILES, LEGACY_PROFILES
 
 
 def require(ok,reason):
@@ -182,7 +182,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('object',type=Path);p.add_argument('--trust',type=Path,required=True)
     p.add_argument('--mode',choices=['landmark','standalone'],required=True)
-    p.add_argument('--profile',choices=[*LEGACY_PROFILES,*PAPER1_PROFILES],default='pq')
+    p.add_argument('--profile',choices=[*LEGACY_PROFILES,*SIGNATURE_PROFILES],default='pq')
     p.add_argument('--openssl',default='/opt/mtc/openssl.sh');p.add_argument('--entry',type=Path);p.add_argument('--sender',type=Path)
     p.add_argument('--output',type=Path,required=True);a=p.parse_args()
     if a.output.exists():p.error('Output exists; choose a new report')

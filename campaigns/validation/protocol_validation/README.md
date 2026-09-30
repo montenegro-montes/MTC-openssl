@@ -26,7 +26,7 @@ bin/cryptographic_scaling/mt-cert-scaling protocol
 bin/base/mt-protocol-validation menu
 ```
 
-New configurations select **Paper-1 mldsa65 N=16** from the MTC16 path saved by
+New configurations select **mldsa65 N=16** from the MTC16 path saved by
 `mt-cert-scaling`. Existing configurations without PROFILE preserve their legacy
 pq meaning. No historical campaign is required for the new path.
 
@@ -46,12 +46,12 @@ bin/base/mt-protocol-validation run 10
 If state or fixtures already exist, inspect `status` and continue from the next
 required stage instead of repeating completed commands. Protocol initialization
 only records PROFILE/FIX/KEY/CAP; it does not generate certificates. With new
-Paper-1 configurations FIX is MTC16/batch16/mtc/mldsa65 and KEY is
+Current configurations use FIX=MTC16/batch16/mtc/mldsa65 and KEY=
 MTC16/population/mldsa65/0.key. Neither the crossover nor X.509 chain fixtures are
 required. Missing inputs produce an error; correct paths before retrying.
 
 For a fresh protocol run after historical evidence already exists, use `new` to
-archive the old launcher state and configure the Paper-1 defaults. To deliberately
+archive the old launcher state and configure the current defaults. To deliberately
 initialize the historical pq workflow instead, use `init-legacy` with existing
 historical fixtures. Do not relabel those fixtures as mldsa65: the CA IDs differ.
 PROFILE, FIX and KEY can be set explicitly before any evidence is written.
@@ -73,16 +73,16 @@ capture requires a successful landmark protocol report. Underlying tools also
 verify capture/fixture hashes. Directory existence is never treated as PASS.
 Choose **New campaign** (`new`) after a failure or for another attempt: previous
 configuration/logs are archived, all scientific outputs remain intact, and routes
-reset to the Paper-1 defaults from the saved MTC16 path. Change FIX/KEY before the first run.
+reset to the current defaults from the saved MTC16 path. Change FIX/KEY before the first run.
 Once evidence exists, configuration is frozen; it cannot be silently redirected.
 The lock covers this launcher only, not externally started campaigns.
 
 ## Historical manual examples (optional)
 
 The commands below preserve the original representative **legacy pq** cases.
-They are separate from the default Paper-1 Bash workflow above. Use existing **legacy pq**, N=16 fixtures for the first two representative captures.
+They are separate from the default current-profile Bash workflow above. Use existing **legacy pq**, N=16 fixtures for the first two representative captures.
 Their scenarios remain `pq-mtc-experimental-landmark` and
-`pq-mtc-experimental-standalone`. They are not the new Paper-1 `mldsa65` fixtures,
+`pq-mtc-experimental-standalone`. They are not the current `mldsa65` fixtures,
 whose issuer IDs differ. The server private key must match leaf0's SPKI.
 The default historical locations below follow the existing Compose configuration;
 if your fixtures are elsewhere, change FIX/KEY to their actual existing paths.
@@ -100,8 +100,11 @@ existing images, mounting inputs read-only and the new report directory writable
 ```sh
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 CAP="artifacts/protocol-validation/$STAMP"
-FIX="artifacts/mtc/batch16-v2/pq"
-KEY="artifacts/certs/pq/server.key"
+
+# Set these to the prepared fixture and matching private key.
+FIX="${FIX:?Set FIX to the prepared MTC fixture directory}"
+KEY="${KEY:?Set KEY to the matching server private key}"
+
 mkdir -p artifacts/protocol-validation
 
 protocol_tool() {
@@ -213,13 +216,13 @@ protocol_tool mt-tls-mtc:local report.py --capture "$CAP/standalone" \
 
 **9. Only if both pass**, repeat this sequence with existing N=16 fixtures for
 `ecdsa-p256`, `mldsa65`, `slhdsa128s`, changing profile, FIX, KEY and output root.
-For Paper-1 roots, FIX is `batch16/mtc/PROFILE`, KEY is `population/PROFILE/0.key`.
+For current-profile roots, FIX is `batch16/mtc/PROFILE`, KEY is `population/PROFILE/0.key`.
 Do not rename their scenarios to `classic`/`pq`.
 
 **10. Only after structural validation succeeds**, extend capture selection to
-the remaining Paper-1 profiles. The offline validator already recognizes all nine;
+the remaining signature profiles. The offline validator already recognizes all nine;
 the initial capture selector intentionally exposes only the three representative
-Paper-1 algorithms plus legacy classic/pq. No full matrix is prepared or launched.
+current signature profiles plus legacy classic/pq. No full matrix is prepared or launched.
 
 Optional **invalid-input stress checks** (deterministic malformed objects, not load testing or randomized fuzzing), **not executed during preparation**:
 
@@ -325,7 +328,7 @@ those stages is needed. It checks the validation gate against fixture hashes,
 current source hashes and the current MTC image before reporting success.
 Existing incomplete, failed or stale evidence is preserved and reported as an
 error; it is never overwritten. Existing custom protocol paths are preserved
-and must match the prepared Paper-1 profile before setup reports readiness.
+and must match the prepared signature profile before setup reports readiness.
 
 `run N` and `rebuild N` remain image-only preparation plus configuration, so the
 certification image stage cannot recursively start fixture generation.

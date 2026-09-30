@@ -5,7 +5,7 @@ from pathlib import Path
 HERE=Path(__file__).resolve();REPO=HERE.parents[3];sys.path.insert(0,str(REPO/"src/mtc"))
 from core import certificate,certificate_parts,cover,proof
 from config import MTC_PROFILE_MAP,LEGACY_MTC_PROFILE_MAP,PROFILES
-from crypto_profiles import PAPER1_PROFILES
+from crypto_profiles import SIGNATURE_PROFILES
 def write(path,rows,fields=None):
  fields=fields or list(rows[0]);path.parent.mkdir(parents=True,exist_ok=True)
  with path.open("w",newline="") as f:w=csv.DictWriter(f,fieldnames=fields);w.writeheader();w.writerows(rows)
@@ -46,7 +46,7 @@ def main():
    for landmark in candidates:
     directory=landmark.parent;meta=json.loads((directory/"manifest.json").read_text());n=int(meta["tree_size"])
     if not a.legacy_mtc_fixtures:
-     expected=PAPER1_PROFILES[profile]
+     expected=SIGNATURE_PROFILES[profile]
      for field in ("profile","standard_name","implementation_algorithm","security_level","ca_id"):
       if meta.get(field)!=expected[field]:raise ValueError(f"MTC profile mismatch: {directory}: {field}")
      if meta.get("cosigner_ids")!=list(expected["cosigner_ids"]):raise ValueError("MTC signer identity mismatch")
