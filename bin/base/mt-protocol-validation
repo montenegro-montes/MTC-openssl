@@ -90,7 +90,14 @@ plan() {
    OUT="$CAP/$STEP.json"; script=validate_mtc.py
    args=("$FIX/$mode-$leaf4.der" --trust "$FIX/trust.bin" --profile "$PROFILE" --mode "$mode" --output "$OUT")
    if [[ "$STEP" == 10.* ]]; then args=("$FIX/standalone-$leaf4.der" --trust "$FIX/authority.bin" --profile "$PROFILE" --mode standalone --output "$OUT");
-   else args+=(--entry "$FIX/log/$leaf6.entry"); fi;;
+   else
+    args+=(--entry "$FIX/log/$leaf6.entry" --revocation-checker /opt/mtc/check-revoked)
+    if [[ "$mode" == landmark ]]; then
+     args+=(--revocation-trust "$FIX/trust.bin")
+    else
+     args+=(--revocation-trust "$FIX/authority.bin")
+    fi
+   fi;;
   40.*|80.*)
    mode=landmark; [[ "$STEP" != 80.* ]] || mode=standalone
    OUT="$CAP/$mode"

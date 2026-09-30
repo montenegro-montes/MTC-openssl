@@ -10,10 +10,14 @@ typedef struct { const unsigned char *p; size_t n; } Slice;
 typedef struct { Slice raw,body; unsigned tag; } TLV;
 typedef struct { char id[80]; unsigned char binary[80];size_t idlen; EVP_PKEY *key; } Signer;
 typedef struct { uint64_t start,end; unsigned char hash[32]; } Subtree;
+typedef struct { uint64_t first,last; } RevokedRange;
+#define MTC_MAX_REVOKED_RANGES 64
 struct mtc_config {
     char caid[80]; Signer signers[2]; unsigned count; int landmark;
     uint64_t log,min,max,number,size,timestamp; unsigned char root[32];
-    Subtree subs[2];unsigned nsubs; size_t file_bytes;
+    Subtree subs[2];unsigned nsubs;
+    RevokedRange revoked[MTC_MAX_REVOKED_RANGES];unsigned nrevoked;
+    size_t file_bytes;
     unsigned char signal[90];size_t signal_len; /* CA or individual landmark */
     unsigned char request_signal[90];size_t request_signal_len; /* CA or group */
 };
@@ -112,6 +116,16 @@ static int sigcheck(MTCConfig *c,Slice sigs,uint64_t start,uint64_t end,const un
     }return valid==((1u<<c->count)-1);
 }
 void mtc_free(MTCConfig *c){if(c){for(unsigned i=0;i<2;i++)EVP_PKEY_free(c->signers[i].key);OPENSSL_free(c);}}
+int mtc_add_revoked_serial_range(MTCConfig *c,uint64_t first,uint64_t last){
+    if(!c||first>last||c->nrevoked>=MTC_MAX_REVOKED_RANGES)return 0;
+    c->revoked[c->nrevoked++]=(RevokedRange){first,last};
+    return 1;
+}
+static int serial_revoked(const MTCConfig *c,uint64_t serial){
+    for(unsigned i=0;i<c->nrevoked;i++)
+        if(serial>=c->revoked[i].first&&serial<=c->revoked[i].last)return 1;
+    return 0;
+}
 MTCConfig *mtc_load(const char *path,int landmark){
     double begin=tick(),validation=0;FILE *f=fopen(path,"rb");unsigned char *buf=NULL;long size;MTCConfig *c=NULL;
     Slice s,x,sigs;uint64_t v;unsigned char actual[32];int ok=0;
@@ -203,7 +217,7 @@ int mtc_verify(X509 *x,MTCConfig *c){
     uint64_t serial,start,end,index;unsigned char leaf[32],root[32];
     if(!x||!c||X509_get_version(x)!=2||!issuer(x,c->caid)||!algorithm(X509_get0_tbs_sigalg(x)))return 0;
     X509_get0_signature(&signature,&alg,x);
-    if(!algorithm(alg)||(signature->flags&7)||signature->length<0||!ASN1_INTEGER_get_uint64(&serial,X509_get_serialNumber(x))||serial<c->min||serial>c->max||(serial>>48)!=c->log)return 0;
+    if(!algorithm(alg)||(signature->flags&7)||signature->length<0||!ASN1_INTEGER_get_uint64(&serial,X509_get_serialNumber(x))||serial<c->min||serial>c->max||serial_revoked(c,serial)||(serial>>48)!=c->log)return 0;
     index=serial&0xffffffffffffULL;p=(Slice){signature->data,(size_t)signature->length};
     if(!vector(&p,2,&extensions)||extensions.n||!number(&p,6,&start)||!number(&p,6,&end)||!vector(&p,2,&proof)||!vector(&p,3,&sigs)||p.n)return 0;
     if(!leaf_hash(x,extensions,leaf)||!mtc_eval(leaf,index,start,end,proof.p,proof.n,root))return 0;

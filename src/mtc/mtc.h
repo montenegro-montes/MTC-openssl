@@ -9,6 +9,10 @@
 typedef struct mtc_config MTCConfig;
 MTCConfig *mtc_load(const char *path, int landmark);
 void mtc_free(MTCConfig *c);
+/* Local relying-party policy with inclusive endpoints [first,last].
+ * Draft half-open [a,b) maps to [a,b-1]; [a,2^64) maps to [a,UINT64_MAX].
+ * Configure ranges before certificate verification. */
+int mtc_add_revoked_serial_range(MTCConfig *c, uint64_t first, uint64_t last);
 int mtc_verify(X509 *x, MTCConfig *c);
 int mtc_client(SSL_CTX *ctx,const char *path,int landmark);
 int mtc_server(SSL_CTX *ctx,const char *id);

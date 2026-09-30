@@ -153,6 +153,16 @@ def validate(args):
     sender_match=None
     if args.sender:
         sender_match=args.sender.read_bytes()==raw;require(sender_match,'sender/wire DER mismatch')
+    revoked_ranges_status='NOT_EXECUTED'
+    if args.revocation_checker:
+        require(args.revocation_trust is not None,'revocation checker requires --revocation-trust')
+        revocation_mode='1' if args.mode=='landmark' else '0'
+        result=subprocess.run(
+            [str(args.revocation_checker),str(args.revocation_trust),
+             revocation_mode,str(args.object)],
+            capture_output=True,text=True)
+        require(result.returncode==0,'revoked-range checker failed: '+(result.stdout+result.stderr).strip())
+        revoked_ranges_status='PASS'
     checks=[dict(section=s,rule=r,status='PASS') for s,r in [
         ('6.2','DER/proof complete parse and canonical lengths'),
         ('6.2','MTCProof directly encoded in signatureValue'),
@@ -167,7 +177,8 @@ def validate(args):
         section='6.2',
         rule='MTCProof extensions match supplied log entry',
         status='PASS' if args.entry else 'NOT_EXECUTED'))
-    checks += [dict(section=s,rule=r,status='NOT_IMPLEMENTED') for s,r in [('7.5','general revoked-range database'),('6.4','evolving multi-landmark distribution'),('5.3 / 7.3','public independent cosigner ecosystem')]]
+    checks.append(dict(section='7.5',rule='relying-party revoked serial-number ranges',status=revoked_ranges_status))
+    checks += [dict(section=s,rule=r,status='NOT_IMPLEMENTED') for s,r in [('6.4','evolving multi-landmark distribution'),('5.3 / 7.3','public independent cosigner ecosystem')]]
     timestamps=timestamp_checks(args.mode,state['checkpoint'])
     checks += [dict(section='8',rule='trust_anchors mapping requires captured transport evidence',status='NOT_EXECUTED'),
                dict(section='6.2 / 7.2',rule='MTCProof signatures use timestamp zero',status=timestamps['mtcproof']['status']),
@@ -186,7 +197,7 @@ def validate(args):
         mtc_wire_sha256=sha(raw),trust_sha256=sha(args.trust.read_bytes()),sender_wire_match=sender_match,
         receiver_sha256=None,receiver_limitation='native verifier does not retain original DER bytes',
         timestamp_draft_requirement=timestamps, timestamp_local_policy=timestamps['local_policy'],
-        draft_checks=dict(implemented_rules=sum(x['status']=='PASS' for x in checks),passed=sum(x['status']=='PASS' for x in checks),failed=0,not_implemented=3,unresolved=sum(x['status']=='UNRESOLVED' for x in checks),checks=checks),
+        draft_checks=dict(implemented_rules=sum(x['status']=='PASS' for x in checks),passed=sum(x['status']=='PASS' for x in checks),failed=sum(x['status']=='FAIL' for x in checks),not_implemented=sum(x['status']=='NOT_IMPLEMENTED' for x in checks),unresolved=sum(x['status']=='UNRESOLVED' for x in checks),checks=checks),
         limits=['initial issuance log=1, N<=1024, SHA-256, two configured signers',
                 'Certificate validity/hostname and TLS CertificateVerify/Finished require the separate TLS validation',
                 'standalone with authority.bin has no independent expected root; signatures authenticate computed root'])
@@ -197,6 +208,8 @@ def main():
     p.add_argument('--mode',choices=['landmark','standalone'],required=True)
     p.add_argument('--profile',choices=[*LEGACY_PROFILES,*SIGNATURE_PROFILES],default='pq')
     p.add_argument('--openssl',default='/opt/mtc/openssl.sh');p.add_argument('--entry',type=Path);p.add_argument('--sender',type=Path)
+    p.add_argument('--revocation-checker',type=Path)
+    p.add_argument('--revocation-trust',type=Path)
     p.add_argument('--output',type=Path,required=True);a=p.parse_args()
     if a.output.exists():p.error('Output exists; choose a new report')
     try:report=validate(a)

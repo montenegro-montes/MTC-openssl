@@ -29,13 +29,14 @@ def main():
     subprocess.run([sys.executable,'-B',str(source/'test_core.py')],check=True)
     with tempfile.TemporaryDirectory(prefix='mtc-draft06-tests-') as directory:
         temp=Path(directory)
-        for name in ['test_ids','check']+(['check_snapshot'] if args.persistent else []):
+        for name in ['test_ids','test_revoked_ranges','check']+(['check_snapshot'] if args.persistent else []):
             subprocess.run([args.cc,'-Wall','-Wextra','-g',
                             '-fsanitize=address,undefined','-fno-omit-frame-pointer',
                             '-I'+str(prefix/'include'),str(source/(name+'.c')),
                             '-L'+str(lib),'-Wl,-rpath,'+str(lib),'-lcrypto',
                             '-o',str(temp/name)],check=True)
         subprocess.run([str(temp/'test_ids')],check=True)
+        subprocess.run([str(temp/'test_revoked_ranges')],check=True)
         originals={}
         for family in args.profiles:
             key=temp/(family+'.key');cert=temp/(family+'.pem')
