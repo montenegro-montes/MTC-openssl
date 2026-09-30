@@ -153,7 +153,20 @@ def validate(args):
     sender_match=None
     if args.sender:
         sender_match=args.sender.read_bytes()==raw;require(sender_match,'sender/wire DER mismatch')
-    checks=[dict(section=s,rule=r,status='PASS') for s,r in [('6.2','DER/proof complete parse and canonical lengths'),('5.1','experimental issuer name'),('6.2','serial/log/index and proof algorithm'),('5.2.1 / 7.2','SPKI-bound reconstructed entry'),('4.3.2','inclusion proof fold'),('5.3.1 / 5.3.3','required signatures verified'),('6.3' if args.mode=='standalone' else '6.4.4','mode-specific trust')]]
+    checks=[dict(section=s,rule=r,status='PASS') for s,r in [
+        ('6.2','DER/proof complete parse and canonical lengths'),
+        ('6.2','MTCProof directly encoded in signatureValue'),
+        ('6.2','uint48 subtree interval and uint24 signatures-vector encoding'),
+        ('5.1','experimental issuer name'),
+        ('6.2','serial/log/index and proof algorithm'),
+        ('5.2.1 / 7.2','SPKI-bound reconstructed entry'),
+        ('4.3.2','inclusion proof fold'),
+        ('5.3.1 / 5.3.3','required signatures verified'),
+        ('6.3' if args.mode=='standalone' else '6.4.4','mode-specific trust')]]
+    checks.append(dict(
+        section='6.2',
+        rule='MTCProof extensions match supplied log entry',
+        status='PASS' if args.entry else 'NOT_EXECUTED'))
     checks += [dict(section=s,rule=r,status='NOT_IMPLEMENTED') for s,r in [('7.5','general revoked-range database'),('6.4','evolving multi-landmark distribution'),('5.3 / 7.3','public independent cosigner ecosystem')]]
     timestamps=timestamp_checks(args.mode,state['checkpoint'])
     checks += [dict(section='8',rule='trust_anchors mapping requires captured transport evidence',status='NOT_EXECUTED'),
