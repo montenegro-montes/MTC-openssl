@@ -9,6 +9,8 @@ import prepare
 from core import root
 from crypto_profiles import crypto_profile
 from local_log import LocalLog
+from landmarks import Landmark
+from trusted_subtrees import build_evidence, validate_trusted_subtrees
 from snapshots import export_snapshot, authenticate_snapshot, verify_snapshot_consistency
 
 
@@ -55,6 +57,30 @@ def main():
         new=export_snapshot(log,temp/'snapshot-16.mcf1',args.profile,keys)
         state16=authenticate_snapshot(new,trusted,checker)
         assert state16=={'tree_size':16,'hash':root(entries).hex()}
+
+        # Draft-06 Section 7.4: incorporate active landmark subtrees only
+        # after authenticating the reference checkpoint and validating each
+        # subtree against it with a Section 4.4 consistency proof.
+        sequence=[
+            Landmark(0,0,0),
+            Landmark(1,8,state16['tree_size']+100),
+            Landmark(2,16,state16['tree_size']+200),
+        ]
+        evidence=build_evidence(log,sequence,0)
+        trusted_subtrees=validate_trusted_subtrees(
+            1,sequence,0,state16,evidence)
+        assert [(x.log_number,x.start,x.end) for x in trusted_subtrees]==[
+            (1,0,4),(1,4,8),(1,8,12),(1,12,16)
+        ]
+        print('PASS: authenticated MCF1 checkpoint -> Section 7.4 trusted subtrees')
+
+        different=LocalLog(temp/'different-log')
+        for i in range(16):
+            different.append(b'x'+bytes([i]))
+        foreign_evidence=build_evidence(different,sequence,0)
+        rejected(lambda:validate_trusted_subtrees(
+            1,sequence,0,state16,foreign_evidence))
+        print('PASS: foreign same-size subtree evidence rejected by authenticated checkpoint')
         current,path=log.prove_consistency(state8)
         assert current==state16
         assert verify_snapshot_consistency(old,new,trusted,checker,path)
