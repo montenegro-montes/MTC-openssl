@@ -92,6 +92,104 @@ def consistency(entries,m):
         if size<=k:return subproof(data[:k],size,complete)+[root(data[k:])]
         return subproof(data[k:],size-k,False)+[root(data[:k])]
     return subproof(entries,m,True) if m else []
+def valid_subtree(start,end):
+    """MTC draft-06 Section 4.1 subtree validity, within uint48."""
+    if (not isinstance(start,int) or not isinstance(end,int)
+            or not 0<=start<=end<1<<48):
+        return False
+    size=end-start
+    alignment=1 if size==0 else 1<<(size-1).bit_length()
+    return start%alignment==0
+
+
+def subtree_consistency(entries,start,end):
+    """MTC draft-06 Section 4.4.1 SUBTREE_PROOF(start, end, D_n)."""
+    n=len(entries)
+    if not valid_subtree(start,end) or end>n:
+        raise ValueError('subtree')
+
+    if start==end:
+        return []
+
+    def subproof(data,first,last,complete):
+        size=len(data)
+        if first==0 and last==size:
+            return [] if complete else [root(data)]
+
+        k=1<<((size-1).bit_length()-1)
+
+        if last<=k:
+            return subproof(data[:k],first,last,complete)+[root(data[k:])]
+
+        if k<=first:
+            return subproof(data[k:],first-k,last-k,complete)+[root(data[:k])]
+
+        # A valid subtree crossing k necessarily begins at zero.
+        if first!=0:
+            raise ValueError('invalid subtree')
+
+        return subproof(data[k:],0,last-k,False)+[root(data[:k])]
+
+    return subproof(entries,start,end,True)
+
+
+def verify_subtree_consistency(start,end,n,node_hash,root_hash,path):
+    """MTC draft-06 Section 4.4.3 subtree consistency verification."""
+    if (not isinstance(n,int) or not 0<=n<1<<48
+            or not valid_subtree(start,end) or end>n):
+        return False
+    if (len(node_hash)!=32 or len(root_hash)!=32
+            or any(len(p)!=32 for p in path)):
+        return False
+
+    if start==end:
+        return not path and node_hash==H(b'')
+
+    fn,sn,tn=start,end-1,n-1
+
+    if sn==tn:
+        while fn!=sn:
+            fn>>=1
+            sn>>=1
+            tn>>=1
+    else:
+        while fn!=sn and sn&1:
+            fn>>=1
+            sn>>=1
+            tn>>=1
+
+    if fn==sn:
+        fr=sr=node_hash
+        offset=0
+    else:
+        if not path:
+            return False
+        fr=sr=path[0]
+        offset=1
+
+    for c in path[offset:]:
+        if tn==0:
+            return False
+
+        if sn&1 or sn==tn:
+            if fn<sn:
+                fr=H(b'\1'+c+fr)
+            sr=H(b'\1'+c+sr)
+
+            while not sn&1:
+                fn>>=1
+                sn>>=1
+                tn>>=1
+        else:
+            sr=H(b'\1'+sr+c)
+
+        fn>>=1
+        sn>>=1
+        tn>>=1
+
+    return tn==0 and fr==node_hash and sr==root_hash
+
+
 def verify_consistency(m,n,old_root,new_root,path):
     """RFC 9162 §2.1.4.2; return False for invalid sizes/hashes/proofs.
 
