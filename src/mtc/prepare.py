@@ -41,11 +41,39 @@ def not_after(tbs):
     elif tag!=24 or len(text)!=15:raise ValueError('Invalid notAfter encoding')
     if not text.endswith('Z') or not text[:-1].isdigit():raise ValueError('Invalid notAfter encoding')
     return int(datetime.strptime(text,'%Y%m%d%H%M%SZ').replace(tzinfo=timezone.utc).timestamp())
-def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
+def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
+            persistent_log=None,authenticated_snapshot=None,trusted_authority=None,snapshot_checker=None):
+    """Generate the usual material, optionally bound to an authenticated log view.
+
+    Originals supply certificate fields absent from MTCLogEntry. Their derived
+    entries must match the persisted entries byte-for-byte, in index order.
+    This allocates the existing initial landmark for the selected final tree;
+    it does not evolve/reassign an earlier landmark or embed consistency proofs.
+    """
     profile=crypto_profile(family)
     if not 1<=n<=1024:raise ValueError('Unsupported MTC population')
     if originals is None:raise ValueError('MTC requires an explicit same-profile X.509 population')
-    begin=time.perf_counter();out.mkdir();caid=profile['ca_id'];ids=list(profile['cosigner_ids'])
+    begin=time.perf_counter();caid=profile['ca_id'];ids=list(profile['cosigner_ids'])
+    if len(originals)!=n:raise ValueError('Population length differs from N')
+    certs=[from_pem(p.read_bytes()) for p in originals]
+    tbs=[mtc_tbs(c,caid,i) for i,c in enumerate(certs)];entries=[entry(t) for t in tbs]
+    authenticated=None
+    options=(persistent_log,authenticated_snapshot,trusted_authority,snapshot_checker)
+    if any(v is not None for v in options):
+        if any(v is None for v in options) or signer_keys is None or len(signer_keys)!=2:
+            raise ValueError('Persistent generation requires log, snapshot, trusted authority, checker and signer keys')
+        if out.resolve()==persistent_log.directory.resolve() or persistent_log.directory.resolve() in out.resolve().parents:
+            raise ValueError('Generated material must be outside the persistent log')
+        from snapshots import authenticate_snapshot
+        authenticated=authenticate_snapshot(authenticated_snapshot,trusted_authority,snapshot_checker)
+        with persistent_log._locked():
+            persisted,state=persistent_log._read()
+            if state!=authenticated or state['tree_size']!=n:
+                raise ValueError('Persistent log differs from authenticated snapshot')
+            if entries!=persisted:
+                raise ValueError('Certificate inputs differ from authenticated log entries')
+            entries=persisted  # Immutable in-memory view; later appends do not alter it.
+    out.mkdir()
     keys=[];public=[]
     for i in range(2):
         key=out/f'cosigner-{i}.key'
@@ -54,9 +82,6 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
         keys.append(key)
         public.append(command('pkey','-in',key,'-pubout','-outform','DER'))
         (out/f'cosigner-{i}.spki').write_bytes(public[-1])
-    if len(originals)!=n:raise ValueError('Population length differs from N')
-    certs=[from_pem(p.read_bytes()) for p in originals]
-    tbs=[mtc_tbs(c,caid,i) for i,c in enumerate(certs)];entries=[entry(t) for t in tbs]
     log=out/'log';log.mkdir()
     for i,e in enumerate(entries):(log/f'{i:06d}.entry').write_bytes(e)
     checkpoint=root(entries);timestamp=int(time.time());subtrees=cover(0,n)
@@ -81,6 +106,10 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
     (out/'authority.bin').write_bytes(config)
     config=checkpoint_config(config,entries,timestamp,cp_sigs)
     (out/'trust.bin').write_bytes(config)
+    if authenticated is not None:
+        # Do not accept output signed with keys different from independently pinned trust.
+        generated=authenticate_snapshot(out/'trust.bin',trusted_authority,snapshot_checker)
+        if generated!=authenticated:raise ValueError('Generated checkpoint differs from authenticated state')
     (out/'landmarks.txt').write_text(f'1\n{n} {expiration}\n0 0\n')
     sizes={}
     for mode in ['standalone','landmark']:
@@ -102,5 +131,8 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None):
         'ca_key_note':'Separate from directly-signing X509 CA as required by MTC -06 section 5.4',
         'changed_fields':['issuer','serialNumber','signature algorithm','signatureValue','old authorityKeyIdentifier omitted']}
     if family in PAPER1_PROFILES:meta.update(profile=family,standard_name=profile['standard_name'],implementation_algorithm=profile['implementation_algorithm'],security_level=profile['security_level'],merkle_hash=TREE_HASH,mtc_modes=['landmark','standalone'])
-    if metadata:meta.update(metadata)
+    if metadata:
+        if authenticated is not None and set(metadata)&set(meta):
+            raise ValueError('Metadata must not override authenticated generation fields')
+        meta.update(metadata)
     (out/'manifest.json').write_text(json.dumps(meta,indent=2)+'\n');return meta

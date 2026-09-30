@@ -15,6 +15,8 @@ def main():
     parser.add_argument('--openssl-prefix',type=Path,required=True,
                         help='Installed OpenSSL 3 prefix containing bin, include and lib')
     parser.add_argument('--cc',default='cc')
+    parser.add_argument('--persistent',action='store_true',
+                        help='Also generate N=16 material from an authenticated persistent log')
     parser.add_argument('--profiles',nargs=2,default=['ecdsa-p256','mldsa65'])
     args=parser.parse_args()
     if args.profiles[0]==args.profiles[1]:parser.error('Two distinct profiles are required')
@@ -27,7 +29,7 @@ def main():
     subprocess.run([sys.executable,'-B',str(source/'test_core.py')],check=True)
     with tempfile.TemporaryDirectory(prefix='mtc-draft06-tests-') as directory:
         temp=Path(directory)
-        for name in ['test_ids','check']:
+        for name in ['test_ids','check']+(['check_snapshot'] if args.persistent else []):
             subprocess.run([args.cc,'-Wall','-Wextra','-g',
                             '-fsanitize=address,undefined','-fno-omit-frame-pointer',
                             '-I'+str(prefix/'include'),str(source/(name+'.c')),
@@ -48,7 +50,64 @@ def main():
             for family in args.profiles:
                 cert=originals[family];before=cert.read_bytes();out=batch/family
                 # Synthetic repeated input tests the wire path, not issuance policy.
-                meta=prepare.prepare(out,temp,family,n,originals=[cert]*n)
+                options={}
+                if args.persistent and n==16:
+                    from local_log import LocalLog
+                    from snapshots import export_snapshot,authenticate_snapshot,verify_snapshot_consistency
+                    profile=prepare.crypto_profile(family)
+                    keys=[temp/f'{family}-signer-{i}.key' for i in range(2)]
+                    for key in keys:prepare.keygen(key,family)
+                    public=[prepare.command('pkey','-in',key,'-pubout','-outform','DER') for key in keys]
+                    trusted=temp/f'{family}-trusted.bin'
+                    trusted.write_bytes(prepare.authority_config(profile['ca_id'],profile['cosigner_ids'],public,n))
+                    persistent=LocalLog(temp/f'{family}-persistent')
+                    encoded=[core.entry(core.mtc_tbs(core.from_pem(before),profile['ca_id'],i)) for i in range(n)]
+                    for value in encoded[:8]:persistent.append(value)
+                    old=export_snapshot(persistent,temp/f'{family}-8.mcf1',family,keys)
+                    retained=old.read_bytes()
+                    for value in encoded[8:]:persistent.append(value)
+                    snapshot=export_snapshot(persistent,temp/f'{family}-16.mcf1',family,keys)
+                    checker=temp/'check_snapshot'
+                    state8=authenticate_snapshot(old,trusted,checker)
+                    state16=authenticate_snapshot(snapshot,trusted,checker)
+                    current,path=persistent.prove_consistency(state8)
+                    assert current==state16 and verify_snapshot_consistency(old,snapshot,trusted,checker,path)
+                    options=dict(persistent_log=persistent,authenticated_snapshot=snapshot,
+                                 trusted_authority=trusted,snapshot_checker=checker,signer_keys=keys)
+                    def reject_generation(label,**overrides):
+                        target=temp/f'{family}-rejected-{label}'
+                        kwargs=dict(options,originals=[cert]*n);kwargs.update(overrides)
+                        try:prepare.prepare(target,temp,family,n,**kwargs)
+                        except ValueError:pass
+                        else:raise AssertionError('Accepted '+label)
+                        assert not target.exists(),label+' created output before rejection'
+                    reject_generation('old-size',authenticated_snapshot=old)
+                    other=originals[args.profiles[1-args.profiles.index(family)]]
+                    reject_generation('wrong-certificate-inputs',originals=[other]*n)
+                    first=persistent.directory/'log/000000.entry'
+                    first.write_bytes(b'tampered')
+                    reject_generation('tampered-log')
+                    first.write_bytes(encoded[0])  # Restore only this temporary negative fixture.
+                    different=LocalLog(temp/f'{family}-different')
+                    for value in [b'different']+encoded[1:]:different.append(value)
+                    incompatible=export_snapshot(different,temp/f'{family}-different.mcf1',family,keys)
+                    assert authenticate_snapshot(incompatible,trusted,checker)['tree_size']==n
+                    reject_generation('incompatible-root',authenticated_snapshot=incompatible)
+                    damaged=bytearray(snapshot.read_bytes());damaged[len(trusted.read_bytes())+4+6+8]^=1
+                    bad=temp/f'{family}-bad-root.mcf1';bad.write_bytes(damaged)
+                    reject_generation('corrupted-checkpoint',authenticated_snapshot=bad)
+                meta=prepare.prepare(out,temp,family,n,originals=[cert]*n,**options)
+                if options:
+                    assert meta['tree_size']==state16['tree_size']==16
+                    assert meta['checkpoint']['hash']==state16['hash']
+                    assert authenticate_snapshot(out/'trust.bin',trusted,checker)==state16
+                    assert [(out/'log'/f'{i:06d}.entry').read_bytes() for i in range(n)]==encoded
+                    assert old.read_bytes()==retained
+                    for i in range(n):
+                        for mode in ['standalone','landmark']:
+                            t=core.certificate_parts((out/f'{mode}-{i:04d}.der').read_bytes())[0][0][2]
+                            assert core.entry(t)==encoded[i]
+                    print(f'PASS {family}: authenticated persistent N=16 generation and mismatch rejection',flush=True)
                 assert cert.read_bytes()==before
                 expiration=meta['landmark_expirations'][1]
                 tbs=core.certificate_parts((out/'landmark-0000.der').read_bytes())[0][0][2]
