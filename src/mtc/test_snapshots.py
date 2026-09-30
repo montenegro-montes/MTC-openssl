@@ -74,6 +74,19 @@ def main():
         ]
         print('PASS: authenticated MCF1 checkpoint -> Section 7.4 trusted subtrees')
 
+        from prepare import write_trusted_subtrees
+        from trusted_subtrees import decode_trusted_subtrees
+
+        trusted_file = temp / "trusted-subtrees.bin"
+
+        write_trusted_subtrees(trusted_file, trusted_subtrees)
+
+        assert decode_trusted_subtrees(
+            trusted_file.read_bytes()
+        ) == trusted_subtrees
+
+        print('PASS: trusted subtrees exported as MTS1 configuration')
+
         different=LocalLog(temp/'different-log')
         for i in range(16):
             different.append(b'x'+bytes([i]))

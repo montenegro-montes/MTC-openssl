@@ -174,3 +174,38 @@ def validate_trusted_subtrees(
         trusted.extend(landmark_trusted)
 
     return trusted
+
+MTS_MAGIC = b"MTS1"
+MAX_TRUSTED_SUBTREES = 64
+
+def encode_trusted_subtrees(subtrees):
+    if len(subtrees) > MAX_TRUSTED_SUBTREES:
+        raise ValueError("too many trusted subtrees")
+    out = bytearray(MTS_MAGIC)
+    out.extend(len(subtrees).to_bytes(2, "big"))
+    for subtree in subtrees:
+        out.extend(subtree.log_number.to_bytes(2, "big"))
+        out.extend(subtree.start.to_bytes(6, "big"))
+        out.extend(subtree.end.to_bytes(6, "big"))
+        out.extend(subtree.hash)
+    return bytes(out)
+
+def decode_trusted_subtrees(data):
+    if len(data) < 6 or data[:4] != MTS_MAGIC:
+        raise ValueError("invalid MTS1")
+    count = int.from_bytes(data[4:6], "big")
+    if len(data) != 6 + count * 46:
+        raise ValueError("length")
+    result = []
+    offset = 6
+    for _ in range(count):
+        log = int.from_bytes(data[offset:offset+2], "big")
+        offset += 2
+        start = int.from_bytes(data[offset:offset+6], "big")
+        offset += 6
+        end = int.from_bytes(data[offset:offset+6], "big")
+        offset += 6
+        h = data[offset:offset+32]
+        offset += 32
+        result.append(TrustedSubtree(log, start, end, h))
+    return result

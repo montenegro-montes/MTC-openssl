@@ -22,6 +22,24 @@ def authority_config(caid,ids,public,n):
     config=b'MCF1'+vec(caid.encode(),1)+bytes([len(ids)])
     for ident,spki in zip(ids,public):config+=vec(ident.encode(),1)+vec(spki)
     return config+uint(1,2)+uint(1<<48,8)+uint((1<<48)+n-1,8)
+
+def write_trusted_subtrees(path, subtrees):
+    """Write authenticated trusted-subtree cache in MTS1 format."""
+    from trusted_subtrees import encode_trusted_subtrees
+
+    if not subtrees:
+        raise ValueError('empty trusted subtree set')
+
+    log_number = subtrees[0].log_number
+    data = encode_trusted_subtrees(subtrees)
+
+    target = Path(path)
+    if target.exists():
+        raise FileExistsError(target)
+
+    target.write_bytes(data)
+    return target
+
 def checkpoint_config(authority,entries,timestamp,cp_sigs):
     """Existing trust.bin layout, including its local landmark-slot field.
 
