@@ -128,7 +128,7 @@ def validate(args):
     require(t[3][2]==core.name(p['ca_id']),'wrong issuer')
     require(outer[2][1][:1]==b'\0','unused signatureValue bits')
     q=Reader(outer[2][1][1:]);extensions=q.vector();require(not extensions,'unsupported entry extensions')
-    start=q.number(6);end=q.number(6);siblings=q.vector();sigs=signatures(q.vector());q.end()
+    start=q.number(6);end=q.number(6);siblings=q.vector();sigs=signatures(q.vector(3));q.end()
     require(len(siblings)%32==0,'hash vector not multiple of SHA-256 size')
     state=trust(args.trust.read_bytes(),p);index=serial&((1<<48)-1)
     require(serial>>48==state['log'] and index<state['n'],'leaf outside configured log')
