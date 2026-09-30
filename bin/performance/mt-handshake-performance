@@ -185,13 +185,10 @@ RUNS=30
 WARMUPS=5
 PCAP_RUNS=30
 
-MTC_SERVER_CERT=artifacts/REPLACE/server-landmark.pem
-MTC_SERVER_KEY=artifacts/REPLACE/server.key
-MTC_SERVER_TRUST=artifacts/REPLACE/server-trust.bin
-MTC_SERVER_ID=REPLACE_SERVER_TRUST_ANCHOR_ID
-
-MTC_ROOT=artifacts/REPLACE/mtc-n16-root
-MUTUAL_CLIENT_ROOT=artifacts/validation/handshake-performance-mutual-v2
+# Explicit validated N=16 fixture inputs.
+MTC_ROOT=
+MTC_VALIDATION=
+MUTUAL_CLIENT_ROOT=
 EOF
 }
 
@@ -207,8 +204,9 @@ create_configuration() {
 }
 
 load_config() {
-  local file=$1 name value profile relative
+  local file=$1 name value
   [[ -f "$file" ]] || fail "Missing configuration: $file"
+
   # The file is user-controlled shell assignments. Refuse commands and expansions.
   while IFS='=' read -r name value; do
     [[ -z "$name" || "$name" == \#* ]] && continue
@@ -217,21 +215,80 @@ load_config() {
     printf -v "$name" '%s' "$value"
     export "$name"
   done < "$file"
+
   : "${RUNS:?}" "${WARMUPS:?}" "${PCAP_RUNS:?}"
-  [[ "$RUNS" =~ ^[1-9][0-9]*$ && "$WARMUPS" =~ ^[0-9]+$ && "$PCAP_RUNS" =~ ^[1-9][0-9]*$ ]] || fail 'RUNS/WARMUPS/PCAP_RUNS must be integers.'
+  [[ "$RUNS" =~ ^[1-9][0-9]*$ && "$WARMUPS" =~ ^[0-9]+$ && "$PCAP_RUNS" =~ ^[1-9][0-9]*$ ]] \
+    || fail 'RUNS/WARMUPS/PCAP_RUNS must be integers.'
+
   configure_kem "${KEM:-x25519}"
-  [[ "${MUTUAL_CLIENT_ROOT:-}" == artifacts/* && -f "$REPO/$MUTUAL_CLIENT_ROOT/manifest.json" ]] \
-    || fail 'MUTUAL_CLIENT_ROOT must contain the nine-profile mutual client fixtures.'
-  for profile in "${PROFILES[@]}"; do
-    for relative in x509/client.pem x509/client.key x509/client-ca.pem \
-      mtc-source/client-0000.key mtc-n16/landmark-0000.pem \
-      mtc-n16/standalone-0000.pem mtc-n16/trust.bin mtc-n16/authority.bin \
-      mtc-n16/manifest.json; do
-      [[ -f "$REPO/$MUTUAL_CLIENT_ROOT/profiles/$profile/$relative" ]] \
-        || fail "Missing mutual client fixture: $MUTUAL_CLIENT_ROOT/profiles/$profile/$relative. Run bin/base/mt-prepare run ALL first."
-    done
-  done
-  [[ "${MTC_ROOT:-}" == artifacts/* && -f "$REPO/$MTC_ROOT/manifest.json" ]] || fail 'MTC_ROOT must contain the active N=16 fixture root.'
+
+  [[ "${MTC_ROOT:-}" == artifacts/* ]] \
+    || fail 'MTC_ROOT must be an explicit path below artifacts/.'
+  [[ -f "$REPO/$MTC_ROOT/manifest.json" ]] \
+    || fail "MTC_ROOT does not contain manifest.json: $MTC_ROOT"
+
+  [[ "${MTC_VALIDATION:-}" == artifacts/* ]] \
+    || fail 'MTC_VALIDATION must be an explicit path below artifacts/.'
+  [[ -f "$REPO/$MTC_VALIDATION" ]] \
+    || fail "Missing MTC functional validation: $MTC_VALIDATION"
+
+  python3 - "$REPO/$MTC_ROOT" "$REPO/$MTC_VALIDATION" <<'PYVALID'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+validation_path = Path(sys.argv[2])
+
+with validation_path.open() as f:
+    data = json.load(f)
+
+if data.get("passed") is not True:
+    raise SystemExit(
+        "ERROR: MTC functional validation does not report passed=true: "
+        + str(validation_path)
+    )
+
+fixture_hashes = data.get("fixture_hashes")
+if not isinstance(fixture_hashes, dict) or not fixture_hashes:
+    raise SystemExit(
+        "ERROR: MTC functional validation does not contain fixture_hashes: "
+        + str(validation_path)
+    )
+
+root = root.resolve()
+
+for relative, expected in fixture_hashes.items():
+    relative_path = Path(relative)
+
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        raise SystemExit(
+            "ERROR: invalid fixture_hashes path: " + relative
+        )
+
+    path = (root / relative_path).resolve()
+
+    if root not in path.parents:
+        raise SystemExit(
+            "ERROR: validated MTC fixture escapes MTC_ROOT: " + relative
+        )
+
+    if not path.is_file():
+        raise SystemExit(
+            "ERROR: validated MTC fixture is missing: " + str(path)
+        )
+
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual != expected:
+        raise SystemExit(
+            "ERROR: MTC fixture hash mismatch: " + str(path)
+        )
+
+print(
+    f"Validated MTC fixture binding: {len(fixture_hashes)} SHA-256 hashes match."
+)
+PYVALID
 }
 
 load_plan_counts() {
@@ -272,11 +329,11 @@ load_fixture_paths() {
 }
 
 ensure_dependencies() {
-  local performance_clients="$REPO/artifacts/validation/handshake-performance-mutual-v2"
-  [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] || fail 'Missing certificate-scaling configuration. Run bin/base/mt-prepare run ALL first.'
+  [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] \
+    || fail 'Missing certificate-scaling configuration required by Trust Anchor Retry.'
   load_fixture_paths
-  [[ -f "$MTC16/manifest.json" && -f "$MTC_VALID/validation.json" ]] || fail 'Missing N=16 fixtures/validation. Run bin/base/mt-prepare run ALL first.'
-  [[ -f "$performance_clients/manifest.json" ]] || fail "Missing mutual fixtures: $performance_clients. Run bin/base/mt-prepare run ALL first."
+  [[ -f "$MTC16/manifest.json" && -f "$MTC_VALID/validation.json" ]] \
+    || fail 'Missing N=16 fixtures/validation required by Trust Anchor Retry.'
 }
 
 ensure_kem_supported() {
@@ -296,59 +353,132 @@ ensure_retry_group_support() {
   [[ "$help" == *MTC_TLS_GROUP* ]] || fail 'Retry peer lacks configurable TLS-group support. Run bin/base/mt-prepare rebuild 2 explicitly, then retry.'
 }
 
-write_automatic_config() {
-  local file=$1
-  load_fixture_paths
-  python3 - "$REPO" "$file" "$MTC16" "$KEM" "$X509_DEPTH" "${X509_CHAIN_FIXTURES:-}" "$RUNS" "$WARMUPS" "$PCAP_RUNS" <<'PYCONFIG'
-import json, sys
-from pathlib import Path
-
-repo, output, mtc_root, kem = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4]
-server = mtc_root / 'batch16/mtc/mldsa65'
-server_manifest = json.loads((repo / server / 'manifest.json').read_text())
-values = {
-    'MTC_SERVER_CERT': server / 'landmark-0000.pem',
-    'MTC_SERVER_KEY': mtc_root / 'population/mldsa65/0.key',
-    'MTC_SERVER_TRUST': server / 'trust.bin',
-}
-missing = [str(path) for path in values.values() if not (repo / path).is_file()]
-if missing:
-    raise SystemExit('ERROR: automatic handshake fixtures are incomplete: ' + ', '.join(missing))
-text = f'''# Automatically derived from validated active fixtures.
-# X.509 and MTC use matching server profiles across all nine active profiles, leaf 0.
-# Mutual authentication uses matching client/server signature profiles.
-KEM={kem}
-X509_DEPTH={sys.argv[5]}
-X509_CHAIN_FIXTURES={sys.argv[6]}
-RUNS={sys.argv[7]}
-WARMUPS={sys.argv[8]}
-PCAP_RUNS={sys.argv[9]}
-
-'''
-text += ''.join(f'{key}={path}\n' for key, path in values.items() if key.startswith('MTC_SERVER_') and key != 'MTC_SERVER_ID')
-text += f"MTC_SERVER_ID={server_manifest['ca_id']}.1.1.1\n\n"
-text += f"MTC_ROOT={mtc_root}\n"
-text += "MUTUAL_CLIENT_ROOT=artifacts/validation/handshake-performance-mutual-v2\n"
-output.parent.mkdir(parents=True, exist_ok=True)
-temporary = output.with_name(output.name + '.tmp')
-temporary.write_text(text)
-temporary.replace(output)
-print(f'Configured {output} from active validated fixtures.')
-PYCONFIG
-}
-
 inside() { printf '/work/%s' "${1#artifacts/}"; }
 common=()
 configure_kem x25519
 
+validate_mutual_fixtures() {
+  local profile relative
+
+  [[ "${MUTUAL_CLIENT_ROOT:-}" == artifacts/* ]] \
+    || fail 'MUTUAL_CLIENT_ROOT must be configured for mutual authentication.'
+
+  [[ -f "$REPO/$MUTUAL_CLIENT_ROOT/manifest.json" ]] \
+    || fail "Missing mutual fixture manifest: $MUTUAL_CLIENT_ROOT/manifest.json"
+
+  python3 - "$REPO/$MUTUAL_CLIENT_ROOT" <<'PYMUTUAL'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+manifest_path = root / "manifest.json"
+
+with manifest_path.open() as f:
+    data = json.load(f)
+
+if data.get("schema") != 1:
+    raise SystemExit(
+        "ERROR: unsupported mutual fixture manifest schema: "
+        + repr(data.get("schema"))
+    )
+
+if data.get("purpose") != "nine-profile matching mutual-authentication clients":
+    raise SystemExit(
+        "ERROR: unexpected mutual fixture manifest purpose: "
+        + repr(data.get("purpose"))
+    )
+
+if data.get("status") != "PREPARED_NOT_VALIDATED":
+    raise SystemExit(
+        "ERROR: unexpected mutual fixture manifest status: "
+        + repr(data.get("status"))
+    )
+
+expected_profiles = [
+    "ecdsa-p256", "ecdsa-p384", "ecdsa-p521",
+    "mldsa44", "mldsa65", "mldsa87",
+    "slhdsa128s", "slhdsa192s", "slhdsa256s",
+]
+
+if data.get("profiles") != expected_profiles:
+    raise SystemExit(
+        "ERROR: mutual fixture manifest does not contain the expected profiles."
+    )
+
+if data.get("mtc_tree_size") != 16:
+    raise SystemExit(
+        "ERROR: mutual fixture manifest does not report mtc_tree_size=16."
+    )
+
+file_hashes = data.get("file_sha256")
+if not isinstance(file_hashes, dict) or not file_hashes:
+    raise SystemExit(
+        "ERROR: mutual fixture manifest does not contain file_sha256."
+    )
+
+for relative, expected in file_hashes.items():
+    relative_path = Path(relative)
+
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        raise SystemExit(
+            "ERROR: invalid mutual file_sha256 path: " + relative
+        )
+
+    path = (root / relative_path).resolve()
+
+    if root not in path.parents:
+        raise SystemExit(
+            "ERROR: mutual fixture escapes MUTUAL_CLIENT_ROOT: " + relative
+        )
+
+    if not path.is_file():
+        raise SystemExit(
+            "ERROR: mutual fixture is missing: " + str(path)
+        )
+
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual != expected:
+        raise SystemExit(
+            "ERROR: mutual fixture hash mismatch: " + str(path)
+        )
+
+print(
+    f"Validated mutual-client fixture binding: "
+    f"{len(file_hashes)} SHA-256 hashes match."
+)
+PYMUTUAL
+
+  for profile in "${PROFILES[@]}"; do
+    for relative in \
+      x509/client.pem \
+      x509/client.key \
+      x509/client-ca.pem \
+      mtc-source/client-0000.key \
+      mtc-n16/landmark-0000.pem \
+      mtc-n16/standalone-0000.pem \
+      mtc-n16/trust.bin \
+      mtc-n16/authority.bin \
+      mtc-n16/manifest.json
+    do
+      [[ -f "$REPO/$MUTUAL_CLIENT_ROOT/profiles/$profile/$relative" ]] \
+        || fail "Missing mutual client fixture: $MUTUAL_CLIENT_ROOT/profiles/$profile/$relative"
+    done
+  done
+}
+
 case_args() {
-  local profile=$1 case_name=$2 population="$MTC_ROOT/population/$1" mtc="$MTC_ROOT/batch16/mtc/$1" ca_id client client_mtc client_id
-  client="$MUTUAL_CLIENT_ROOT/profiles/$profile"
-  client_mtc="$client/mtc-n16"
+  local profile=$1 case_name=$2
+  local population="$MTC_ROOT/population/$1"
+  local mtc="$MTC_ROOT/batch16/mtc/$1"
+  local ca_id client client_mtc client_id
+
   case_name=${case_name%-d[2-5]}
   ca_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ca_id"])' "$REPO/$mtc/manifest.json")
-  client_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ca_id"])' "$REPO/$client_mtc/manifest.json")
-  server_args=(); client_args=()
+  server_args=()
+  client_args=()
+
   case "$case_name" in
     x509-simple)
       server_args=(-cert "$(inside "$population/0.pem")" -key "$(inside "$population/0.key")")
@@ -367,18 +497,32 @@ case_args() {
       server_args=(-cert "$(inside "$mtc/standalone-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id")
       client_args=(-mtc_trust "$(inside "$mtc/authority.bin")")
       ;;
-    x509-mutual)
-      [[ "${CURRENT_X509_DEPTH:-2}" == 2 ]] || fail 'Mutual X.509 supports D=2 only.'
-      server_args=(-cert "$(inside "$population/0.pem")" -key "$(inside "$population/0.key")" -CAfile "$(inside "$client/x509/client-ca.pem")" -Verify 1 -verify_return_error)
-      client_args=(-CAfile "$(inside "$population/ca.pem")" -verify_hostname server -cert "$(inside "$client/x509/client.pem")" -key "$(inside "$client/x509/client.key")")
-      ;;
-    mtc-mutual-landmark)
-      server_args=(-cert "$(inside "$mtc/landmark-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id.1.1.1" -mtc_client_trust "$(inside "$client_mtc/trust.bin")" -mtc_landmark -Verify 1 -verify_return_error)
-      client_args=(-mtc_trust "$(inside "$mtc/trust.bin")" -mtc_landmark -cert "$(inside "$client_mtc/landmark-0000.pem")" -key "$(inside "$client/mtc-source/client-0000.key")" -mtc_client_id "$client_id.1.1.1")
-      ;;
-    mtc-mutual-standalone)
-      server_args=(-cert "$(inside "$mtc/standalone-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id" -mtc_client_trust "$(inside "$client_mtc/authority.bin")" -Verify 1 -verify_return_error)
-      client_args=(-mtc_trust "$(inside "$mtc/authority.bin")" -cert "$(inside "$client_mtc/standalone-0000.pem")" -key "$(inside "$client/mtc-source/client-0000.key")" -mtc_client_id "$client_id")
+    x509-mutual|mtc-mutual-landmark|mtc-mutual-standalone)
+      [[ "${MUTUAL_CLIENT_ROOT:-}" == artifacts/* ]] \
+        || fail 'MUTUAL_CLIENT_ROOT is required for mutual-authentication cases.'
+      client="$MUTUAL_CLIENT_ROOT/profiles/$profile"
+      client_mtc="$client/mtc-n16"
+
+      [[ -f "$REPO/$client_mtc/manifest.json" ]] \
+        || fail "Missing mutual client manifest: $client_mtc/manifest.json"
+
+      client_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ca_id"])' "$REPO/$client_mtc/manifest.json")
+
+      case "$case_name" in
+        x509-mutual)
+          [[ "${CURRENT_X509_DEPTH:-2}" == 2 ]] || fail 'Mutual X.509 supports D=2 only.'
+          server_args=(-cert "$(inside "$population/0.pem")" -key "$(inside "$population/0.key")" -CAfile "$(inside "$client/x509/client-ca.pem")" -Verify 1 -verify_return_error)
+          client_args=(-CAfile "$(inside "$population/ca.pem")" -verify_hostname server -cert "$(inside "$client/x509/client.pem")" -key "$(inside "$client/x509/client.key")")
+          ;;
+        mtc-mutual-landmark)
+          server_args=(-cert "$(inside "$mtc/landmark-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id.1.1.1" -mtc_client_trust "$(inside "$client_mtc/trust.bin")" -mtc_landmark -Verify 1 -verify_return_error)
+          client_args=(-mtc_trust "$(inside "$mtc/trust.bin")" -mtc_landmark -cert "$(inside "$client_mtc/landmark-0000.pem")" -key "$(inside "$client/mtc-source/client-0000.key")" -mtc_client_id "$client_id.1.1.1")
+          ;;
+        mtc-mutual-standalone)
+          server_args=(-cert "$(inside "$mtc/standalone-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id" -mtc_client_trust "$(inside "$client_mtc/authority.bin")" -Verify 1 -verify_return_error)
+          client_args=(-mtc_trust "$(inside "$mtc/authority.bin")" -cert "$(inside "$client_mtc/standalone-0000.pem")" -key "$(inside "$client/mtc-source/client-0000.key")" -mtc_client_id "$client_id")
+          ;;
+      esac
       ;;
     *) fail "Unknown case: $case_name";;
   esac
@@ -678,32 +822,49 @@ run_retry_matrix() {
 }
 
 status_config() {
-  local config=${1:-$(active_config)} mtc_root mutual_root
+  local config=${1:-$(active_config)}
+  local mtc_root mtc_validation mutual_root
+
   if [[ ! -f "$config" ]]; then
     printf 'Configuration: MISSING (%s)\nRun init or select initialization from the menu.\n' "$config"
     return 1
   fi
+
   printf 'ACTIVE CONFIGURATION\nConfiguration: %s\n' "$config"
-  if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config" || ! grep -q '^MUTUAL_CLIENT_ROOT=' "$config"; then
-    echo 'Status: INCOMPLETE (run bin/base/mt-prepare run ALL first; measurement only derives configuration from existing fixtures).'
-  else
+
+  mtc_root=$(sed -nE 's/^MTC_ROOT=//p' "$config" | tail -1)
+  mtc_validation=$(sed -nE 's/^MTC_VALIDATION=//p' "$config" | tail -1)
+  mutual_root=$(sed -nE 's/^MUTUAL_CLIENT_ROOT=//p' "$config" | tail -1)
+
+  if [[ -n "$mtc_root" && -n "$mtc_validation" &&
+        -f "$REPO/$mtc_root/manifest.json" &&
+        -f "$REPO/$mtc_validation" ]]; then
     echo 'Status: CONFIGURED'
+  else
+    echo 'Status: INCOMPLETE (set explicit MTC_ROOT and MTC_VALIDATION).'
   fi
+
   load_plan_counts "$config"
   depth_plan '(selected output)'
   printf 'Key establishment: %s (%s)\nRepetitions: native=%s measured + %s warmups; PCAP=%s\n' \
     "$KEM_LABEL" "$KEM_GROUP" "$RUNS" "$WARMUPS" "$PCAP_RUNS"
-  mtc_root=$(sed -nE 's/^MTC_ROOT=//p' "$config" | tail -1)
-  mutual_root=$(sed -nE 's/^MUTUAL_CLIENT_ROOT=//p' "$config" | tail -1)
-  if [[ -n "$mtc_root" && "$mtc_root" != *REPLACE* && -f "$REPO/$mtc_root/manifest.json" ]]; then
+
+  if [[ -n "$mtc_root" && -f "$REPO/$mtc_root/manifest.json" ]]; then
     printf 'Server fixtures: READY (%s)\n' "$mtc_root"
   else
-    echo 'Server fixtures: PENDING (run bin/base/mt-prepare run ALL first)'
+    echo 'Server fixtures: PENDING'
   fi
+
+  if [[ -n "$mtc_validation" && -f "$REPO/$mtc_validation" ]]; then
+    printf 'MTC functional validation: READY (%s)\n' "$mtc_validation"
+  else
+    echo 'MTC functional validation: PENDING'
+  fi
+
   if [[ -n "$mutual_root" && -f "$REPO/$mutual_root/manifest.json" ]]; then
     printf 'Matching mutual-client fixtures: READY (%s)\n' "$mutual_root"
   else
-    echo 'Matching mutual-client fixtures: PENDING (run bin/base/mt-prepare run ALL first)'
+    echo 'Matching mutual-client fixtures: NOT CONFIGURED (required only for mutual authentication)'
   fi
 }
 
@@ -820,12 +981,21 @@ case "$command" in
       candidate=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$(depth_output "$requested_output" "$depth")")
       [[ "$candidate" == "$REPO"/artifacts/results/* && ! -e "$candidate" ]] || fail "Invalid or existing output: $candidate"
     done
-    if grep -q REPLACE "$config" || ! grep -q '^MTC_ROOT=' "$config" || ! grep -q '^MUTUAL_CLIENT_ROOT=' "$config"; then
-      ensure_dependencies
-      write_automatic_config "$config"
+    if grep -q REPLACE "$config" ||
+       ! grep -q '^MTC_ROOT=.' "$config" ||
+       ! grep -q '^MTC_VALIDATION=.' "$config"; then
+      fail 'Performance configuration requires explicit MTC_ROOT and MTC_VALIDATION.'
     fi
     load_config "$config"
-    # Recheck after automatic configuration. Never regenerate chain-depth fixtures.
+
+    for case_name in "${ACTIVE_CASES[@]}"; do
+      if [[ "$case_name" == *-mutual ]]; then
+        validate_mutual_fixtures
+        break
+      fi
+    done
+
+    # Recheck depth selection. Never regenerate chain-depth fixtures.
     configure_depth "${X509_DEPTH:-2}"
     check_depth_mode
     validate_depth_fixtures
