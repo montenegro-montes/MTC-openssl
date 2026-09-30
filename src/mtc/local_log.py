@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 import tempfile
 
-from core import root, consistency, verify_consistency
+from core import root, inclusion, consistency, verify_consistency
 
 
 class LocalLog:
@@ -81,6 +81,34 @@ class LocalLog:
     def state(self):
         with self._locked():
             return self._read()[1]
+
+    def get_entry(self, index):
+        with self._locked():
+            entries, _ = self._read()
+            if type(index) is not int or not 0 <= index < len(entries):
+                raise IndexError('Entry index out of range')
+            return entries[index]
+
+    def inclusion_proof(self, index, size):
+        with self._locked():
+            entries, _ = self._read()
+            if type(size) is not int or not 1 <= size <= len(entries):
+                raise IndexError('Tree size out of range')
+            if type(index) is not int or not 0 <= index < size:
+                raise IndexError('Entry index out of range')
+            entries = entries[:size]
+            return {'index': index, 'tree_size': size, 'hash': root(entries).hex(),
+                    'proof': [h.hex() for h in inclusion(entries, index)]}
+
+    def consistency_proof(self, old, new):
+        with self._locked():
+            entries, _ = self._read()
+            if type(old) is not int or type(new) is not int or not 0 <= old <= new <= len(entries):
+                raise IndexError('Tree sizes out of range')
+            entries = entries[:new]
+            return {'old_size': old, 'new_size': new,
+                    'old_hash': root(entries[:old]).hex(), 'new_hash': root(entries).hex(),
+                    'proof': [h.hex() for h in consistency(entries, old)]}
 
     def append(self, entry):
         if not isinstance(entry, bytes):

@@ -1,0 +1,157 @@
+"""Experimental synchronous HTTP access to LocalLog; all roots are unsigned."""
+import argparse
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
+import time
+from urllib.parse import parse_qs, urlsplit
+
+from local_log import LocalLog
+
+
+def number(text):
+    if not text or not text.isascii() or not text.isdecimal() or len(text) > 15:
+        raise ValueError('Expected a nonnegative decimal integer')
+    return int(text)
+
+
+class LogServer(HTTPServer):
+    def __init__(self, address, directory):
+        self.log = LocalLog(directory)
+        super().__init__(address, LogHandler)
+
+
+class LogHandler(BaseHTTPRequestHandler):
+    timeout = 2  # Seconds of socket inactivity; POST bodies also have a total deadline.
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(self.timeout)
+
+    def handle(self):
+        try:super().handle()
+        except OSError:
+            # Peer disconnected or timed out; a response may no longer be possible.
+            self.close_connection = True
+
+    def log_message(self, *args):
+        pass
+
+    def reply(self, status, value, binary=False, allow=None):
+        body = value if binary else (json.dumps(value, sort_keys=True)+'\n').encode()
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/octet-stream' if binary else 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        if allow:self.send_header('Allow', allow)
+        self.end_headers()
+        if self.command != 'HEAD':
+            self.wfile.write(body)
+
+    def send_error(self, code, message=None, explain=None):
+        # Includes HTTP parser errors and unsupported methods; no tracebacks.
+        if code == 501:
+            try:allow = self.allowed(urlsplit(self.path).path)
+            except ValueError:
+                self.reply(400, {'error': 'Malformed request target'}); return
+            if allow:self.reply(405, {'error': 'Method not allowed'}, allow=allow)
+            else:self.reply(404, {'error': 'Unknown endpoint'})
+            return
+        self.reply(code, {'error': self.responses.get(code, ('Request failed',))[0]})
+
+    @staticmethod
+    def allowed(path):
+        if path == '/entries':return 'POST'
+        if path in ('/checkpoint', '/proof/consistency') or path.startswith(('/entries/', '/proof/inclusion/')):
+            return 'GET'
+        return None
+
+    def do_GET(self):
+        self.dispatch(False)
+
+    def do_POST(self):
+        self.dispatch(True)
+
+    def dispatch(self, post):
+        try:
+            parsed = urlsplit(self.path)
+            query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
+            path = parsed.path
+            allow = self.allowed(path)
+            if allow and self.command != allow:
+                self.reply(405, {'error': 'Method not allowed'}, allow=allow); return
+            if post:
+                if path != '/entries':
+                    self.reply(404, {'error': 'Unknown endpoint'}); return
+                if query:raise ValueError('Unexpected query parameters')
+                lengths = self.headers.get_all('Content-Length', [])
+                if self.headers.get('Transfer-Encoding'):raise ValueError('Transfer-Encoding is unsupported')
+                if not lengths:
+                    self.reply(411, {'error': 'Content-Length required'}); return
+                if len(lengths) != 1:raise ValueError('Ambiguous Content-Length')
+                length = number(lengths[0])
+                if length > 1024*1024:
+                    self.reply(413, {'error': 'Entry exceeds 1 MiB'}); return
+                deadline = time.monotonic()+self.timeout
+                data = bytearray()
+                try:
+                    while len(data) < length:
+                        remaining = deadline-time.monotonic()
+                        if remaining <= 0:raise TimeoutError
+                        self.connection.settimeout(remaining)
+                        chunk = self.rfile.read1(length-len(data))
+                        if not chunk:break
+                        data.extend(chunk)
+                except TimeoutError:
+                    self.close_connection = True
+                    self.reply(408, {'error': 'Request body timed out'}); return
+                except OSError:
+                    self.close_connection = True
+                    self.reply(400, {'error': 'Incomplete request body'}); return
+                finally:
+                    self.connection.settimeout(self.timeout)
+                if len(data) != length:raise ValueError('Truncated body')
+                action = lambda: self.server.log.append(bytes(data))
+                kind = 'append'
+            elif path == '/checkpoint':
+                if query:raise ValueError('Unexpected query parameters')
+                action = self.server.log.state; kind = 'json'
+            elif path.startswith('/entries/'):
+                if query:raise ValueError('Unexpected query parameters')
+                index = number(path[len('/entries/'):])
+                action = lambda: self.server.log.get_entry(index); kind = 'binary'
+            elif path.startswith('/proof/inclusion/'):
+                index = number(path[len('/proof/inclusion/'):])
+                if set(query) != {'size'} or len(query['size']) != 1:raise ValueError('Expected size=N')
+                size = number(query['size'][0])
+                action = lambda: self.server.log.inclusion_proof(index, size); kind = 'json'
+            elif path == '/proof/consistency':
+                if set(query) != {'old', 'new'} or any(len(v) != 1 for v in query.values()):
+                    raise ValueError('Expected old=N&new=M')
+                old, new = number(query['old'][0]), number(query['new'][0])
+                action = lambda: self.server.log.consistency_proof(old, new); kind = 'json'
+            else:
+                self.reply(404, {'error': 'Unknown endpoint'}); return
+        except ValueError as error:
+            self.reply(400, {'error': str(error)}); return
+        try:
+            value = action()
+        except IndexError as error:
+            self.reply(400, {'error': str(error)}); return
+        except (ValueError, OSError):
+            self.reply(500, {'error': 'Persistent log unavailable or inconsistent'}); return
+        if kind == 'append':value = dict(value, index=value['tree_size']-1)
+        if kind != 'binary':value = dict(value, unsigned=True)
+        self.reply(201 if kind == 'append' else 200, value, kind == 'binary')
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--data', default='/data')
+    parser.add_argument('--host', default='127.0.0.1')
+    parser.add_argument('--port', type=int, default=8080)
+    args = parser.parse_args()
+    with LogServer((args.host, args.port), args.data) as server:
+        try:server.serve_forever()
+        except KeyboardInterrupt:pass
+
+
+if __name__ == '__main__':main()
