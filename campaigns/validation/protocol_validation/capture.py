@@ -11,9 +11,6 @@ import sys
 import time
 
 HERE=Path(__file__).resolve().parent
-REPO=HERE.parents[2]
-sys.path.insert(0, str(REPO / 'src/mtc'))
-import core
 OPENSSL='/opt/mtc/openssl.sh'
 COMMON=['-tls1_3','-groups','X25519','-ciphersuites','TLS_AES_256_GCM_SHA384']
 PROFILES=['pq','classic','ecdsa-p256','ecdsa-p384','ecdsa-p521','mldsa44','mldsa65','mldsa87','slhdsa128s','slhdsa192s','slhdsa256s']
@@ -78,10 +75,13 @@ def main():
     p.add_argument('--execute',action='store_true');p.add_argument('--inside',choices=['server','client'],help=argparse.SUPPRESS)
     a=p.parse_args()
     if a.inside:inside(a);return
+    repo=HERE.parents[2]
+    sys.path.insert(0, str(repo / 'src/mtc'))
+    import core
     if not all((a.fixture_dir,a.server_key,a.output)):p.error('Specify --fixture-dir, --server-key and --output')
     if a.output.exists():p.error('Output exists; captures are immutable')
     if not a.execute:print('PLAN ONLY: one N=16',a.profile,a.mode,'handshake, leaf',a.leaf,'; isolated server eth0, tcp port 4433');return
-    fixture=a.fixture_dir.resolve();key=a.server_key.resolve();out=a.output.resolve();repo=HERE.parents[2]
+    fixture=a.fixture_dir.resolve();key=a.server_key.resolve();out=a.output.resolve()
     if not key.is_file():p.error('Server key missing')
     leaf4=f'{a.leaf:04d}'
     selected_pem=fixture/f'{a.mode}-{leaf4}.pem'
