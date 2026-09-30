@@ -13,6 +13,11 @@ void mtc_free(MTCConfig *c);
  * Draft half-open [a,b) maps to [a,b-1]; [a,2^64) maps to [a,UINT64_MAX].
  * Configure ranges before certificate verification. */
 int mtc_add_revoked_serial_range(MTCConfig *c, uint64_t first, uint64_t last);
+/* Draft-06 Section 7.4 relying-party trusted-subtree configuration.
+ * The caller must validate consistency/cosigner policy before installation. */
+int mtc_add_trusted_subtree(MTCConfig *c, uint64_t log_number,
+                            uint64_t start, uint64_t end,
+                            const unsigned char hash[32]);
 int mtc_verify(X509 *x, MTCConfig *c);
 int mtc_client(SSL_CTX *ctx,const char *path,int landmark);
 int mtc_server(SSL_CTX *ctx,const char *id);

@@ -6,7 +6,7 @@ application-protocol certificate selection.
 """
 from dataclasses import dataclass
 
-from core import cover
+from core import cover, inclusion, evaluate, root
 
 
 MAX_U48 = (1 << 48) - 1
@@ -85,6 +85,31 @@ def select(sequence, index):
             return landmark
 
     return None
+
+
+def relative_proof(entries, index, sequence):
+    """Construct draft-06 Section 6.4.4 landmark-relative proof inputs."""
+    landmark = select(sequence, index)
+    if landmark is None:
+        raise ValueError("landmark not allocated")
+    if landmark.tree_size > len(entries):
+        raise ValueError("landmark exceeds available log")
+
+    candidates = [
+        (start, end)
+        for start, end in subtrees(sequence, landmark.number)
+        if start <= index < end
+    ]
+    if len(candidates) != 1:
+        raise ValueError("landmark subtree selection")
+
+    start, end = candidates[0]
+    path = inclusion(entries[start:end], index - start)
+    expected = root(entries[start:end])
+    if evaluate(entries[index], index, start, end, path) != expected:
+        raise ValueError("landmark proof construction")
+
+    return landmark, start, end, path
 
 
 def encode_publication(sequence, now):

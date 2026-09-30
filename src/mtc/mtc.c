@@ -10,12 +10,15 @@ typedef struct { const unsigned char *p; size_t n; } Slice;
 typedef struct { Slice raw,body; unsigned tag; } TLV;
 typedef struct { char id[80]; unsigned char binary[80];size_t idlen; EVP_PKEY *key; } Signer;
 typedef struct { uint64_t start,end; unsigned char hash[32]; } Subtree;
+typedef struct { uint64_t log,start,end; unsigned char hash[32]; } TrustedSubtree;
 typedef struct { uint64_t first,last; } RevokedRange;
+#define MTC_MAX_TRUSTED_SUBTREES 64
 #define MTC_MAX_REVOKED_RANGES 64
 struct mtc_config {
     char caid[80]; Signer signers[2]; unsigned count; int landmark;
     uint64_t log,min,max,number,size,timestamp; unsigned char root[32];
     Subtree subs[2];unsigned nsubs;
+    TrustedSubtree trusted[MTC_MAX_TRUSTED_SUBTREES];unsigned ntrusted;
     RevokedRange revoked[MTC_MAX_REVOKED_RANGES];unsigned nrevoked;
     size_t file_bytes;
     unsigned char signal[90];size_t signal_len; /* CA or individual landmark */
@@ -116,6 +119,24 @@ static int sigcheck(MTCConfig *c,Slice sigs,uint64_t start,uint64_t end,const un
     }return valid==((1u<<c->count)-1);
 }
 void mtc_free(MTCConfig *c){if(c){for(unsigned i=0;i<2;i++)EVP_PKEY_free(c->signers[i].key);OPENSSL_free(c);}}
+int mtc_add_trusted_subtree(MTCConfig *c,uint64_t log_number,
+                            uint64_t start,uint64_t end,
+                            const unsigned char hash_value[32]){
+    TrustedSubtree *sub;
+    if(!c||!c->landmark||!hash_value||!log_number||log_number>0xffff||
+       log_number!=c->log||!valid_subtree(start,end)||
+       c->ntrusted>=MTC_MAX_TRUSTED_SUBTREES)
+        return 0;
+    for(unsigned i=0;i<c->ntrusted;i++)
+        if(c->trusted[i].log==log_number&&
+           c->trusted[i].start==start&&c->trusted[i].end==end)
+            return 0;
+    sub=&c->trusted[c->ntrusted++];
+    sub->log=log_number;sub->start=start;sub->end=end;
+    memcpy(sub->hash,hash_value,32);
+    return 1;
+}
+
 int mtc_add_revoked_serial_range(MTCConfig *c,uint64_t first,uint64_t last){
     if(!c||first>last||c->nrevoked>=MTC_MAX_REVOKED_RANGES)return 0;
     c->revoked[c->nrevoked++]=(RevokedRange){first,last};
@@ -223,7 +244,13 @@ int mtc_verify(X509 *x,MTCConfig *c){
     if(!leaf_hash(x,extensions,leaf)||!mtc_eval(leaf,index,start,end,proof.p,proof.n,root))return 0;
     if(c->landmark){
         if(sigs.n)return 0;
-        for(unsigned i=0;i<c->nsubs;i++)if(c->subs[i].start==start&&c->subs[i].end==end)return !CRYPTO_memcmp(root,c->subs[i].hash,32);
+        for(unsigned i=0;i<c->ntrusted;i++)
+            if(c->trusted[i].log==c->log&&
+               c->trusted[i].start==start&&c->trusted[i].end==end)
+                return !CRYPTO_memcmp(root,c->trusted[i].hash,32);
+        for(unsigned i=0;i<c->nsubs;i++)
+            if(c->subs[i].start==start&&c->subs[i].end==end)
+                return !CRYPTO_memcmp(root,c->subs[i].hash,32);
         return 0;
     }
     return sigcheck(c,sigs,start,end,root,0);

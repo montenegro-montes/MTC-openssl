@@ -5,6 +5,7 @@ from landmarks import (
     MAX_U48,
     Landmark,
     active,
+    relative_proof,
     select,
     subtrees,
     validate_sequence,
@@ -47,6 +48,38 @@ for index in range(8, 16):
     assert select(sequence, index) == sequence[2]
 
 assert select(sequence, 16) is None
+
+# Section 6.4.4: construct the proof relative to the selected landmark subtree.
+entries = [bytes([i]) for i in range(16)]
+expected_relative = {
+    0: (1, 0, 4),
+    3: (1, 0, 4),
+    4: (1, 4, 8),
+    7: (1, 4, 8),
+    8: (2, 8, 12),
+    11: (2, 8, 12),
+    12: (2, 12, 16),
+    15: (2, 12, 16),
+}
+
+for index, expected in expected_relative.items():
+    landmark, start, end, path = relative_proof(entries, index, sequence)
+    assert (landmark.number, start, end) == expected
+    assert len(path) == 2
+
+try:
+    relative_proof(entries, 16, sequence)
+except ValueError as exc:
+    assert str(exc) == "landmark not allocated"
+else:
+    raise AssertionError("constructed proof without allocated landmark")
+
+try:
+    relative_proof(entries[:8], 8, sequence)
+except ValueError as exc:
+    assert str(exc) == "landmark exceeds available log"
+else:
+    raise AssertionError("constructed proof beyond available log")
 
 # Mandatory sequence-invariant rejection.
 reject([])

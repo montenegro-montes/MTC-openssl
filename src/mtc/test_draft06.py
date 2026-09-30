@@ -29,7 +29,8 @@ def main():
     subprocess.run([sys.executable,'-B',str(source/'test_core.py')],check=True)
     with tempfile.TemporaryDirectory(prefix='mtc-draft06-tests-') as directory:
         temp=Path(directory)
-        for name in ['test_ids','test_revoked_ranges','check']+(['check_snapshot'] if args.persistent else []):
+        for name in ['test_ids','test_revoked_ranges','test_trusted_subtrees_c',
+                     'check','check_trusted_subtree']+(['check_snapshot'] if args.persistent else []):
             subprocess.run([args.cc,'-Wall','-Wextra','-g',
                             '-fsanitize=address,undefined','-fno-omit-frame-pointer',
                             '-I'+str(prefix/'include'),str(source/(name+'.c')),
@@ -37,6 +38,7 @@ def main():
                             '-o',str(temp/name)],check=True)
         subprocess.run([str(temp/'test_ids')],check=True)
         subprocess.run([str(temp/'test_revoked_ranges')],check=True)
+        subprocess.run([str(temp/'test_trusted_subtrees_c')],check=True)
         originals={}
         for family in args.profiles:
             key=temp/(family+'.key');cert=temp/(family+'.pem')
@@ -136,6 +138,81 @@ def main():
                                                str(int(mode=='landmark')),
                                                str(out/f'{mode}-{index:04d}.der')],capture_output=True)
                         assert result.returncode==0,(family,n,index,mode,result.stderr.decode())
+
+                # Sections 6.4.4 and 7.4: an evolved landmark-relative
+                # certificate is trusted only after its subtree is configured.
+                if n==16:
+                    from landmarks import Landmark,relative_proof
+
+                    sequence=[
+                        Landmark(0,0,0),
+                        Landmark(1,8,expiration),
+                        Landmark(2,16,expiration+1),
+                    ]
+                    entries=[
+                        (out/'log'/f'{i:06d}.entry').read_bytes()
+                        for i in range(n)
+                    ]
+                    source_cert=(out/'landmark-0000.der').read_bytes()
+                    outer,_=core.certificate_parts(source_cert)
+                    tbs=outer[0][2]
+
+                    landmark,start,end,path=relative_proof(
+                        entries,0,sequence
+                    )
+                    assert landmark.number==1
+                    assert (start,end)==(0,4)
+                    assert len(path)==2
+                    assert core.entry(tbs)==entries[0]
+
+                    subtree_hash=core.root(entries[start:end])
+                    relative=temp/f'{family}-landmark-relative.der'
+                    relative.write_bytes(
+                        core.certificate(
+                            tbs,
+                            core.proof(start,end,path,()),
+                        )
+                    )
+
+                    # The historical checkpoint subtrees are (0,8) and
+                    # (8,16), so the new (0,4) certificate must fail
+                    # without explicit Section 7.4 configuration.
+                    legacy=subprocess.run([
+                        str(temp/'check'),
+                        str(out/'trust.bin'),
+                        '1',
+                        str(relative),
+                    ],capture_output=True)
+                    assert legacy.returncode==1,(
+                        family,'unexpected legacy landmark acceptance',
+                        legacy.stderr.decode()
+                    )
+
+                    configured=subprocess.run([
+                        str(temp/'check_trusted_subtree'),
+                        str(out/'trust.bin'),
+                        str(relative),
+                        '1',
+                        str(start),
+                        str(end),
+                        subtree_hash.hex(),
+                    ],capture_output=True)
+                    assert configured.returncode==0,(
+                        family,'trusted-subtree verification',
+                        configured.stdout.decode(),
+                        configured.stderr.decode()
+                    )
+                    assert (
+                        b'PASS: real landmark-relative certificate obeys '
+                        b'trusted-subtree policy'
+                        in configured.stdout
+                    )
+                    print(
+                        f'PASS {family}: evolved landmark-relative '
+                        'certificate and trusted-subtree verification',
+                        flush=True,
+                    )
+
             env=dict(os.environ,MTC_BATCH=str(batch),MTC_CHECK=str(temp/'check'),
                      MTC_TEST_FAMILIES=','.join(args.profiles),PYTHONDONTWRITEBYTECODE='1')
             subprocess.run([sys.executable,'-B',str(source/'test_verifier.py')],env=env,check=True)
