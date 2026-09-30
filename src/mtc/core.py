@@ -79,6 +79,43 @@ def root(entries):
     if len(entries)==1:return H(b'\0'+entries[0])
     k=1<<((len(entries)-1).bit_length()-1)
     return H(b'\1'+root(entries[:k])+root(entries[k:]))
+def consistency(entries,m):
+    """RFC 9162 §2.1.4.1 PROOF(m, entries); n = len(entries).
+
+    Empty prefixes use the empty proof (MTC draft-06 §4.4.1).
+    Sizes are bounded by the existing MTC uint48 tree-size limit.
+    """
+    if not isinstance(m,int) or not 0<=m<=len(entries)<1<<48:raise ValueError('tree sizes')
+    def subproof(data,size,complete):
+        if size==len(data):return [] if complete else [root(data)]
+        k=1<<((len(data)-1).bit_length()-1)
+        if size<=k:return subproof(data[:k],size,complete)+[root(data[k:])]
+        return subproof(data[k:],size-k,False)+[root(data[:k])]
+    return subproof(entries,m,True) if m else []
+def verify_consistency(m,n,old_root,new_root,path):
+    """RFC 9162 §2.1.4.2; return False for invalid sizes/hashes/proofs.
+
+    An empty prefix proves no property of a nonempty new root. Roots must
+    be authenticated by the caller; this function does not authenticate them.
+    """
+    if not isinstance(m,int) or not isinstance(n,int) or not 0<=m<=n<1<<48:return False
+    if len(old_root)!=32 or len(new_root)!=32 or any(len(p)!=32 for p in path):return False
+    if m==0:return not path and old_root==H(b'') and (n!=0 or new_root==old_root)
+    if m==n:return not path and old_root==new_root
+    fn,sn=m-1,n-1
+    while fn&1:fn>>=1;sn>>=1
+    if fn==0:fr=sr=old_root;offset=0
+    else:
+        if not path:return False
+        fr=sr=path[0];offset=1
+    for p in path[offset:]:
+        if sn==0:return False
+        if fn&1 or fn==sn:
+            fr=H(b'\1'+p+fr);sr=H(b'\1'+p+sr)
+            while fn and not fn&1:fn>>=1;sn>>=1
+        else:sr=H(b'\1'+sr+p)
+        fn>>=1;sn>>=1
+    return sn==0 and fr==old_root and sr==new_root
 def inclusion(entries,index):
     if not 0<=index<len(entries):raise ValueError('index')
     if len(entries)==1:return []

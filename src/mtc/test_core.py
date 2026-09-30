@@ -66,3 +66,44 @@ assert original==before and old!=new and entry(old)!=entry(new)
 assert root([entry(old)])!=root([entry(new)])
 assert root([entry(old),b'x'])!=root([entry(new),b'x'])
 print('draft-06 wire/issuer/empty/singleton/boundary tests PASS; issuer DER:',expected.hex())
+
+# RFC 9162 prefix consistency; deterministic entries, no generated fixtures.
+history=[bytes([i]) for i in range(16)]
+old_root,new_root=root(history[:8]),root(history)
+path=consistency(history,8)
+assert path==[root(history[8:])]  # Independent expected proof for 8 -> 16.
+assert verify_consistency(8,16,old_root,new_root,path)
+def flipped(value):return bytes([value[0]^1])+value[1:]
+assert not verify_consistency(8,16,flipped(old_root),new_root,path)
+assert not verify_consistency(8,16,old_root,flipped(new_root),path)
+assert not verify_consistency(8,16,old_root,new_root,[flipped(path[0])])
+assert not verify_consistency(8,16,old_root,new_root,path[:-1])
+assert not verify_consistency(8,16,old_root,new_root,path+[root([])])
+assert not verify_consistency(8,16,old_root,new_root,[path[0][:-1]])
+incompatible=list(history);incompatible[3]=b'changed prefix entry'
+assert not verify_consistency(8,16,old_root,root(incompatible),consistency(incompatible,8))
+# Non-power-of-two prefix exercises the SUBPROOF(..., false) branch.
+assert consistency(history[:7],3)==[root(history[2:3]),root(history[3:4]),
+                                    root(history[:2]),root(history[4:7])]
+for m,n in [(1,2),(3,7),(5,8),(7,9),(8,9),(15,16),(1,1),(8,8),(16,16)]:
+    a,b=root(history[:m]),root(history[:n]);path=consistency(history[:n],m)
+    assert verify_consistency(m,n,a,b,path)
+    assert not verify_consistency(m,n,flipped(a),b,path)
+    if m==n:assert path==[]
+    if path:assert not verify_consistency(m,n,a,b,path[:-1])
+assert not verify_consistency(8,8,old_root,old_root,[root([])])
+assert consistency([],0)==[] and consistency(history,0)==[]
+assert verify_consistency(0,0,root([]),root([]),[])
+assert verify_consistency(0,16,root([]),new_root,[])
+assert not verify_consistency(0,0,root([]),new_root,[])
+assert not verify_consistency(0,16,old_root,new_root,[])
+assert not verify_consistency(0,16,root([]),new_root,[root([])])
+assert not verify_consistency(8,16,old_root[:-1],new_root,[])
+assert not verify_consistency(8,16,old_root,new_root[:-1],[])
+for m,n in [(-1,16),(9,8),(0,1<<48)]:
+    assert not verify_consistency(m,n,old_root,new_root,[])
+for m in [-1,17]:
+    try:consistency(history,m)
+    except ValueError:pass
+    else:raise AssertionError('invalid consistency sizes')
+print('RFC 9162 consistency 8 -> 16, negatives, prefix violation and boundaries PASS')
