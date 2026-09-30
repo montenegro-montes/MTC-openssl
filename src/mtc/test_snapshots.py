@@ -78,9 +78,9 @@ def main():
         for i in range(16):
             different.append(b'x'+bytes([i]))
         foreign_evidence=build_evidence(different,sequence,0)
-        rejected(lambda:validate_trusted_subtrees(
-            1,sequence,0,state16,foreign_evidence))
-        print('PASS: foreign same-size subtree evidence rejected by authenticated checkpoint')
+        assert validate_trusted_subtrees(
+            1,sequence,0,state16,foreign_evidence)==[]
+        print('PASS: foreign same-size subtree evidence not incorporated')
         current,path=log.prove_consistency(state8)
         assert current==state16
         assert verify_snapshot_consistency(old,new,trusted,checker,path)
