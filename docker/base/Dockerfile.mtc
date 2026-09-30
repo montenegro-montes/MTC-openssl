@@ -8,10 +8,14 @@ RUN cp -a /opt/src/openssl /opt/src/openssl-mtc && \
     mkdir -p /opt/openssl-mtc/bin && cp apps/openssl /opt/openssl-mtc/bin/ && \
     cp -a /opt/openssl/lib /opt/openssl-mtc/lib && cp MTC_SHA256 NATIVE_METRICS_SHA256 /opt/openssl-mtc/ && \
     /opt/openssl-mtc/bin/openssl s_client -help 2>&1 | grep -q lab_metrics
-COPY src/mtc/retry_peer.c src/mtc/retry_tls.c /opt/mtc/
+COPY src/mtc/retry_peer.c src/mtc/retry_tls.c src/mtc/check_snapshot.c /opt/mtc/
 RUN cc -Wall -Wextra -Werror -Wno-unused-parameter \
     -I/opt/openssl/include /opt/mtc/retry_peer.c \
     -L/opt/openssl-mtc/lib -Wl,-rpath,/opt/openssl-mtc/lib \
     -lssl -lcrypto -o /opt/mtc/retry-peer
+RUN cc -Wall -Wextra -Werror -Wno-unused-parameter \
+    -I/opt/openssl/include /opt/mtc/check_snapshot.c \
+    -L/opt/openssl-mtc/lib -Wl,-rpath,/opt/openssl-mtc/lib \
+    -lssl -lcrypto -o /opt/mtc/check-snapshot
 RUN chmod +x /opt/mtc/openssl.sh
 WORKDIR /work

@@ -17,6 +17,8 @@ sys.path.insert(0,str(REPO/'src/mtc'))
 import core
 import prepare
 from crypto_profiles import PAPER1_PROFILES, TREE_SIZES, TREE_HASH, DRAFT
+from local_log import LocalLog
+from snapshots import export_snapshot, authenticate_snapshot, verify_snapshot_consistency
 HERE=Path(__file__).resolve().parent
 OPENSSL='/opt/openssl/bin/openssl'
 TLS_OPENSSL='/opt/mtc/openssl.sh'
@@ -28,12 +30,14 @@ def dump(path,data):
 def read(path):return json.loads(path.read_text())
 def hashes(root):return {str(p.relative_to(root)):sha(p) for p in sorted(root.rglob('*')) if p.is_file()}
 def source_hashes():
-    files=[REPO/'src/mtc'/x for x in ('crypto_profiles.py','prepare.py','core.py','mtc.c','mtc.h','tls.c','patch.py')]
+    files=[REPO/'src/mtc'/x for x in (
+        'crypto_profiles.py','prepare.py','core.py','local_log.py','snapshots.py',
+        'check_snapshot.c','mtc.c','mtc.h','tls.c','patch.py')]
     files += [HERE/'workflow.py',HERE/'verify_profile.c']
     return {str(p.relative_to(REPO)):sha(p) for p in files}
 def require_current_mtc_image():
     # Generation and validation must use binaries built from the mounted source.
-    for filename in ('mtc.c','tls.c','patch.py'):
+    for filename in ('mtc.c','tls.c','patch.py','check_snapshot.c'):
         if sha(Path('/opt/mtc')/filename)!=sha(REPO/'src/mtc'/filename):
             raise ValueError('Rebuild MTC image before generation or validation: '+filename)
 def checked(cmd,**kwargs):
@@ -110,11 +114,85 @@ def generate(args):
         populate(population/name,name,max(sizes),args.server_hostname)
         for n in sizes:
             out=args.output/f'batch{n}'/'mtc'/name;out.parent.mkdir(parents=True,exist_ok=True)
+            originals=[population/name/f'{i}.pem' for i in range(n)]
             keys=([args.seed_fixtures/'batch16/mtc'/name/f'cosigner-{i}.key' for i in range(2)] if args.seed_fixtures else None)
-            meta=prepare.prepare(out,population,name,n,originals=[population/name/f'{i}.pem' for i in range(n)],
-                                 signer_keys=keys,metadata={'provenance':prov,'population':'Paper-1 independent same-algorithm X.509 population',**hostname_meta})
+            options={}
+
+            # Fresh N=16 generation is bound to an authenticated persistent
+            # append-only log. Scaling/seed-fixture paths retain their existing
+            # generation semantics.
+            if n==16 and not args.seed_fixtures:
+                profile=prepare.crypto_profile(name)
+                transparency=args.output/'transparency'/name
+                transparency.mkdir(parents=True,exist_ok=False)
+
+                keys=[transparency/f'cosigner-{i}.key' for i in range(2)]
+                for key in keys:
+                    prepare.keygen(key,name)
+
+                public=[prepare.command('pkey','-in',key,'-pubout','-outform','DER')
+                        for key in keys]
+                trusted=transparency/'trusted-authority.bin'
+                trusted.write_bytes(prepare.authority_config(
+                    profile['ca_id'],profile['cosigner_ids'],public,n))
+
+                persistent=LocalLog(transparency/'persistent-log')
+                encoded=[
+                    core.entry(core.mtc_tbs(
+                        core.from_pem(original.read_bytes()),
+                        profile['ca_id'],i))
+                    for i,original in enumerate(originals)
+                ]
+
+                for value in encoded[:8]:
+                    persistent.append(value)
+
+                old=export_snapshot(
+                    persistent,transparency/'snapshot-n8.mcf1',name,keys)
+                state8=authenticate_snapshot(
+                    old,trusted,Path('/opt/mtc/check-snapshot'))
+
+                for value in encoded[8:]:
+                    persistent.append(value)
+
+                snapshot=export_snapshot(
+                    persistent,transparency/'snapshot-n16.mcf1',name,keys)
+                state16=authenticate_snapshot(
+                    snapshot,trusted,Path('/opt/mtc/check-snapshot'))
+
+                current,path=persistent.prove_consistency(state8)
+                if current!=state16 or not verify_snapshot_consistency(
+                        old,snapshot,trusted,Path('/opt/mtc/check-snapshot'),path):
+                    raise ValueError('Authenticated N=8 -> N=16 consistency failed')
+
+                dump(transparency/'consistency-8-16.json',{
+                    'old_state':state8,
+                    'new_state':state16,
+                    'proof':[value.hex() for value in path],
+                    'verified':True,
+                })
+
+                options=dict(
+                    persistent_log=persistent,
+                    authenticated_snapshot=snapshot,
+                    trusted_authority=trusted,
+                    snapshot_checker=Path('/opt/mtc/check-snapshot'),
+                )
+
+            meta=prepare.prepare(
+                out,population,name,n,originals=originals,
+                signer_keys=keys,
+                metadata={
+                    'provenance':prov,
+                    'population':'Paper-1 independent same-algorithm X.509 population',
+                    **hostname_meta
+                },
+                **options)
             # Separate file so the generated manifest itself is covered as evidence.
             dump(out/'fixture-sha256.json',hashes(out))
+    transparency=args.output/'transparency'
+    if transparency.exists():
+        dump(args.output/'transparency-sha256.json',hashes(transparency))
     dump(args.output/'manifest.json',dict(schema=1,profiles=profiles,sizes=sizes,provenance=prov,**hostname_meta,
         modes=['landmark','standalone'],status='PREPARED_NOT_TLS_VALIDATED',
         independence='Issuance CA and MTC cosigners are distinct keys of the same signature profile'))
