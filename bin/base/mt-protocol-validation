@@ -962,12 +962,16 @@ mutual_authentication() {
   fi
  done
 
- [[ -n "${manual:-}" ]] || fail 'mutual-auth requires --manual-root PATH.'
- [[ -f "$manual/manifest.json" ]] || fail "Mutual-authentication fixture manifest missing: $manual/manifest.json"
-
  ensure_mtc_dependencies
  load
  root=$(mtc_root)
+
+ if [[ -z "${manual:-}" ]]; then
+  manual="artifacts/validation/mutual-auth-$(date -u +%Y%m%dT%H%M%SZ)"
+  python3 campaigns/validation/protocol_validation/mutual_authentication/generate_fixtures.py \
+   --output "$manual" --execute
+ fi
+ [[ -f "$manual/manifest.json" ]] || fail "Mutual-authentication fixture manifest missing: $manual/manifest.json"
 
  if [[ "$has_output" == 0 ]]; then
   output="artifacts/results/mutual-auth-preflight-$(date -u +%Y%m%dT%H%M%SZ)"
@@ -975,6 +979,7 @@ mutual_authentication() {
  fi
 
  python3 campaigns/validation/protocol_validation/mutual_authentication/preflight.py \
+  --manual-root "$manual" \
   --mtc-root "$root" --configured-profile "$PROFILE" --configured-leaf "$LEAF" \
   "${extra[@]}" "$@"
 
