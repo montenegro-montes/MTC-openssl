@@ -22,7 +22,7 @@ configure_paths() {
    "$command" init || return "$?"
   fi
  done
- echo 'Launcher paths are ready. N=16 fixtures still require mt-cert-scaling run 50 and run 60.'
+ echo 'Launcher paths and configuration are ready.'
 }
 prepare_fixtures() (
  source "$REPO/.mt-state/cert-scaling/paths.env"
@@ -202,7 +202,7 @@ prepare() (
   prepare_fixtures || exit "$?"
   echo 'Prerequisites ready: images, configuration, X.509 D=2..5 chains, N=16 validation and mutual clients. Continue with mt-protocol-validation.'
  else
-  echo 'Selected images and configuration prepared. Use run ALL to prepare X.509 D=2..5 chains, N=16 fixtures and mutual clients.'
+  echo 'Selected images and configuration are ready. Dependency stages are generated or reused as required by each command.'
  fi
 )
 menu() {
