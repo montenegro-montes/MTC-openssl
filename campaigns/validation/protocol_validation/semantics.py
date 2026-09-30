@@ -1,4 +1,4 @@
-"""Parsing/classification for the pinned MTC-05 and trust-anchor-ids-04 subset."""
+"""Parsing/classification for the active MTC-06 and trust-anchor-ids-04 subset."""
 DRAFT = 'draft-ietf-tls-trust-anchor-ids-04'
 # Read the authoritative C constant; no alternate wire codepoint or fallback.
 from pathlib import Path
@@ -105,7 +105,7 @@ def trust_mapping(ch, ee, certificate_extensions, ca_id, mode, log, landmark):
                       reason='Observed single-candidate wire structures and configured group-member or exact-ID selection match trust-anchor-ids-04; codepoint is provisional, not a final IANA assignment.')
         result['landmark_group_recommendation'] = dict(
             status=('PASS' if membership else 'UNRESOLVED') if mode == 'landmark' else 'NOT_APPLICABLE',
-            section='MTC-05 8.2.1',
+            section='MTC-06 8.2.1',
             reason=('Initial single-log group advertised and its individual landmark selected.' if membership else 'No landmark group negotiation observed; exact individual selection remains supported. General groups and automatic retry are not implemented.'))
     except (ValueError, TypeError, KeyError) as error:
         result.update(status='FAIL', reason=str(error))
@@ -115,9 +115,9 @@ def trust_mapping(ch, ee, certificate_extensions, ca_id, mode, log, landmark):
 def timestamp_checks(mode, checkpoint):
     """Called only after object signatures were verified. No current-clock claim."""
     proof = dict(status='PASS' if mode == 'standalone' else 'NOT_APPLICABLE',
-                 section='MTC-05 6.2 / 7.2', signed_timestamp=0,
+                 section='MTC-06 6.2 / 7.2', signed_timestamp=0,
                  reason='MTCProof cosignatures verified with uint64 zero; landmark proof has no cosignatures.')
-    checkpoint_check = dict(status='NOT_APPLICABLE', section='MTC-05 5.3.1 / 5.3.2')
+    checkpoint_check = dict(status='NOT_APPLICABLE', section='MTC-06 5.3.1 / 5.3.2')
     if checkpoint is not None:
         value = checkpoint[0]
         require(0 < value < 1 << 64, 'invalid uint64 checkpoint timestamp')

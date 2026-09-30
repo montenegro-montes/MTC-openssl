@@ -9,6 +9,8 @@ import re
 import subprocess
 import time
 
+import core
+
 HERE=Path(__file__).resolve().parent
 OPENSSL='/opt/mtc/openssl.sh'
 COMMON=['-tls1_3','-groups','X25519','-ciphersuites','TLS_AES_256_GCM_SHA384']
@@ -103,7 +105,7 @@ print(json.dumps(dict(openssl_version=subprocess.check_output(['/opt/mtc/openssl
     hostname = 'server' if a.leaf == 0 else f'member-{a.leaf}.lab'
 
     meta = dict(
-        draft='draft-ietf-plants-merkle-tree-certs-05',
+        draft=core.DRAFT,
         claim='implemented-subset conformance',
         scenario=scenario,
 

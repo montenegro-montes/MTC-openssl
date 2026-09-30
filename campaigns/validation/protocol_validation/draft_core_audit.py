@@ -10,7 +10,10 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-DRAFT = "draft-ietf-plants-merkle-tree-certs-05"
+sys.path.insert(0, str(REPO / "src/mtc"))
+import core
+
+DRAFT = core.DRAFT
 
 
 def main():
