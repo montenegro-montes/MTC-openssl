@@ -7,11 +7,13 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import time
 
-import core
-
 HERE=Path(__file__).resolve().parent
+REPO=HERE.parents[2]
+sys.path.insert(0, str(REPO / 'src/mtc'))
+import core
 OPENSSL='/opt/mtc/openssl.sh'
 COMMON=['-tls1_3','-groups','X25519','-ciphersuites','TLS_AES_256_GCM_SHA384']
 PROFILES=['pq','classic','ecdsa-p256','ecdsa-p384','ecdsa-p521','mldsa44','mldsa65','mldsa87','slhdsa128s','slhdsa192s','slhdsa256s']
