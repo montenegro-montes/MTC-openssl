@@ -18,6 +18,10 @@ int mtc_add_revoked_serial_range(MTCConfig *c, uint64_t first, uint64_t last);
 int mtc_add_trusted_subtree(MTCConfig *c, uint64_t log_number,
                             uint64_t start, uint64_t end,
                             const unsigned char hash[32]);
+/* Load local MTS1 relying-party trusted-subtree configuration.
+ * The file contains only already-validated Section 7.4 state; it is not
+ * itself an authenticated checkpoint or standardized wire format. */
+int mtc_load_trusted_subtrees(MTCConfig *c, const char *path);
 int mtc_verify(X509 *x, MTCConfig *c);
 int mtc_client(SSL_CTX *ctx,const char *path,int landmark);
 int mtc_server(SSL_CTX *ctx,const char *id);

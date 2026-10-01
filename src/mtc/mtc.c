@@ -137,6 +137,102 @@ int mtc_add_trusted_subtree(MTCConfig *c,uint64_t log_number,
     return 1;
 }
 
+static int mts_read_number(const unsigned char **p,size_t *remaining,
+                           unsigned width,uint64_t *value){
+    uint64_t result=0;
+
+    if(!p||!*p||!remaining||!value||!width||width>8||*remaining<width)
+        return 0;
+
+    for(unsigned i=0;i<width;i++)
+        result=(result<<8)|(*p)[i];
+
+    *p+=width;
+    *remaining-=width;
+    *value=result;
+    return 1;
+}
+
+int mtc_load_trusted_subtrees(MTCConfig *c,const char *path){
+    FILE *f=NULL;
+    unsigned char *buf=NULL;
+    const unsigned char *p;
+    long size;
+    size_t remaining;
+    uint64_t count,log_number,start,end;
+    unsigned original_count;
+    int ok=0;
+
+    if(!c||!c->landmark||!path)
+        return 0;
+
+    f=fopen(path,"rb");
+    if(!f)
+        return 0;
+
+    if(fseek(f,0,SEEK_END)||
+       (size=ftell(f))<6||
+       size>6+(long)MTC_MAX_TRUSTED_SUBTREES*46||
+       fseek(f,0,SEEK_SET))
+        goto end;
+
+    buf=OPENSSL_malloc((size_t)size);
+    if(!buf||fread(buf,1,(size_t)size,f)!=(size_t)size)
+        goto end;
+
+    p=buf;
+    remaining=(size_t)size;
+
+    if(remaining<4||memcmp(p,"MTS1",4))
+        goto end;
+    p+=4;
+    remaining-=4;
+
+    if(!mts_read_number(&p,&remaining,2,&count)||
+       count>MTC_MAX_TRUSTED_SUBTREES||
+       remaining!=(size_t)count*46)
+        goto end;
+
+    /*
+     * Loading is atomic with respect to the configuration: malformed input
+     * must not leave a partially installed trusted-subtree set.
+     */
+    original_count=c->ntrusted;
+
+    for(uint64_t i=0;i<count;i++){
+        const unsigned char *hash_value;
+
+        if(!mts_read_number(&p,&remaining,2,&log_number)||
+           !mts_read_number(&p,&remaining,6,&start)||
+           !mts_read_number(&p,&remaining,6,&end)||
+           remaining<32)
+            goto rollback;
+
+        hash_value=p;
+        p+=32;
+        remaining-=32;
+
+        if(!mtc_add_trusted_subtree(
+                c,log_number,start,end,hash_value))
+            goto rollback;
+    }
+
+    if(remaining)
+        goto rollback;
+
+    ok=1;
+    goto end;
+
+rollback:
+    c->ntrusted=original_count;
+
+end:
+    if(f)
+        fclose(f);
+    OPENSSL_free(buf);
+    return ok;
+}
+
 int mtc_add_revoked_serial_range(MTCConfig *c,uint64_t first,uint64_t last){
     if(!c||first>last||c->nrevoked>=MTC_MAX_REVOKED_RANGES)return 0;
     c->revoked[c->nrevoked++]=(RevokedRange){first,last};

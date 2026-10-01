@@ -188,24 +188,60 @@ def main():
                         legacy.stderr.decode()
                     )
 
+                    from trusted_subtrees import (
+                        TrustedSubtree,
+                        encode_trusted_subtrees,
+                    )
+
+                    mts1=temp/f'{family}-trusted-subtrees.mts1'
+                    mts1.write_bytes(
+                        encode_trusted_subtrees([
+                            TrustedSubtree(
+                                1,start,end,subtree_hash
+                            )
+                        ])
+                    )
+
                     configured=subprocess.run([
                         str(temp/'check_trusted_subtree'),
                         str(out/'trust.bin'),
                         str(relative),
-                        '1',
-                        str(start),
-                        str(end),
-                        subtree_hash.hex(),
+                        str(mts1),
                     ],capture_output=True)
                     assert configured.returncode==0,(
-                        family,'trusted-subtree verification',
+                        family,'MTS1 trusted-subtree verification',
                         configured.stdout.decode(),
                         configured.stderr.decode()
                     )
                     assert (
                         b'PASS: real landmark-relative certificate obeys '
-                        b'trusted-subtree policy'
+                        b'MTS1 trusted-subtree policy'
                         in configured.stdout
+                    )
+
+                    wrong_hash=bytes([
+                        subtree_hash[0]^1
+                    ])+subtree_hash[1:]
+                    wrong_mts1=temp/f'{family}-wrong-trusted-subtrees.mts1'
+                    wrong_mts1.write_bytes(
+                        encode_trusted_subtrees([
+                            TrustedSubtree(
+                                1,start,end,wrong_hash
+                            )
+                        ])
+                    )
+
+                    wrong=subprocess.run([
+                        str(temp/'check_trusted_subtree'),
+                        str(out/'trust.bin'),
+                        str(relative),
+                        str(wrong_mts1),
+                    ],capture_output=True)
+                    assert wrong.returncode!=0,(
+                        family,
+                        'wrong MTS1 subtree hash unexpectedly accepted',
+                        wrong.stdout.decode(),
+                        wrong.stderr.decode(),
                     )
                     print(
                         f'PASS {family}: evolved landmark-relative '
