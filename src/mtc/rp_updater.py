@@ -8,7 +8,13 @@ from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from core import verify_consistency
+from landmarks import active, subtrees, validate_sequence
 from snapshots import authenticate_snapshot
+from trusted_subtrees import (
+    SubtreeEvidence,
+    encode_trusted_subtrees,
+    validate_trusted_subtrees,
+)
 
 
 def _get(base_url, path, binary=False):
@@ -128,3 +134,81 @@ def fetch_and_advance_checkpoint(
     candidate = fetch_authenticated_checkpoint(
         base_url, trusted_authority, checker, authenticate)
     return advance_checkpoint(base_url, previous, candidate)
+
+
+def fetch_subtree_evidence(
+        base_url, sequence, now, reference_checkpoint):
+    """Fetch untrusted Section 4.4 evidence for active landmarks."""
+    validate_sequence(sequence)
+    checkpoint = _checkpoint(reference_checkpoint)
+    tree_size = checkpoint["tree_size"]
+
+    evidence = []
+
+    for landmark in active(sequence, now):
+        # A reference checkpoint older than this landmark cannot validate it
+        # or any newer landmark.  Let validate_trusted_subtrees retain the
+        # complete older prefix.
+        if landmark.tree_size > tree_size:
+            break
+
+        for start, end in subtrees(sequence, landmark.number):
+            query = urlencode({
+                "start": start,
+                "end": end,
+                "size": tree_size,
+            })
+            result = _get(base_url, "/proof/subtree?" + query)
+
+            required = {
+                "start", "end", "tree_size",
+                "hash", "proof", "unsigned",
+            }
+            if set(result) != required:
+                raise ValueError("Invalid subtree response")
+
+            if (result["start"] != start
+                    or result["end"] != end
+                    or result["tree_size"] != tree_size
+                    or result["unsigned"] is not True
+                    or not isinstance(result["hash"], str)
+                    or not isinstance(result["proof"], list)):
+                raise ValueError(
+                    "Subtree response does not match requested interval")
+
+            try:
+                node_hash = bytes.fromhex(result["hash"])
+                proof = tuple(
+                    bytes.fromhex(value) for value in result["proof"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Invalid subtree evidence") from exc
+
+            if (len(node_hash) != 32
+                    or any(len(value) != 32 for value in proof)):
+                raise ValueError("Invalid subtree evidence")
+
+            evidence.append(
+                SubtreeEvidence(start, end, node_hash, proof))
+
+    return evidence
+
+
+def build_trusted_subtree_configuration(
+        base_url, log_number, sequence, now, reference_checkpoint,
+        max_active_landmarks=None):
+    """Build validated Section 7.4 trusted-subtree state and MTS1 bytes."""
+    checkpoint = dict(_checkpoint(reference_checkpoint))
+
+    evidence = fetch_subtree_evidence(
+        base_url, sequence, now, checkpoint)
+
+    trusted = validate_trusted_subtrees(
+        log_number,
+        sequence,
+        now,
+        checkpoint,
+        evidence,
+        max_active_landmarks=max_active_landmarks,
+    )
+
+    return trusted, encode_trusted_subtrees(trusted)

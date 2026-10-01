@@ -5,10 +5,16 @@ import tempfile
 import threading
 
 from core import root
+from landmarks import Landmark
 from local_log import LocalLog
 from log_service import LogServer
 import rp_updater
-from rp_updater import advance_checkpoint, fetch_and_advance_checkpoint
+from rp_updater import (
+    advance_checkpoint,
+    build_trusted_subtree_configuration,
+    fetch_and_advance_checkpoint,
+)
+from trusted_subtrees import decode_trusted_subtrees
 
 
 with tempfile.TemporaryDirectory(prefix="mtc-rp-update-test-") as temporary:
@@ -61,6 +67,74 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-update-test-") as temporary:
         current = fetch_and_advance_checkpoint(
             base_url, None, None, current, authenticate)
         assert current == state16
+
+        # The authenticated N=16 checkpoint is the trust root for all
+        # subsequently fetched, unsigned Section 4.4 subtree evidence.
+        sequence = [
+            Landmark(0, 0, 0),
+            Landmark(1, 8, 100),
+            Landmark(2, 16, 200),
+        ]
+        trusted, mts1 = build_trusted_subtree_configuration(
+            base_url, 1, sequence, 50, current)
+
+        assert [(item.log_number, item.start, item.end)
+                for item in trusted] == [
+            (1, 0, 4),
+            (1, 4, 8),
+            (1, 8, 12),
+            (1, 12, 16),
+        ]
+        assert decode_trusted_subtrees(mts1) == trusted
+
+        # The active-landmark limit retains the older complete prefix.
+        limited, limited_mts1 = build_trusted_subtree_configuration(
+            base_url, 1, sequence, 50, current,
+            max_active_landmarks=1)
+        assert [(item.start, item.end) for item in limited] == [
+            (0, 4),
+            (4, 8),
+        ]
+        assert decode_trusted_subtrees(limited_mts1) == limited
+
+        # Corrupt structurally valid unsigned subtree evidence.  Failure in
+        # landmark 2 retains the complete older landmark 1.
+        real_get = rp_updater._get
+
+        def corrupt_subtree(start_to_corrupt):
+            def get(url, path, binary=False):
+                result = real_get(url, path, binary)
+                if (path.startswith("/proof/subtree?")
+                        and result["start"] == start_to_corrupt):
+                    result = dict(result)
+                    node_hash = bytearray.fromhex(result["hash"])
+                    node_hash[0] ^= 1
+                    result["hash"] = node_hash.hex()
+                return result
+            return get
+
+        rp_updater._get = corrupt_subtree(8)
+        try:
+            prefix, prefix_mts1 = build_trusted_subtree_configuration(
+                base_url, 1, sequence, 50, current)
+            assert [(item.start, item.end) for item in prefix] == [
+                (0, 4),
+                (4, 8),
+            ]
+            assert decode_trusted_subtrees(prefix_mts1) == prefix
+        finally:
+            rp_updater._get = real_get
+
+        # Failure in landmark 1 prevents incorporation of it and every newer
+        # landmark.  The resulting MTS1 is valid but contains no subtrees.
+        rp_updater._get = corrupt_subtree(0)
+        try:
+            empty, empty_mts1 = build_trusted_subtree_configuration(
+                base_url, 1, sequence, 50, current)
+            assert empty == []
+            assert decode_trusted_subtrees(empty_mts1) == []
+        finally:
+            rp_updater._get = real_get
 
         # Unsigned consistency evidence is accepted only when it connects the
         # independently authenticated checkpoint roots.  Corrupt the real
