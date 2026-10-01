@@ -1,5 +1,6 @@
 """Focused tests for atomic relying-party state publication."""
 
+import hashlib
 from pathlib import Path
 import tempfile
 
@@ -72,18 +73,31 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-state-test-") as temporary:
     assert store.current.readlink() == target16
     assert store.load_current()["checkpoint"] == checkpoint16
 
-    # Same generation identity cannot silently acquire different MTS1 data.
-    conflicting = encode_trusted_subtrees([])
-    rejected(
-        lambda: store.publish(checkpoint16, conflicting),
-        "conflicting immutable generation accepted",
-    )
-    assert store.current.readlink() == target16
-    assert store.load_current()["trusted_subtrees"] == mts16
+    # MTS1 can be refreshed without changing the checkpoint, while the prior
+    # immutable generation remains available.
+    refreshed16 = encode_trusted_subtrees([])
+    refreshed_current16 = store.publish(checkpoint16, refreshed16)
+    refreshed_target16 = store.current.readlink()
+    assert refreshed_current16["checkpoint"] == checkpoint16
+    assert refreshed_current16["trusted_subtrees"] == refreshed16
+    assert refreshed_target16 != target16
+    assert (store.directory / target16).is_dir()
+    previous_checkpoint16, previous_mts16 = store._read_generation(
+        store.directory / target16)
+    assert previous_checkpoint16 == checkpoint16
+    assert previous_mts16 == mts16
+
+    # Re-publishing the refreshed state is still idempotent.
+    store.publish(checkpoint16, refreshed16)
+    assert store.current.readlink() == refreshed_target16
 
     # A corrupt generation cannot be selected as current.
     corrupt = store.generations / (
-        "%016d-%s" % (17, "00" * 32))
+        "%016d-%s-%s" % (
+            17,
+            "00" * 32,
+            hashlib.sha256(b"bad").hexdigest(),
+        ))
     corrupt.mkdir()
     (corrupt / "checkpoint.json").write_text(
         '{"hash":"' + ("00" * 32) + '","tree_size":17}\n',
@@ -142,10 +156,14 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-state-test-") as temporary:
     assert store.current.readlink() == before_failure
     retained = store.load_current()
     assert retained["checkpoint"] == checkpoint16
-    assert retained["trusted_subtrees"] == mts16
+    assert retained["trusted_subtrees"] == refreshed16
 
     generation32 = store.generations / (
-        "%016d-%s" % (checkpoint32["tree_size"], checkpoint32["hash"]))
+        "%016d-%s-%s" % (
+            checkpoint32["tree_size"],
+            checkpoint32["hash"],
+            hashlib.sha256(mts32).hexdigest(),
+        ))
     assert generation32.is_dir()
     written32_checkpoint, written32_mts1 = store._read_generation(generation32)
     assert written32_checkpoint == checkpoint32

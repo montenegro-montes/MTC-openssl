@@ -1,5 +1,6 @@
 """Fail-closed persistent relying-party state publication."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -56,10 +57,11 @@ class RPStateStore:
             raise ValueError("invalid RP state directory")
 
     @staticmethod
-    def _generation_name(checkpoint):
-        return "%016d-%s" % (
+    def _generation_name(checkpoint, trusted_subtrees):
+        return "%016d-%s-%s" % (
             checkpoint["tree_size"],
             checkpoint["hash"],
+            hashlib.sha256(trusted_subtrees).hexdigest(),
         )
 
     @staticmethod
@@ -139,7 +141,7 @@ class RPStateStore:
 
         checkpoint, mts1 = self._read_generation(resolved)
 
-        expected = self._generation_name(checkpoint)
+        expected = self._generation_name(checkpoint, mts1)
         if resolved.name != expected:
             raise ValueError("generation name does not match checkpoint")
 
@@ -158,7 +160,7 @@ class RPStateStore:
         # Reject malformed MTS1 before touching persistent state.
         decode_trusted_subtrees(trusted_subtrees)
 
-        name = self._generation_name(checkpoint)
+        name = self._generation_name(checkpoint, trusted_subtrees)
         final = self.generations / name
 
         if final.exists() or final.is_symlink():
