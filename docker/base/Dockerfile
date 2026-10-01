@@ -29,6 +29,7 @@ RUN git clone --depth 1 --branch ${OQS_PROVIDER_VERSION} https://github.com/open
     cmake --build oqs-provider/build -j2 && cmake --install oqs-provider/build && git -C oqs-provider rev-parse HEAD > /opt/oqs/PROVIDER_COMMIT
 COPY docker/base/openssl.cnf /opt/openssl/ssl/openssl.cnf
 ENV OPENSSL_CONF=/opt/openssl/ssl/openssl.cnf
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ENV OPENSSL_MODULES=/opt/openssl/lib/ossl-modules
 COPY codigoOriginal/C/crypto /opt/mt/crypto
 COPY codigoOriginal/C/*tests.c /opt/mt/
