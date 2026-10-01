@@ -19,7 +19,10 @@ for app in ['s_client','s_server']:
     if app=='s_server':
         declarations += '\nstatic const char *mtc_client_trust=NULL;'
     else:
-        declarations += '\nstatic const char *mtc_client_id=NULL;'
+        declarations += (
+            '\nstatic const char *mtc_client_id=NULL;'
+            '\nstatic const char *mtc_trusted_subtrees=NULL;'
+        )
 
     s=once(s,'#include "mt_tls.h"',declarations)
 
@@ -27,7 +30,7 @@ for app in ['s_client','s_server']:
     if app=='s_server':
         enums += ' OPT_MTC_CLIENT_TRUST,'
     else:
-        enums += ' OPT_MTC_CLIENT_ID,'
+        enums += ' OPT_MTC_CLIENT_ID, OPT_MTC_TRUSTED_SUBTREES,'
     s=once(s,'    OPT_COMMON,',enums)
 
     opt='mtc_trust' if app=='s_client' else 'mtc_id'
@@ -44,6 +47,8 @@ for app in ['s_client','s_server']:
         options += (
             '    {"mtc_client_id", OPT_MTC_CLIENT_ID, \'s\', '
             '"MTC-experimental client credential ID"},\n'
+            '    {"mtc_trusted_subtrees", OPT_MTC_TRUSTED_SUBTREES, \'s\', '
+            '"Load validated MTS1 trusted-subtree configuration"},\n'
         )
     s=once(s,'    { "help", OPT_HELP,',options+'    { "help", OPT_HELP,')
 
@@ -54,7 +59,11 @@ for app in ['s_client','s_server']:
     if app=='s_server':
         cases += '        case OPT_MTC_CLIENT_TRUST: mtc_client_trust=opt_arg(); break;\n'
     else:
-        cases += '        case OPT_MTC_CLIENT_ID: mtc_client_id=opt_arg(); break;\n'
+        cases += (
+            '        case OPT_MTC_CLIENT_ID: mtc_client_id=opt_arg(); break;\n'
+            '        case OPT_MTC_TRUSTED_SUBTREES: '
+            'mtc_trusted_subtrees=opt_arg(); break;\n'
+        )
     s=once(s,'        case OPT_HELP:',cases+'        case OPT_HELP:')
 
     if app=='s_client':
@@ -71,10 +80,13 @@ for app in ['s_client','s_server']:
         s=once(s,cert_anchor,cert_code+cert_anchor)
 
         anchor='    con = SSL_new(ctx);'
-        code='''    if (mtc_file || (mtc_landmark_mode && !mtc_client_id)) {
+        code='''    if (mtc_file || mtc_trusted_subtrees
+        || (mtc_landmark_mode && !mtc_client_id)) {
         if (!mtc_file
             || mt_file || mt_incompatible || enable_server_rpk
-            || !mtc_client(ctx,mtc_file,mtc_landmark_mode)) {
+            || (mtc_trusted_subtrees && !mtc_landmark_mode)
+            || !mtc_client(ctx,mtc_file,mtc_landmark_mode,
+                           mtc_trusted_subtrees)) {
             BIO_printf(bio_err,"MTC-experimental configuration rejected\\n"); goto end;
         }
     }

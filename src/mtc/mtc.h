@@ -23,7 +23,8 @@ int mtc_add_trusted_subtree(MTCConfig *c, uint64_t log_number,
  * itself an authenticated checkpoint or standardized wire format. */
 int mtc_load_trusted_subtrees(MTCConfig *c, const char *path);
 int mtc_verify(X509 *x, MTCConfig *c);
-int mtc_client(SSL_CTX *ctx,const char *path,int landmark);
+int mtc_client(SSL_CTX *ctx,const char *path,int landmark,
+               const char *trusted_subtrees);
 int mtc_server(SSL_CTX *ctx,const char *id);
 int mtc_server_verify_client(SSL_CTX *ctx,const char *path,int landmark);
 int mtc_client_present(SSL_CTX *ctx,const char *id,int landmark);

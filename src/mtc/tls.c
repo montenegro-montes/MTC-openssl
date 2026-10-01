@@ -476,12 +476,44 @@ static int install(SSL_CTX *ctx,TLSConfig *c){
 
     return 1;
 }
-int mtc_client(SSL_CTX *ctx,const char *path,int landmark){
-    TLSConfig *c=OPENSSL_zalloc(sizeof(*c));if(!c)return 0;
-    c->trust=mtc_load(path,landmark);if(!c->trust){OPENSSL_free(c);return 0;}c->role=MTC_ROLE_CLIENT_VERIFY_SERVER;c->purpose=X509_PURPOSE_SSL_SERVER;
+int mtc_client(SSL_CTX *ctx,const char *path,int landmark,
+               const char *trusted_subtrees){
+    TLSConfig *c=OPENSSL_zalloc(sizeof(*c));
+    if(!c)return 0;
+
+    c->trust=mtc_load(path,landmark);
+    if(!c->trust){
+        OPENSSL_free(c);
+        return 0;
+    }
+
+    /*
+     * MTS1 is already-validated relying-party state.  Load it once while
+     * configuring the SSL_CTX; handshakes only consult MTCConfig in memory.
+     */
+    if(trusted_subtrees &&
+       (!landmark ||
+        !mtc_load_trusted_subtrees(c->trust,trusted_subtrees))){
+        mtc_free(c->trust);
+        OPENSSL_free(c);
+        return 0;
+    }
+
+    c->role=MTC_ROLE_CLIENT_VERIFY_SERVER;
+    c->purpose=X509_PURPOSE_SSL_SERVER;
     SSL_CTX_set_verify(ctx,SSL_VERIFY_PEER,NULL);
-    c->n=c->trust->signal_len;memcpy(c->id,c->trust->signal,c->n);
-    if(landmark){c->has_group=initial_group(c);if(!c->has_group){mtc_free(c->trust);OPENSSL_free(c);return 0;}}
+    c->n=c->trust->signal_len;
+    memcpy(c->id,c->trust->signal,c->n);
+
+    if(landmark){
+        c->has_group=initial_group(c);
+        if(!c->has_group){
+            mtc_free(c->trust);
+            OPENSSL_free(c);
+            return 0;
+        }
+    }
+
     return install(ctx,c);
 }
 int mtc_server(SSL_CTX *ctx,const char *id){

@@ -1,6 +1,8 @@
 """Offline migration tests; all keys, certificates and binaries are temporary."""
 import argparse
 import os
+import socket
+import time
 from pathlib import Path
 import subprocess
 import sys
@@ -13,7 +15,9 @@ import prepare
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--openssl-prefix',type=Path,required=True,
-                        help='Installed OpenSSL 3 prefix containing bin, include and lib')
+                        help='Installed OpenSSL 3 development prefix containing include and lib')
+    parser.add_argument('--openssl-bin',type=Path,
+                        help='OpenSSL executable under test; defaults to PREFIX/bin/openssl')
     parser.add_argument('--cc',default='cc')
     parser.add_argument('--persistent',action='store_true',
                         help='Also generate N=16 material from an authenticated persistent log')
@@ -22,7 +26,12 @@ def main():
     if args.profiles[0]==args.profiles[1]:parser.error('Two distinct profiles are required')
     source=Path(__file__).resolve().parent
     prefix=args.openssl_prefix.resolve()
-    prepare.OPENSSL=str(prefix/'bin/openssl')
+    openssl_bin=(args.openssl_bin.resolve()
+                 if args.openssl_bin is not None
+                 else prefix/'bin/openssl')
+    if not openssl_bin.is_file():
+        parser.error('OpenSSL executable missing')
+    prepare.OPENSSL=str(openssl_bin)
     lib=prefix/'lib'
     if not lib.is_dir():lib=prefix/'lib64'
     subprocess.run([prepare.OPENSSL,'version'],check=True)
@@ -242,6 +251,193 @@ def main():
                         'wrong MTS1 subtree hash unexpectedly accepted',
                         wrong.stdout.decode(),
                         wrong.stderr.decode(),
+                    )
+
+                    # Sections 6.4.4 and 7.4 through the real TLS 1.3 path.
+                    # The landmark-relative certificate reuses the original
+                    # leaf TBS, so the synthetic population key remains its
+                    # corresponding private key.
+                    relative_pem=temp/f'{family}-landmark-relative.pem'
+                    relative_pem.write_bytes(core.pem(relative.read_bytes()))
+
+                    def tls_case(mts1_path,expect_success):
+                        # Ask the kernel for an unused loopback port.  Close
+                        # the reservation before s_server binds it; readiness
+                        # below is detected from s_server's ACCEPT message,
+                        # never by consuming an -naccept connection.
+                        with socket.socket(
+                            socket.AF_INET,socket.SOCK_STREAM
+                        ) as reserved:
+                            reserved.bind(('127.0.0.1',0))
+                            port=reserved.getsockname()[1]
+
+                        server=[
+                            prepare.OPENSSL,'s_server',
+                            '-accept',str(port),
+                            '-cert',str(relative_pem),
+                            '-key',str(temp/(family+'.key')),
+                            '-mtc_id',meta['ca_id']+'.1.1.1',
+                            '-num_tickets','0',
+                            '-www',
+                            '-naccept','1',
+                            '-tls1_3',
+                            '-groups','X25519',
+                            '-ciphersuites','TLS_AES_256_GCM_SHA384',
+                        ]
+
+                        server_log=temp/f'{family}-tls-server.log'
+                        with server_log.open('w+') as log:
+                            process=subprocess.Popen(
+                                server,
+                                stdout=log,
+                                stderr=subprocess.STDOUT,
+                                text=True,
+                            )
+                            try:
+                                deadline=time.monotonic()+10
+                                while True:
+                                    log.flush()
+                                    log.seek(0)
+                                    server_text=log.read()
+                                    if 'ACCEPT' in server_text:
+                                        break
+                                    if process.poll() is not None:
+                                        raise AssertionError((
+                                            family,
+                                            'TLS server exited before readiness',
+                                            process.returncode,
+                                            server_text,
+                                        ))
+                                    if time.monotonic()>deadline:
+                                        raise AssertionError((
+                                            family,
+                                            'TLS server readiness timeout',
+                                            server_text,
+                                        ))
+                                    time.sleep(.05)
+
+                                client=[
+                                    prepare.OPENSSL,'s_client',
+                                    '-connect',f'127.0.0.1:{port}',
+                                    '-servername','offline-mtc-test',
+                                    '-verify_hostname','offline-mtc-test',
+                                    '-verify_return_error',
+                                    '-mtc_trust',str(out/'trust.bin'),
+                                    '-mtc_landmark',
+                                    '-no_ticket',
+                                    '-ign_eof',
+                                    '-tls1_3',
+                                    '-groups','X25519',
+                                    '-ciphersuites',
+                                    'TLS_AES_256_GCM_SHA384',
+                                ]
+                                if mts1_path is not None:
+                                    client += [
+                                        '-mtc_trusted_subtrees',
+                                        str(mts1_path),
+                                    ]
+
+                                result=subprocess.run(
+                                    client,
+                                    input='GET / HTTP/1.0\r\n\r\n',
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=30,
+                                )
+                                output=result.stdout+result.stderr
+
+                                if expect_success:
+                                    assert result.returncode==0,(
+                                        family,
+                                        'TLS MTS1 handshake failed',
+                                        output,
+                                    )
+                                    assert 'MTC verification: OK' in output,(
+                                        family,
+                                        'missing MTC verification',
+                                        output,
+                                    )
+                                    assert 'HTTP/1.0 200' in output,(
+                                        family,
+                                        'missing HTTP response',
+                                        output,
+                                    )
+                                    assert (
+                                        'New, TLSv1.3, Cipher is '
+                                        'TLS_AES_256_GCM_SHA384'
+                                    ) in output,(
+                                        family,
+                                        'wrong TLS version/cipher',
+                                        output,
+                                    )
+                                    assert (
+                                        'Peer Temp Key: X25519' in output
+                                        or 'Server Temp Key: X25519' in output
+                                    ),(
+                                        family,
+                                        'wrong TLS group',
+                                        output,
+                                    )
+                                else:
+                                    assert not (
+                                        result.returncode==0
+                                        and 'MTC verification: OK' in output
+                                        and 'HTTP/1.0 200' in output
+                                    ),(
+                                        family,
+                                        'unexpected TLS authentication success',
+                                        output,
+                                    )
+                            finally:
+                                if process.poll() is None:
+                                    process.terminate()
+                                try:
+                                    process.wait(timeout=5)
+                                except subprocess.TimeoutExpired:
+                                    process.kill()
+                                    process.wait()
+
+                    # Historical checkpoint subtrees do not contain (0,4).
+                    tls_case(None,False)
+
+                    # The validated relying-party subtree enables the evolved
+                    # landmark-relative certificate.
+                    tls_case(mts1,True)
+
+                    # An explicitly configured matching tuple with a wrong
+                    # hash must fail closed and must not fall back to the
+                    # historical checkpoint subtrees.
+                    tls_case(wrong_mts1,False)
+
+                    # MTS1 is meaningful only in landmark mode.  Reject this
+                    # configuration before attempting a network handshake.
+                    no_landmark=subprocess.run([
+                        prepare.OPENSSL,'s_client',
+                        '-mtc_trust',str(out/'trust.bin'),
+                        '-mtc_trusted_subtrees',str(mts1),
+                    ],capture_output=True,text=True,timeout=10)
+
+                    no_landmark_output=(
+                        no_landmark.stdout+no_landmark.stderr
+                    )
+                    assert no_landmark.returncode!=0,(
+                        family,
+                        'MTS1 without landmark unexpectedly accepted',
+                        no_landmark_output,
+                    )
+                    assert (
+                        'MTC-experimental configuration rejected'
+                        in no_landmark_output
+                    ),(
+                        family,
+                        'MTS1 without landmark did not fail closed',
+                        no_landmark_output,
+                    )
+
+                    print(
+                        f'PASS {family}: landmark-relative MTS1 TLS 1.3 '
+                        'positive and negative cases',
+                        flush=True,
                     )
                     print(
                         f'PASS {family}: evolved landmark-relative '
