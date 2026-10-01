@@ -1,0 +1,19 @@
+From 3311e59e52363cf4f7802e92aceaa076d737ea4e Mon Sep 17 00:00:00 2001
+From: Jose Antonio Montenegro Montes <jmmontes@uma.es>
+Date: Thu, 1 Oct 2026 23:18:20 +0200
+Subject: [PATCH] Update BoringSSL MTC verification for draft-06
+
+---
+ third_party/boringssl/src | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/boringssl/src b/third_party/boringssl/src
+index 324f09d89b..aa74bbbfd2 160000
+--- a/third_party/boringssl/src
++++ b/third_party/boringssl/src
+@@ -1 +1 @@
+-Subproject commit 324f09d89b29670e14cd4f5f46742d170adb273a
++Subproject commit aa74bbbfd2cd1ff7962891f9ef51d4947a15a0c2
+-- 
+2.50.1 (Apple Git-155)
+

@@ -34,7 +34,7 @@ leaf 0's CN and DNS SAN, and both `s_client -servername` and
 `-verify_hostname` during validation. Other leaves retain `member-N.lab`.
 
 The following MTC properties remain unchanged:
-- Plants-05 semantics
+- draft-06 MTC semantics
 - CA and registry IDs
 - log and serial-number rules
 - landmark semantics
@@ -153,7 +153,7 @@ OpenSSL/MTC server
    v
 Chromium
    |
-   | Plants-05 MTC validation
+   | draft-06 MTC validation
    | hostname = server.mtc.example.com
    | Finished
    v
@@ -471,7 +471,7 @@ If none is valid, `fixtures.py generate` and `fixtures.py validate` are explicit
 called with the canonical hostname into fresh timestamped directories. A failed
 generation/validation stops preparation. The image must already exist; no image
 build is attempted. An anchor is reused only when its full content equals the
-current Plants-05 exporter/parser output, including trust-file hash and subtree
+current draft-06 exporter/parser output, including trust-file hash and subtree
 hashes. Otherwise a new anchor is exported into the new result directory; old
 anchors are preserved.
 

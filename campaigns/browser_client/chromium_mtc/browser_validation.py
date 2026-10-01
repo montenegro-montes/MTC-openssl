@@ -274,7 +274,7 @@ def validate_mtc(fixture, profile=PROFILE, image='mt-tls-mtc:local'):
     require(outer[1][2] == core.ALG and tbs[2][2] == core.ALG and tbs[3][2] == core.name(ca_id), 'MTC algorithm/issuer mismatch')
     require(outer[2][1][0] == 0, 'Invalid MTC bit string')
     pr = Reader(outer[2][1][1:]); extensions = pr.vector(); start, end = pr.number(6), pr.number(6)
-    path = pr.vector(); signatures = pr.vector(); pr.finish()
+    path = pr.vector(); signatures = pr.vector(3); pr.finish()
     require(not extensions and not signatures and len(path) % 32 == 0, 'Invalid landmark proof/signatures')
     calculated = core.evaluate(core.entry(outer[0][2]), 0, start, end,
                                 [path[i:i+32] for i in range(0, len(path), 32)])
@@ -801,7 +801,28 @@ def browser_executable(override=None):
     raise ValueError('Existing patched Chromium executable missing; use --chromium PATH. No build attempted.')
 
 
-def browser_command(executable, profile, case_dir, anchor, url, enable_mtc=False, browser_mode='headless', disable_trust_anchor_ids=False):
+def validate_mts1(path, expected_log_number):
+    data = Path(path).read_bytes()
+    require(len(data) >= 6 and data[:4] == b'MTS1', 'Invalid MTS1 magic')
+    count = int.from_bytes(data[4:6], 'big')
+    require(count <= 64, 'Invalid MTS1 count')
+    require(len(data) == 6 + count * 46, 'Invalid MTS1 length')
+    seen = set()
+    for offset in range(6, len(data), 46):
+        log_number = int.from_bytes(data[offset:offset + 2], 'big')
+        start = int.from_bytes(data[offset + 2:offset + 8], 'big')
+        end = int.from_bytes(data[offset + 8:offset + 14], 'big')
+        size = end - start
+        require(log_number != 0 and log_number == expected_log_number,
+                'MTS1 log number does not match anchor')
+        require(size > 0 and size & (size - 1) == 0 and start % size == 0,
+                'Invalid MTS1 subtree interval')
+        key = (log_number, start, end)
+        require(key not in seen, 'Duplicate MTS1 subtree interval')
+        seen.add(key)
+
+
+def browser_command(executable, profile, case_dir, anchor, url, enable_mtc=False, browser_mode='headless', disable_trust_anchor_ids=False, trusted_subtrees=None):
     require(browser_mode in ('headless', 'headed'), 'Invalid browser mode')
     flags = [str(executable), '--headless=new', '--dump-dom', '--no-first-run', '--no-default-browser-check',
              '--disable-background-networking', '--disable-component-update', '--disable-sync', '--disable-quic',
@@ -819,6 +840,8 @@ def browser_command(executable, profile, case_dir, anchor, url, enable_mtc=False
         flags.append('--disable-features=TLSTrustAnchorIDs')
     if anchor:
         flags.append('--mtc-plants05-trust='+str(anchor))
+    if trusted_subtrees:
+        flags.append('--mtc-plants05-trusted-subtrees='+str(trusted_subtrees))
     return flags + [url]
 
 
@@ -1097,7 +1120,7 @@ def x509_spki_pin(selected, image):
         return pin
 
 
-def run_case(case, credentials, browser, output, run_root, timeout, positive_control, browser_mode='headless', capture=None, x509_spki=None):
+def run_case(case, credentials, browser, output, run_root, timeout, positive_control, browser_mode='headless', capture=None, x509_spki=None, trusted_subtrees=None):
     require(x509_spki is None or (case == 'x509-positive' and capture is None),
             'SPKI capability bypass is only for standalone x509-positive')
     output.mkdir()
@@ -1127,6 +1150,7 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
                 enable_mtc=case.startswith('mtc-'),
                 browser_mode=browser_mode,
                 disable_trust_anchor_ids=case == 'x509-positive',
+                trusted_subtrees=trusted_subtrees if anchor else None,
             )
             if x509_spki is not None:
                 cmd.insert(-1, '--ignore-certificate-errors-spki-list='+x509_spki)
@@ -1207,6 +1231,8 @@ def main(argv=None):
     parser.add_argument('--mtc-validation', type=Path, help='Existing validation.json for the selected MTC fixture')
     parser.add_argument('--x509-fixture-set')
     parser.add_argument('--chromium', type=Path)
+    parser.add_argument('--mtc-trusted-subtrees', type=Path,
+                        help='Optional prevalidated RP trusted-subtrees.mts1 override for MTC cases')
     parser.add_argument('--x509-spki-capability', action='store_true',
                         help='Standalone x509-positive capability test with leaf SPKI trust bypass; not a trusted baseline')
     parser.add_argument('--x509-chromium-ca-policy', action='store_true',
@@ -1218,6 +1244,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     require((args.mtc_fixture is None) == (args.mtc_validation is None), 'Supply both --mtc-fixture and --mtc-validation')
     require(args.mtc_fixture is None or args.action in ('run', 'credentials'), 'Explicit MTC evidence requires run or credentials')
+    require(args.mtc_trusted_subtrees is None or
+            (args.action == 'run' and (args.case == 'all' or args.case in CASES[:4])),
+            '--mtc-trusted-subtrees requires run with an MTC case or all')
     trust_operation = args.action in ('trust-status', 'trust-x509', 'untrust-x509')
     require((args.root is not None) == trust_operation, '--root PATH is required only for trust-status/trust-x509/untrust-x509')
     require(not args.x509_fixture_set or args.action == 'run',
@@ -1280,6 +1309,9 @@ def main(argv=None):
             write(output/'summary.json', blocked_summary(output, 'X509 root trust not established'))
             return 2
         if args.action == 'credentials': return 0
+        if args.mtc_trusted_subtrees is not None:
+            anchor_config = read(credentials['mtc']['anchor'])
+            validate_mts1(args.mtc_trusted_subtrees, anchor_config['log_number'])
         spki = x509_spki_pin(credentials['x509'], args.image) if args.x509_spki_capability else None
         browser = browser_executable(args.chromium)
         # Bind only, never probe TLS. Refuse any incumbent server, even another workflow.
@@ -1313,7 +1345,8 @@ def main(argv=None):
                 for pathkey, hashkey in keys: require(sha(selected[pathkey]) == selected[hashkey], 'Credential changed: '+pathkey)
             try:
                 result = run_case(case, credentials, browser, output/case, output, args.timeout, positive_pass,
-                                  browser_mode=args.browser_mode, x509_spki=spki)
+                                  browser_mode=args.browser_mode, x509_spki=spki,
+                                  trusted_subtrees=args.mtc_trusted_subtrees)
             except Exception as e:
                 result = next(r for r in blocked_summary(output, str(e), browser)['cases'] if r['name'] == case)
                 result['reason'] = 'Execution incomplete: '+str(e)

@@ -1,0 +1,183 @@
+From aa74bbbfd2cd1ff7962891f9ef51d4947a15a0c2 Mon Sep 17 00:00:00 2001
+From: Jose Antonio Montenegro Montes <jmmontes@uma.es>
+Date: Thu, 1 Oct 2026 23:08:44 +0200
+Subject: [PATCH] Update MTC verification for draft-06 encoding
+
+---
+ pki/trust_store.cc                    | 47 +++++++++++++++------------
+ pki/trust_store_in_memory_unittest.cc | 22 +++++++++++++
+ pki/verify_certificate_chain.cc       | 11 +++++--
+ pki/verify_unittest.cc                | 36 ++++++++++++++++++++
+ 4 files changed, 93 insertions(+), 23 deletions(-)
+
+diff --git a/pki/trust_store.cc b/pki/trust_store.cc
+index 00714aa..b2d71ba 100644
+--- a/pki/trust_store.cc
++++ b/pki/trust_store.cc
+@@ -344,27 +344,34 @@ void MTCAnchor::CreateSyntheticCert(bssl::Span<const uint8_t> ca_id) {
+   BSSL_CHECK(CBB_add_asn1(&subject_seq, &subject_set, CBS_ASN1_SET));
+   BSSL_CHECK(CBB_add_asn1(&subject_set, &subject_log, CBS_ASN1_SEQUENCE));
+ 
+-  // Section 5.1: Use OID 1.3.6.1.4.1.44363.47.1 as the attribute type for the
+-  // CA ID's name. Note that this is the early experimentation OID in the
+-  // draft rather than the real value of `id-rdna-trustAnchorID`.
+-  static uint8_t tai_attr_oid[] = {0x2b, 0x06, 0x01, 0x04, 0x01,
+-                                   0x82, 0xda, 0x4b, 0x2f, 0x01};
+-  BSSL_CHECK(CBB_add_asn1_element(&subject_log, CBS_ASN1_OBJECT, tai_attr_oid,
+-                                  sizeof(tai_attr_oid)));
+-
+-  // Section 5.1's note for initial experimentation also says to use UTF8String
+-  // to represent the attribute's value rather than RELATIVE-OID.
+-
+-  //  Convert the relative OID `ca_id` to a string. This can fail.
+-  CBS ca_id_oid(ca_id);
+-  bssl::UniquePtr<char> ca_id_text(CBS_asn1_relative_oid_to_text(&ca_id_oid));
+-  if (!ca_id_text) {
+-    return;
++  // Plants-04 used an early experimental attribute OID and a textual CA ID.
++  // Plants-05 uses id-rdna-trustAnchorID with the binary RELATIVE-OID value.
++  static const uint8_t plants04_tai_attr_oid[] = {
++      0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0xda, 0x4b, 0x2f, 0x01};
++  static const uint8_t plants05_tai_attr_oid[] = {
++      0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0xda, 0x4b, 0x2f, 0x03};
++  const auto tai_attr_oid = spec_version_ == kPlants05
++                                ? MakeConstSpan(plants05_tai_attr_oid)
++                                : MakeConstSpan(plants04_tai_attr_oid);
++  BSSL_CHECK(CBB_add_asn1_element(&subject_log, CBS_ASN1_OBJECT,
++                                  tai_attr_oid.data(),
++                                  tai_attr_oid.size()));
++
++  if (spec_version_ == kPlants05) {
++    constexpr unsigned kAsn1RelativeOid = 0x0d;
++    BSSL_CHECK(CBB_add_asn1_element(&subject_log, kAsn1RelativeOid,
++                                    ca_id.data(), ca_id.size()));
++  } else {
++    CBS ca_id_oid(ca_id);
++    bssl::UniquePtr<char> ca_id_text(CBS_asn1_relative_oid_to_text(&ca_id_oid));
++    if (!ca_id_text) {
++      return;
++    }
++    BSSL_CHECK(CBB_add_asn1_element(
++        &subject_log, CBS_ASN1_UTF8STRING,
++        reinterpret_cast<const uint8_t *>(ca_id_text.get()),
++        strlen(ca_id_text.get())));
+   }
+-  BSSL_CHECK(
+-      CBB_add_asn1_element(&subject_log, CBS_ASN1_UTF8STRING,
+-                           reinterpret_cast<const uint8_t *>(ca_id_text.get()),
+-                           strlen(ca_id_text.get())));
+ 
+   // subjectPublicKeyInfo
+   BSSL_CHECK(CBB_add_asn1_element(&tbs_cert, CBS_ASN1_SEQUENCE, nullptr, 0));
+diff --git a/pki/trust_store_in_memory_unittest.cc b/pki/trust_store_in_memory_unittest.cc
+index 87b6228..d383d66 100644
+--- a/pki/trust_store_in_memory_unittest.cc
++++ b/pki/trust_store_in_memory_unittest.cc
+@@ -24,6 +24,7 @@
+ #include "merkle_tree.h"
+ #include "test_helpers.h"
+ #include "trust_store.h"
++#include "verify_name_match.h"
+ 
+ BSSL_NAMESPACE_BEGIN
+ namespace {
+@@ -250,6 +251,27 @@ TEST_F(TrustStoreInMemoryTest, MTCAnchors) {
+   }
+ }
+ 
++TEST_F(TrustStoreInMemoryTest, Plants05AnchorMatchesRelativeOidIssuer) {
++  static constexpr uint8_t kCaId[] = {0x81, 0xfd, 0x59, 0x01};
++  static constexpr uint8_t kIssuerName[] = {
++      0x31, 0x14, 0x30, 0x12, 0x06, 0x0a, 0x2b, 0x06, 0x01, 0x04, 0x01,
++      0x82, 0xda, 0x4b, 0x2f, 0x03, 0x0d, 0x04, 0x81, 0xfd, 0x59, 0x01};
++
++  UniquePtr<CRYPTO_BUFFER> ca_spki(CRYPTO_BUFFER_new({}, 0, nullptr));
++  auto anchor = std::make_shared<MTCAnchor>(
++      MTCAnchor::kPlants05, kCaId, SignatureAlgorithm::kMldsa44,
++      std::move(ca_spki), 0, ~uint64_t{0},
++      std::vector<LogTrustedSubtrees>());
++  ASSERT_TRUE(anchor->IsValid());
++
++  CertErrors errors;
++  std::string normalized_issuer;
++  ASSERT_TRUE(
++      NormalizeName(der::Input(kIssuerName), &normalized_issuer, &errors))
++      << errors.ToDebugString();
++  EXPECT_EQ(BytesAsStringView(anchor->NormalizedSubject()), normalized_issuer);
++}
++
+ TEST_F(TrustStoreInMemoryTest, ContainsMTCAnchor) {
+   TrustStoreInMemory in_memory1;
+   TrustStoreInMemory in_memory2;
+diff --git a/pki/verify_certificate_chain.cc b/pki/verify_certificate_chain.cc
+index 6d2fe01..a22e5a5 100644
+--- a/pki/verify_certificate_chain.cc
++++ b/pki/verify_certificate_chain.cc
+@@ -1268,9 +1268,14 @@ static VerifyMTCResult VerifyMTC(const ParsedCertificate &cert,
+   if (cert.signature_value().unused_bits() != 0 ||
+       !CBS_get_u16_length_prefixed(&mtc_proof, &extensions) ||
+       !CBS_get_u48(&mtc_proof, &start) || !CBS_get_u48(&mtc_proof, &end) ||
+-      !CBS_get_u16_length_prefixed(&mtc_proof, &inclusion_proof) ||
+-      !CBS_get_u16_length_prefixed(&mtc_proof, &signatures) ||
+-      CBS_len(&mtc_proof) != 0) {
++      !CBS_get_u16_length_prefixed(&mtc_proof, &inclusion_proof)) {
++    return VerifyMTCResult::kFailed;
++  }
++  const bool signatures_ok =
++      spec_version == MTCAnchor::kPlants05
++          ? CBS_get_u24_length_prefixed(&mtc_proof, &signatures)
++          : CBS_get_u16_length_prefixed(&mtc_proof, &signatures);
++  if (!signatures_ok || CBS_len(&mtc_proof) != 0) {
+     return VerifyMTCResult::kFailed;
+   }
+ 
+diff --git a/pki/verify_unittest.cc b/pki/verify_unittest.cc
+index ccaf4b0..a06835e 100644
+--- a/pki/verify_unittest.cc
++++ b/pki/verify_unittest.cc
+@@ -319,6 +319,42 @@ TEST_F(VerifyMTCTest, SignaturelessMTC) {
+   EXPECT_TRUE(CertificateVerify(opts, &error)) << error.DiagnosticString();
+ }
+ 
++TEST_F(VerifyMTCTest, Plants05SignaturelessMTCUsesUint24Signatures) {
++  static constexpr char kLeafBase64[] =
++      "MIIB0zCCAUugAwIBAgIHAQAAAAAAADAMBgorBgEEAYLaSy8AMBYxFDASBgorBgEE"
++      "AYLaSy8DDQSB/VllMB4XDTI2MTAwMTE5NDY0M1oXDTI2MTAzMTE5NDY0M1owITEf"
++      "MB0GA1UEAwwWc2VydmVyLm10Yy5leGFtcGxlLmNvbTBZMBMGByqGSM49AgEGCCqG"
++      "SM49AwEHA0IABEV0MZFN70w4u2CcbOG5mpJa+uoTga5N2TUrg/SVLjG1lj/gWbgE"
++      "HGKJLFLW7rEROZNkcYxVxV2NNgoUekpRXm6jdzB1MAwGA1UdEwEB/wQCMAAwDgYD"
++      "VR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMBMCEGA1UdEQQaMBiCFnNl"
++      "cnZlci5tdGMuZXhhbXBsZS5jb20wHQYDVR0OBBYEFL3ZC1qv5DkZxJpYXNd91TIS"
++      "UWgEMAwGCisGAQQBgtpLLwADdAAAAAAAAAAAAAAAAAAACABgDJ58Ba9FYCKMHjdD"
++      "B5JKBo1BFMXCaWkVOIOscsasIM8QYXV3lgCNMmKZ2VW7y00UFqvoK7fETN8CZ2CB"
++      "MICzMn4CWestZ5r6SVK2LFOFLOhy73MIo9eBGOzIglxssJShAAAA";
++  std::string leaf;
++  ASSERT_TRUE(string_util::Base64Decode(kLeafBase64, &leaf));
++
++  TrustedSubtree subtree;
++  subtree.range = Subtree{0, 8};
++  subtree.hash = {0xf3, 0xfc, 0xfb, 0xd3, 0xa8, 0xf0, 0x87, 0x41,
++                  0x98, 0x98, 0xd7, 0x16, 0x4c, 0x9e, 0xb9, 0xa1,
++                  0x7c, 0x47, 0x8b, 0xe6, 0x7b, 0xf2, 0x73, 0x0a,
++                  0xd7, 0x7f, 0x90, 0x46, 0xfd, 0xa5, 0xd4, 0xad};
++  static constexpr uint8_t kCaId[] = {0x81, 0xfd, 0x59, 0x65};
++  UniquePtr<CRYPTO_BUFFER> ca_spki(CRYPTO_BUFFER_new({}, 0, nullptr));
++  auto anchor = std::make_shared<MTCAnchor>(
++      MTCAnchor::kPlants05, kCaId, SignatureAlgorithm::kEcdsaSha256,
++      std::move(ca_spki), 1ULL << 48, (1ULL << 48) + 15,
++      std::vector<LogTrustedSubtrees>{{1, {subtree}}});
++
++  std::unique_ptr<VerifyTrustStore> trust_store = EmptyTrustStore();
++  ASSERT_TRUE(trust_store->trust_store->AddMTCTrustAnchor(anchor));
++  CertificateVerifyOptions opts;
++  VerifyError error;
++  ASSERT_TRUE(PrepareOptsForVerify(leaf, trust_store.get(), &opts));
++  EXPECT_TRUE(CertificateVerify(opts, &error)) << error.DiagnosticString();
++}
++
+ TEST_F(VerifyMTCTest, ExplicitlyTrustedLeaf) {
+   // Configure the trust store to directly trust the `generic_cert_` leaf.
+   std::unique_ptr<VerifyTrustStore> trust_store = EmptyTrustStore();
+-- 
+2.50.1 (Apple Git-155)
+

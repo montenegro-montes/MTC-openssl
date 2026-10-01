@@ -12,7 +12,7 @@ from unittest.mock import patch
 from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parents[3]
-LAUNCHER = (REPO/'bin/browser_client/mt-chromium-mtc').read_text()
+LAUNCHER = (REPO/'bin/browser_client/mt-chromium-setup').read_text()
 BUILD = LAUNCHER.split('build_phase() {', 1)[1].split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
 DETECT = LAUNCHER.split('10.*) python3', 1)[1].split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
 

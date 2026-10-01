@@ -1,0 +1,172 @@
+From 9197ee9f52fb5fb2a3ffb96751f21fb688bc098e Mon Sep 17 00:00:00 2001
+From: Jose Antonio Montenegro Montes <jmmontes@uma.es>
+Date: Thu, 1 Oct 2026 23:17:33 +0200
+Subject: [PATCH] Add trusted subtree loading for MTC browser tests
+
+---
+ net/base/switches.h                 |   2 +
+ net/cert/mtc_plants05_lab_config.cc | 108 +++++++++++++++++++++++++++-
+ 2 files changed, 109 insertions(+), 1 deletion(-)
+
+diff --git a/net/base/switches.h b/net/base/switches.h
+index c433a38c96..3bdd00b9b8 100644
+--- a/net/base/switches.h
++++ b/net/base/switches.h
+@@ -11,6 +11,8 @@ namespace net::switches {
+ 
+ inline constexpr char kLogNetLog[] = "log-net-log";
+ inline constexpr char kMtcPlants05Trust[] = "mtc-plants05-trust";
++inline constexpr char kMtcPlants05TrustedSubtrees[] =
++    "mtc-plants05-trusted-subtrees";
+ inline constexpr char kUnsafelyTreatInsecureOriginAsSecure[] =
+     "unsafely-treat-insecure-origin-as-secure";
+ 
+diff --git a/net/cert/mtc_plants05_lab_config.cc b/net/cert/mtc_plants05_lab_config.cc
+index 1365d24212..1b922a2cf8 100644
+--- a/net/cert/mtc_plants05_lab_config.cc
++++ b/net/cert/mtc_plants05_lab_config.cc
+@@ -5,12 +5,15 @@
+ #include "net/cert/mtc_plants05_lab_config.h"
+ 
+ #include <limits>
++#include <set>
+ #include <string>
+ #include <string_view>
++#include <tuple>
+ #include <utility>
+ 
+ #include "base/base64.h"
+ #include "base/command_line.h"
++#include "base/containers/span.h"
+ #include "base/files/file_util.h"
+ #include "base/json/json_reader.h"
+ #include "base/logging.h"
+@@ -86,6 +89,70 @@ std::optional<MtcPlants05LabSignatureAlgorithm> ParseSignatureAlgorithm(
+   return std::nullopt;
+ }
+ 
++uint64_t ReadUint48(std::string_view value) {
++  uint64_t result = 0;
++  for (uint8_t byte : value) {
++    result = (result << 8) | byte;
++  }
++  return result;
++}
++
++std::optional<std::vector<MtcPlants05LabTrustedSubtree>>
++ParseTrustedSubtrees(std::string_view mts1, uint16_t expected_log_number) {
++  constexpr size_t kHeaderSize = 6;
++  constexpr size_t kEntrySize = 46;
++  constexpr size_t kMaximumEntries = 64;
++
++  if (mts1.size() < kHeaderSize || !mts1.starts_with("MTS1")) {
++    LOG(ERROR) << "Invalid MTC Plants-05 MTS1 magic";
++    return std::nullopt;
++  }
++
++  const uint16_t count =
++      (static_cast<uint8_t>(mts1[4]) << 8) |
++      static_cast<uint8_t>(mts1[5]);
++  if (count > kMaximumEntries ||
++      mts1.size() != kHeaderSize + count * kEntrySize) {
++    LOG(ERROR) << "Invalid MTC Plants-05 MTS1 count or length";
++    return std::nullopt;
++  }
++
++  std::vector<MtcPlants05LabTrustedSubtree> subtrees;
++  subtrees.reserve(count);
++  std::set<std::tuple<uint16_t, uint64_t, uint64_t>> seen;
++
++  size_t offset = kHeaderSize;
++  for (size_t i = 0; i < count; ++i, offset += kEntrySize) {
++    const uint16_t log_number =
++        (static_cast<uint8_t>(mts1[offset]) << 8) |
++        static_cast<uint8_t>(mts1[offset + 1]);
++    const uint64_t start = ReadUint48(mts1.substr(offset + 2, 6));
++    const uint64_t end = ReadUint48(mts1.substr(offset + 8, 6));
++
++    if (log_number == 0 || log_number != expected_log_number ||
++        start >= end) {
++      LOG(ERROR) << "Invalid MTC Plants-05 MTS1 log or interval";
++      return std::nullopt;
++    }
++
++    const uint64_t size = end - start;
++    if ((size & (size - 1)) != 0 || start % size != 0 ||
++        !seen.emplace(log_number, start, end).second) {
++      LOG(ERROR) << "Invalid or duplicate MTC Plants-05 MTS1 interval";
++      return std::nullopt;
++    }
++
++    MtcPlants05LabTrustedSubtree subtree;
++    subtree.start = start;
++    subtree.end = end;
++    base::span(subtree.hash).copy_from(base::as_byte_span(
++        mts1.substr(offset + 14, subtree.hash.size())));
++    subtrees.push_back(std::move(subtree));
++  }
++
++  return subtrees;
++}
++
+ std::optional<MtcPlants05LabConfig> ParseConfig(std::string_view json) {
+   std::optional<base::DictValue> parsed =
+       base::JSONReader::ReadDict(json, base::JSON_PARSE_RFC);
+@@ -257,6 +324,20 @@ std::optional<MtcPlants05LabConfig> LoadMtcPlants05LabConfig(
+   return ParseConfig(json);
+ }
+ 
++std::optional<std::vector<MtcPlants05LabTrustedSubtree>>
++LoadMtcPlants05LabTrustedSubtrees(const base::FilePath& path,
++                                 uint16_t expected_log_number) {
++  base::ScopedAllowBlockingForTesting allow_blocking;
++
++  std::string mts1;
++  if (!base::ReadFileToString(path, &mts1)) {
++    LOG(ERROR) << "Unable to read MTC Plants-05 MTS1: " << path;
++    return std::nullopt;
++  }
++
++  return ParseTrustedSubtrees(mts1, expected_log_number);
++}
++
+ std::optional<MtcPlants05LabConfig> LoadMtcPlants05LabConfigFromCommandLine() {
+   const base::CommandLine* command_line =
+       base::CommandLine::ForCurrentProcess();
+@@ -272,7 +353,32 @@ std::optional<MtcPlants05LabConfig> LoadMtcPlants05LabConfigFromCommandLine() {
+     return std::nullopt;
+   }
+ 
+-  return LoadMtcPlants05LabConfig(path);
++  std::optional<MtcPlants05LabConfig> config =
++      LoadMtcPlants05LabConfig(path);
++  if (!config) {
++    return std::nullopt;
++  }
++
++  if (!command_line->HasSwitch(switches::kMtcPlants05TrustedSubtrees)) {
++    return config;
++  }
++
++  base::FilePath subtrees_path = command_line->GetSwitchValuePath(
++      switches::kMtcPlants05TrustedSubtrees);
++  if (subtrees_path.empty()) {
++    LOG(ERROR) << "--" << switches::kMtcPlants05TrustedSubtrees
++               << " requires a path";
++    return std::nullopt;
++  }
++
++  std::optional<std::vector<MtcPlants05LabTrustedSubtree>> subtrees =
++      LoadMtcPlants05LabTrustedSubtrees(subtrees_path, config->log_number);
++  if (!subtrees) {
++    return std::nullopt;
++  }
++
++  config->trusted_subtrees = std::move(*subtrees);
++  return config;
+ }
+ 
+ }  // namespace net
+-- 
+2.50.1 (Apple Git-155)
+
