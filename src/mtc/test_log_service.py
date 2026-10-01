@@ -15,11 +15,13 @@ from log_service import LogServer
 class ServiceTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='mtc-http-test-')
+        self.published_temp = tempfile.TemporaryDirectory(prefix='mtc-http-published-')
         self.directory = Path(self.temp.name)
+        self.published = Path(self.published_temp.name)
         self.start()
 
-    def start(self):
-        self.server = LogServer(('127.0.0.1', 0), self.directory)
+    def start(self, snapshot=None):
+        self.server = LogServer(('127.0.0.1', 0), self.directory, snapshot)
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval': 0.01})
         self.thread.start()
 
@@ -27,7 +29,9 @@ class ServiceTests(unittest.TestCase):
         self.server.shutdown(); self.thread.join(); self.server.server_close()
 
     def tearDown(self):
-        self.stop(); self.temp.cleanup()
+        self.stop()
+        self.temp.cleanup()
+        self.published_temp.cleanup()
 
     def request(self, method, path, body=None, headers=None):
         with closing(http.client.HTTPConnection(*self.server.server_address, timeout=5)) as connection:
@@ -66,7 +70,8 @@ class ServiceTests(unittest.TestCase):
         for method, path, allow in [('PUT', '/entries', 'POST'), ('GET', '/entries', 'POST'),
                                     ('POST', '/checkpoint', 'GET'), ('DELETE', '/entries/0', 'GET'),
                                     ('PUT', '/proof/inclusion/0?size=1', 'GET'),
-                                    ('POST', '/proof/consistency?old=0&new=0', 'GET')]:
+                                    ('POST', '/proof/consistency?old=0&new=0', 'GET'),
+                                    ('POST', '/snapshot', 'GET')]:
             status, header, body = self.raw_request(f'{method} {path} HTTP/1.0\r\n\r\n'.encode())
             self.assertEqual((status, header, body), (405, allow, {'error': 'Method not allowed'}))
 
@@ -118,7 +123,8 @@ class ServiceTests(unittest.TestCase):
                      '/proof/inclusion/0?size=1&size=2',
                      '/proof/consistency?old=8', '/proof/consistency?old=no&new=16',
                      '/proof/consistency?old=2&new=1', '/proof/consistency?old=0&new=1',
-                     '/proof/consistency?old=0&old=0&new=0', '/checkpoint?unexpected=1']:
+                     '/proof/consistency?old=0&old=0&new=0', '/checkpoint?unexpected=1',
+                     '/snapshot?unexpected=1']:
             status, body = self.request('GET', path)
             self.assertEqual(status, 400, path)
             self.assertIn('error', body)
@@ -128,6 +134,37 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.request('POST', '/entries', b'', {'Content-Length': '1048577'})[0], 413)
         self.assertEqual(self.request('POST', '/entries', b'')[0], 201)
         self.assertEqual(self.request('GET', '/entries/0'), (200, b''))
+
+    def test_snapshot_publication(self):
+        self.assertEqual(self.request('GET', '/snapshot'),
+                         (404, {'error': 'Snapshot not configured'}))
+
+        self.stop()
+        snapshot = self.published/'snapshot.mcf1'
+        snapshot.write_bytes(b'MCF1\x00published')
+        self.start(snapshot)
+
+        self.assertEqual(self.request('GET', '/snapshot'),
+                         (200, b'MCF1\x00published'))
+
+        replacement = snapshot.with_suffix('.tmp')
+        replacement.write_bytes(b'MCF1\x00replacement')
+        replacement.replace(snapshot)
+
+        self.assertEqual(self.request('GET', '/snapshot'),
+                         (200, b'MCF1\x00replacement'))
+
+        snapshot.unlink()
+        self.assertEqual(self.request('GET', '/snapshot'),
+                         (500, {'error': 'Snapshot unavailable'}))
+
+    def test_snapshot_configuration_rejects_symlink(self):
+        target = self.published/'snapshot-target.mcf1'
+        link = self.published/'snapshot-link.mcf1'
+        target.write_bytes(b'MCF1')
+        link.symlink_to(target)
+        with self.assertRaises(ValueError):
+            LogServer(('127.0.0.1', 0), self.directory, link)
 
     def test_tampered_storage(self):
         self.request('POST', '/entries', b'original')

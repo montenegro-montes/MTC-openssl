@@ -2,6 +2,9 @@
 import argparse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
+import os
+from pathlib import Path
+import stat
 import time
 from urllib.parse import parse_qs, urlsplit
 
@@ -15,8 +18,12 @@ def number(text):
 
 
 class LogServer(HTTPServer):
-    def __init__(self, address, directory):
+    def __init__(self, address, directory, snapshot=None):
         self.log = LocalLog(directory)
+        self.snapshot = None if snapshot is None else Path(snapshot)
+        if self.snapshot is not None:
+            if self.snapshot.is_symlink() or not self.snapshot.is_file():
+                raise ValueError('Snapshot must be a regular file')
         super().__init__(address, LogHandler)
 
 
@@ -60,7 +67,7 @@ class LogHandler(BaseHTTPRequestHandler):
     @staticmethod
     def allowed(path):
         if path == '/entries':return 'POST'
-        if path in ('/checkpoint', '/proof/consistency') or path.startswith(('/entries/', '/proof/inclusion/')):
+        if path in ('/checkpoint', '/proof/consistency', '/snapshot') or path.startswith(('/entries/', '/proof/inclusion/')):
             return 'GET'
         return None
 
@@ -114,6 +121,27 @@ class LogHandler(BaseHTTPRequestHandler):
             elif path == '/checkpoint':
                 if query:raise ValueError('Unexpected query parameters')
                 action = self.server.log.state; kind = 'json'
+            elif path == '/snapshot':
+                if query:raise ValueError('Unexpected query parameters')
+                if self.server.snapshot is None:
+                    self.reply(404, {'error': 'Snapshot not configured'}); return
+                def read_snapshot():
+                    path = self.server.snapshot
+                    flags = os.O_RDONLY
+                    if hasattr(os, 'O_NOFOLLOW'):
+                        flags |= os.O_NOFOLLOW
+                    fd = os.open(path, flags)
+                    try:
+                        info = os.fstat(fd)
+                        if not stat.S_ISREG(info.st_mode):
+                            raise OSError('Snapshot unavailable')
+                        with os.fdopen(fd, 'rb') as source:
+                            fd = -1
+                            return source.read()
+                    finally:
+                        if fd >= 0:
+                            os.close(fd)
+                action = read_snapshot; kind = 'snapshot'
             elif path.startswith('/entries/'):
                 if query:raise ValueError('Unexpected query parameters')
                 index = number(path[len('/entries/'):])
@@ -137,10 +165,12 @@ class LogHandler(BaseHTTPRequestHandler):
         except IndexError as error:
             self.reply(400, {'error': str(error)}); return
         except (ValueError, OSError):
+            if kind == 'snapshot':
+                self.reply(500, {'error': 'Snapshot unavailable'}); return
             self.reply(500, {'error': 'Persistent log unavailable or inconsistent'}); return
         if kind == 'append':value = dict(value, index=value['tree_size']-1)
-        if kind != 'binary':value = dict(value, unsigned=True)
-        self.reply(201 if kind == 'append' else 200, value, kind == 'binary')
+        if kind not in ('binary', 'snapshot'):value = dict(value, unsigned=True)
+        self.reply(201 if kind == 'append' else 200, value, kind in ('binary', 'snapshot'))
 
 
 def main():
@@ -148,8 +178,9 @@ def main():
     parser.add_argument('--data', default='/data')
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8080)
+    parser.add_argument('--snapshot')
     args = parser.parse_args()
-    with LogServer((args.host, args.port), args.data) as server:
+    with LogServer((args.host, args.port), args.data, args.snapshot) as server:
         try:server.serve_forever()
         except KeyboardInterrupt:pass
 
