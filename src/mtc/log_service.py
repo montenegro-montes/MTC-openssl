@@ -67,7 +67,7 @@ class LogHandler(BaseHTTPRequestHandler):
     @staticmethod
     def allowed(path):
         if path == '/entries':return 'POST'
-        if path in ('/checkpoint', '/proof/consistency', '/snapshot') or path.startswith(('/entries/', '/proof/inclusion/')):
+        if path in ('/checkpoint', '/proof/consistency', '/proof/subtree', '/snapshot') or path.startswith(('/entries/', '/proof/inclusion/')):
             return 'GET'
         return None
 
@@ -142,6 +142,16 @@ class LogHandler(BaseHTTPRequestHandler):
                         if fd >= 0:
                             os.close(fd)
                 action = read_snapshot; kind = 'snapshot'
+            elif path == '/proof/subtree':
+                if set(query) != {'start', 'end', 'size'}:
+                    raise ValueError('Expected start, end and size')
+                if any(len(query[name]) != 1 for name in ('start', 'end', 'size')):
+                    raise ValueError('Repeated query parameter')
+                start = number(query['start'][0])
+                end = number(query['end'][0])
+                size = number(query['size'][0])
+                action = lambda: self.server.log.subtree_proof(start, end, size)
+                kind = 'json'
             elif path.startswith('/entries/'):
                 if query:raise ValueError('Unexpected query parameters')
                 index = number(path[len('/entries/'):])

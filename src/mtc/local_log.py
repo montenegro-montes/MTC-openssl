@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 import tempfile
 
-from core import root, inclusion, consistency, verify_consistency
+from core import root, inclusion, consistency, subtree_consistency, verify_consistency
 
 
 class LocalLog:
@@ -109,6 +109,23 @@ class LocalLog:
             return {'old_size': old, 'new_size': new,
                     'old_hash': root(entries[:old]).hex(), 'new_hash': root(entries).hex(),
                     'proof': [h.hex() for h in consistency(entries, old)]}
+
+    def subtree_proof(self, start, end, size):
+        with self._locked():
+            entries, _ = self._read()
+            if type(size) is not int or not 0 <= size <= len(entries):
+                raise IndexError('Tree size out of range')
+            if (type(start) is not int or type(end) is not int
+                    or not 0 <= start <= end <= size):
+                raise IndexError('Subtree range out of range')
+            entries = entries[:size]
+            try:
+                proof = subtree_consistency(entries, start, end)
+            except ValueError as exc:
+                raise IndexError('Invalid subtree range') from exc
+            return {'start': start, 'end': end, 'tree_size': size,
+                    'hash': root(entries[start:end]).hex(),
+                    'proof': [h.hex() for h in proof]}
 
     def append(self, entry):
         if not isinstance(entry, bytes):

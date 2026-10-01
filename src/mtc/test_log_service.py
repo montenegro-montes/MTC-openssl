@@ -8,7 +8,7 @@ import tempfile
 import threading
 import unittest
 
-from core import root, evaluate, verify_consistency
+from core import root, evaluate, verify_consistency, verify_subtree_consistency
 from log_service import LogServer
 
 
@@ -71,6 +71,7 @@ class ServiceTests(unittest.TestCase):
                                     ('POST', '/checkpoint', 'GET'), ('DELETE', '/entries/0', 'GET'),
                                     ('PUT', '/proof/inclusion/0?size=1', 'GET'),
                                     ('POST', '/proof/consistency?old=0&new=0', 'GET'),
+                                    ('POST', '/proof/subtree?start=0&end=0&size=0', 'GET'),
                                     ('POST', '/snapshot', 'GET')]:
             status, header, body = self.raw_request(f'{method} {path} HTTP/1.0\r\n\r\n'.encode())
             self.assertEqual((status, header, body), (405, allow, {'error': 'Method not allowed'}))
@@ -113,6 +114,22 @@ class ServiceTests(unittest.TestCase):
             self.assertTrue(verify_consistency(old, new, bytes.fromhex(result['old_hash']),
                                               bytes.fromhex(result['new_hash']),
                                               [bytes.fromhex(p) for p in result['proof']]))
+
+        for start, end, size in [(0,4,8), (8,12,16)]:
+            status, result = self.request(
+                'GET', f'/proof/subtree?start={start}&end={end}&size={size}')
+            self.assertEqual(status, 200)
+            self.assertEqual(result['start'], start)
+            self.assertEqual(result['end'], end)
+            self.assertEqual(result['tree_size'], size)
+            self.assertEqual(result['hash'], root(entries[start:end]).hex())
+            self.assertTrue(result['unsigned'])
+            self.assertTrue(verify_subtree_consistency(
+                start, end, size,
+                bytes.fromhex(result['hash']),
+                root(entries[:size]),
+                [bytes.fromhex(p) for p in result['proof']]))
+
         self.stop(); self.start()
         self.assertEqual(self.request('GET', '/checkpoint'), checkpoint)
         self.assertEqual(self.request('GET', '/entries/15'), (200, entries[15]))
@@ -123,7 +140,13 @@ class ServiceTests(unittest.TestCase):
                      '/proof/inclusion/0?size=1&size=2',
                      '/proof/consistency?old=8', '/proof/consistency?old=no&new=16',
                      '/proof/consistency?old=2&new=1', '/proof/consistency?old=0&new=1',
-                     '/proof/consistency?old=0&old=0&new=0', '/checkpoint?unexpected=1',
+                     '/proof/consistency?old=0&old=0&new=0',
+                     '/proof/subtree?start=0&end=4',
+                     '/proof/subtree?start=no&end=4&size=8',
+                     '/proof/subtree?start=0&end=9&size=8',
+                     '/proof/subtree?start=1&end=4&size=8',
+                     '/proof/subtree?start=0&start=0&end=4&size=8',
+                     '/checkpoint?unexpected=1',
                      '/snapshot?unexpected=1']:
             status, body = self.request('GET', path)
             self.assertEqual(status, 400, path)

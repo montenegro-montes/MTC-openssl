@@ -2,14 +2,14 @@
 from pathlib import Path
 import tempfile
 
-from core import root, verify_consistency
+from core import root, verify_consistency, verify_subtree_consistency
 from local_log import LocalLog
 
 
 def rejected(operation):
     try:
         operation()
-    except (ValueError, OSError):
+    except (ValueError, OSError, IndexError):
         return
     raise AssertionError('Inconsistent history accepted')
 
@@ -39,6 +39,30 @@ with tempfile.TemporaryDirectory(prefix='mtc-local-log-test-') as temporary:
     rejected(lambda: LocalLog(directory).prove_consistency(incompatible))
     assert not verify_consistency(8, 16, bytes.fromhex(incompatible['hash']),
                                   bytes.fromhex(state16['hash']), proof)
+
+    log = LocalLog(directory)
+    subtree = log.subtree_proof(0, 4, 8)
+    assert subtree['start'] == 0
+    assert subtree['end'] == 4
+    assert subtree['tree_size'] == 8
+    assert subtree['hash'] == root(entries[:4]).hex()
+    assert verify_subtree_consistency(
+        0, 4, 8,
+        bytes.fromhex(subtree['hash']),
+        bytes.fromhex(state8['hash']),
+        [bytes.fromhex(value) for value in subtree['proof']])
+
+    subtree = log.subtree_proof(8, 12, 16)
+    assert subtree['hash'] == root(entries[8:12]).hex()
+    assert verify_subtree_consistency(
+        8, 12, 16,
+        bytes.fromhex(subtree['hash']),
+        bytes.fromhex(state16['hash']),
+        [bytes.fromhex(value) for value in subtree['proof']])
+
+    for args in [(-1, 4, 8), (0, 9, 8), (0, 4, 17), (1, 4, 8)]:
+        rejected(lambda args=args: log.subtree_proof(*args))
+
     modified = [bytes([proof[0][0]^1])+proof[0][1:]]+proof[1:]
     assert not verify_consistency(8, 16, bytes.fromhex(state8['hash']),
                                   bytes.fromhex(state16['hash']), modified)
