@@ -1,0 +1,178 @@
+"""Real MCF1/HTTP integration test for the relying-party updater."""
+
+import argparse
+from pathlib import Path
+import subprocess
+import tempfile
+import threading
+
+import prepare
+from crypto_profiles import crypto_profile
+from local_log import LocalLog
+from log_service import LogServer
+from rp_updater import fetch_and_advance_checkpoint
+from snapshots import export_snapshot
+
+
+def rejected(operation, text):
+    try:
+        operation()
+    except (ValueError, OSError):
+        return
+    raise AssertionError(text)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--openssl-prefix", type=Path, required=True)
+    parser.add_argument(
+        "--profile",
+        default="ecdsa-p256",
+        choices=["ecdsa-p256", "mldsa65"],
+    )
+    parser.add_argument("--cc", default="cc")
+    args = parser.parse_args()
+
+    prefix = args.openssl_prefix.resolve()
+    prepare.OPENSSL = str(prefix / "bin/openssl")
+
+    lib = prefix / "lib"
+    if not lib.is_dir():
+        lib = prefix / "lib64"
+
+    source = Path(__file__).resolve().parent
+    profile = crypto_profile(args.profile)
+
+    with tempfile.TemporaryDirectory(
+            prefix="mtc-rp-update-integration-") as temporary:
+        temp = Path(temporary)
+        checker = temp / "check_snapshot"
+
+        subprocess.run([
+            args.cc,
+            "-Wall", "-Wextra", "-Werror",
+            "-I" + str(prefix / "include"),
+            str(source / "check_snapshot.c"),
+            "-L" + str(lib),
+            "-Wl,-rpath," + str(lib),
+            "-lcrypto",
+            "-o", str(checker),
+        ], check=True)
+
+        def provision(label):
+            keys = [temp / f"{label}-{i}.key" for i in range(2)]
+            for key in keys:
+                prepare.keygen(key, args.profile)
+
+            public = [
+                prepare.command(
+                    "pkey", "-in", key, "-pubout", "-outform", "DER")
+                for key in keys
+            ]
+            data = prepare.authority_config(
+                profile["ca_id"],
+                profile["cosigner_ids"],
+                public,
+                16,
+            )
+            authority = temp / f"{label}-authority.bin"
+            authority.write_bytes(data)
+            return keys, authority
+
+        keys, authority = provision("trusted")
+
+        log_directory = temp / "log"
+        log = LocalLog(log_directory)
+        entries = [bytes([i]) for i in range(16)]
+
+        for entry in entries[:8]:
+            log.append(entry)
+
+        snapshot8 = temp / "snapshot-8.mcf1"
+        export_snapshot(log, snapshot8, args.profile, keys)
+
+        published = temp / "published.mcf1"
+        published.write_bytes(snapshot8.read_bytes())
+
+        server = LogServer(
+            ("127.0.0.1", 0),
+            log_directory,
+            published,
+        )
+        thread = threading.Thread(
+            target=server.serve_forever,
+            kwargs={"poll_interval": 0.01},
+        )
+        thread.start()
+
+        base_url = "http://127.0.0.1:%d/" % server.server_address[1]
+
+        try:
+            # Bootstrap is authenticated by the real native MCF1 checker.
+            state8 = fetch_and_advance_checkpoint(
+                base_url,
+                authority,
+                checker,
+            )
+            assert state8["tree_size"] == 8
+
+            # Grow the real persistent log and publish a new signed snapshot.
+            log = LocalLog(log_directory)
+            for entry in entries[8:]:
+                log.append(entry)
+
+            snapshot16 = temp / "snapshot-16.mcf1"
+            export_snapshot(log, snapshot16, args.profile, keys)
+            published.write_bytes(snapshot16.read_bytes())
+
+            # The updater authenticates N=16 and requires the real HTTP
+            # RFC 9162 consistency proof from the retained N=8 checkpoint.
+            state16 = fetch_and_advance_checkpoint(
+                base_url,
+                authority,
+                checker,
+                state8,
+            )
+            assert state16["tree_size"] == 16
+            assert state16 == log.state()
+
+            # An independently valid snapshot signed by substituted keys must
+            # not authenticate against the relying party's provisioned trust.
+            attacker_keys, attacker_authority = provision("attacker")
+            substituted = temp / "substituted.mcf1"
+            export_snapshot(log, substituted, args.profile, attacker_keys)
+
+            published.write_bytes(substituted.read_bytes())
+
+            rejected(
+                lambda: fetch_and_advance_checkpoint(
+                    base_url,
+                    authority,
+                    checker,
+                    state16,
+                ),
+                "substituted signer keys accepted",
+            )
+
+            # Sanity check: the same object is valid only under the separately
+            # provisioned attacker authority.
+            attacker_state = fetch_and_advance_checkpoint(
+                base_url,
+                attacker_authority,
+                checker,
+            )
+            assert attacker_state == state16
+
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
+    print(
+        "PASS: real MCF1 HTTP checkpoint authentication and "
+        "RFC9162 RP evolution"
+    )
+
+
+if __name__ == "__main__":
+    main()
