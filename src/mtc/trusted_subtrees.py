@@ -7,7 +7,7 @@ policy enforcement remain the caller's responsibility.
 
 from dataclasses import dataclass
 
-from core import root, subtree_consistency, verify_subtree_consistency
+from core import root, subtree_consistency, verify_subtree_consistency, valid_subtree
 from landmarks import active, subtrees, validate_sequence
 
 
@@ -177,35 +177,87 @@ def validate_trusted_subtrees(
 
 MTS_MAGIC = b"MTS1"
 MAX_TRUSTED_SUBTREES = 64
+MTS_ENTRY_BYTES = 46
+
+
+def _validate_trusted_subtree(subtree, seen):
+    if not isinstance(subtree, TrustedSubtree):
+        raise ValueError("trusted subtree")
+
+    if type(subtree.log_number) is not int or not 1 <= subtree.log_number <= 0xffff:
+        raise ValueError("log number")
+
+    if (type(subtree.start) is not int
+            or type(subtree.end) is not int
+            or not 0 <= subtree.start < 1 << 48
+            or not 0 <= subtree.end < 1 << 48
+            or not valid_subtree(subtree.start, subtree.end)):
+        raise ValueError("subtree interval")
+
+    if not isinstance(subtree.hash, bytes) or len(subtree.hash) != 32:
+        raise ValueError("subtree hash")
+
+    key = (subtree.log_number, subtree.start, subtree.end)
+    if key in seen:
+        raise ValueError("duplicate trusted subtree")
+    seen.add(key)
+
 
 def encode_trusted_subtrees(subtrees):
+    if not isinstance(subtrees, (list, tuple)):
+        raise ValueError("trusted subtrees")
+
     if len(subtrees) > MAX_TRUSTED_SUBTREES:
         raise ValueError("too many trusted subtrees")
+
+    seen = set()
     out = bytearray(MTS_MAGIC)
     out.extend(len(subtrees).to_bytes(2, "big"))
+
     for subtree in subtrees:
+        _validate_trusted_subtree(subtree, seen)
         out.extend(subtree.log_number.to_bytes(2, "big"))
         out.extend(subtree.start.to_bytes(6, "big"))
         out.extend(subtree.end.to_bytes(6, "big"))
         out.extend(subtree.hash)
+
     return bytes(out)
 
+
 def decode_trusted_subtrees(data):
+    if not isinstance(data, bytes):
+        raise ValueError("MTS1 data")
+
     if len(data) < 6 or data[:4] != MTS_MAGIC:
         raise ValueError("invalid MTS1")
+
     count = int.from_bytes(data[4:6], "big")
-    if len(data) != 6 + count * 46:
+
+    if count > MAX_TRUSTED_SUBTREES:
+        raise ValueError("too many trusted subtrees")
+
+    if len(data) != 6 + count * MTS_ENTRY_BYTES:
         raise ValueError("length")
+
     result = []
+    seen = set()
     offset = 6
+
     for _ in range(count):
-        log = int.from_bytes(data[offset:offset+2], "big")
+        log = int.from_bytes(data[offset:offset + 2], "big")
         offset += 2
-        start = int.from_bytes(data[offset:offset+6], "big")
+
+        start = int.from_bytes(data[offset:offset + 6], "big")
         offset += 6
-        end = int.from_bytes(data[offset:offset+6], "big")
+
+        end = int.from_bytes(data[offset:offset + 6], "big")
         offset += 6
-        h = data[offset:offset+32]
+
+        h = data[offset:offset + 32]
         offset += 32
-        result.append(TrustedSubtree(log, start, end, h))
+
+        subtree = TrustedSubtree(log, start, end, h)
+        _validate_trusted_subtree(subtree, seen)
+        result.append(subtree)
+
     return result
