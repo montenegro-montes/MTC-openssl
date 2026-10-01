@@ -20,8 +20,13 @@ class ServiceTests(unittest.TestCase):
         self.published = Path(self.published_temp.name)
         self.start()
 
-    def start(self, snapshot=None):
-        self.server = LogServer(('127.0.0.1', 0), self.directory, snapshot)
+    def start(self, snapshot=None, read_only=False):
+        self.server = LogServer(
+            ('127.0.0.1', 0),
+            self.directory,
+            snapshot,
+            read_only=read_only,
+        )
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={'poll_interval': 0.01})
         self.thread.start()
 
@@ -188,6 +193,30 @@ class ServiceTests(unittest.TestCase):
         link.symlink_to(target)
         with self.assertRaises(ValueError):
             LogServer(('127.0.0.1', 0), self.directory, link)
+
+    def test_read_only_rejects_append_but_preserves_reads(self):
+        self.stop()
+
+        # Seed the log while append access is still enabled.
+        writable = LogServer(('127.0.0.1', 0), self.directory)
+        writable.log.append(b'network-visible-entry')
+        writable.server_close()
+
+        self.start(read_only=True)
+
+        status, body = self.request('POST', '/entries', b'blocked')
+        self.assertEqual(status, 405)
+        self.assertEqual(body, {'error': 'Read-only service'})
+
+        status, checkpoint = self.request('GET', '/checkpoint')
+        self.assertEqual(status, 200)
+        self.assertEqual(checkpoint['tree_size'], 1)
+
+        status, entry = self.request('GET', '/entries/0')
+        self.assertEqual(status, 200)
+        self.assertEqual(entry, b'network-visible-entry')
+
+        self.assertFalse((self.directory / 'log/000001.entry').exists())
 
     def test_tampered_storage(self):
         self.request('POST', '/entries', b'original')

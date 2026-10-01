@@ -18,9 +18,12 @@ def number(text):
 
 
 class LogServer(HTTPServer):
-    def __init__(self, address, directory, snapshot=None):
+    def __init__(self, address, directory, snapshot=None, read_only=False):
         self.log = LocalLog(directory)
         self.snapshot = None if snapshot is None else Path(snapshot)
+        if type(read_only) is not bool:
+            raise ValueError('read_only must be boolean')
+        self.read_only = read_only
         if self.snapshot is not None:
             if self.snapshot.is_symlink() or not self.snapshot.is_file():
                 raise ValueError('Snapshot must be a regular file')
@@ -88,6 +91,8 @@ class LogHandler(BaseHTTPRequestHandler):
             if post:
                 if path != '/entries':
                     self.reply(404, {'error': 'Unknown endpoint'}); return
+                if self.server.read_only:
+                    self.reply(405, {'error': 'Read-only service'}); return
                 if query:raise ValueError('Unexpected query parameters')
                 lengths = self.headers.get_all('Content-Length', [])
                 if self.headers.get('Transfer-Encoding'):raise ValueError('Transfer-Encoding is unsupported')
@@ -189,8 +194,17 @@ def main():
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--snapshot')
+    parser.add_argument(
+        '--read-only',
+        action='store_true',
+        help='disable network append operations',
+    )
     args = parser.parse_args()
-    with LogServer((args.host, args.port), args.data, args.snapshot) as server:
+    with LogServer(
+            (args.host, args.port),
+            args.data,
+            args.snapshot,
+            read_only=args.read_only) as server:
         try:server.serve_forever()
         except KeyboardInterrupt:pass
 
