@@ -16,7 +16,7 @@ def key(profile, output):
     run(*args, "-out", output)
 def sign_args(profile): return (["-" + profile["digest"]] if profile.get("digest") else [])
 def main():
-    p=argparse.ArgumentParser(); p.add_argument("--output",type=Path,required=True);p.add_argument("--profile",choices=PROFILES,required=True);p.add_argument("--depth",type=int,choices=range(2,6),required=True);p.add_argument("--days",type=int,default=30);a=p.parse_args()
+    p=argparse.ArgumentParser(); p.add_argument("--output",type=Path,required=True);p.add_argument("--profile",choices=PROFILES,required=True);p.add_argument("--depth",type=int,choices=range(2,6),required=True);p.add_argument("--days",type=int,default=30);p.add_argument("--role",choices=("server","client"),default="server");a=p.parse_args()
     if a.output.exists():p.error("Output exists; fixture directories are immutable")
     if a.days<1:p.error("--days must be positive")
     os.umask(0o077);a.output.mkdir(parents=True);profile=PROFILES[a.profile];serial=1
@@ -29,7 +29,7 @@ def main():
         ext.write_text("basicConstraints=critical,CA:TRUE,pathlen:"+str(a.depth-index-2)+"\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n")
         run("x509","-req","-in",csr,"-CA",issuer_cert,"-CAkey",issuer_key,"-set_serial",serial,"-days",a.days,"-extfile",ext,"-out",cert,*sign_args(profile));intermediates.append(cert);issuer_cert,issuer_key=cert,k
     serial+=1;server_key=a.output/"server.key";csr=a.output/"server.csr";server=a.output/"server.pem";ext=a.output/"server.cnf";key(profile,server_key)
-    run("req","-new","-key",server_key,"-out",csr,"-subj","/CN=server",*sign_args(profile));ext.write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:server,DNS:localhost,IP:127.0.0.1\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n")
+    run("req","-new","-key",server_key,"-out",csr,"-subj","/CN=server",*sign_args(profile));ext.write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage="+("clientAuth" if a.role=="client" else "serverAuth")+"\nsubjectAltName=DNS:server,DNS:localhost,IP:127.0.0.1\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n")
     run("x509","-req","-in",csr,"-CA",issuer_cert,"-CAkey",issuer_key,"-set_serial",serial,"-days",a.days,"-extfile",ext,"-out",server,*sign_args(profile))
     chain=[server]+list(reversed(intermediates));(a.output/"server-chain.pem").write_bytes(b"".join(x.read_bytes() for x in chain))
     named_certs=[("root",root),*( (f"intermediate-{i+1}",x) for i,x in enumerate(intermediates)),("server",server)]
@@ -39,7 +39,7 @@ def main():
         run("pkey","-in",path,"-outform","DER","-out",a.output/(name+"-private.der"))
         run("pkey","-in",path,"-pubout","-outform","DER","-out",a.output/(name+"-spki.der"))
     untrusted=a.output/"intermediates.pem";untrusted.write_bytes(b"".join(x.read_bytes() for x in reversed(intermediates)))
-    args=["verify","-CAfile",root,"-verify_hostname","server"];args += (["-untrusted",untrusted] if intermediates else []);run(*args,server)
+    args=["verify","-CAfile",root,"-verify_hostname","server","-purpose","sslclient" if a.role=="client" else "sslserver"];args += (["-untrusted",untrusted] if intermediates else []);run(*args,server)
     for csr_file in a.output.glob("*.csr"):csr_file.unlink()
     for cnf_file in a.output.glob("*.cnf"):cnf_file.unlink()
     certificate_checks={}
@@ -50,5 +50,6 @@ def main():
         certificate_checks[name]={"signature_algorithms":algorithms,"spki_sha256":hashlib.sha256(cert_spki).hexdigest(),"key_matches_certificate":cert_spki==(a.output/f"{name}-spki.der").read_bytes()}
     files={x.name:hash_file(x) for x in sorted(a.output.iterdir()) if x.is_file()}
     meta={"schema":2,"image_id":os.environ.get("FIXTURE_IMAGE_ID"),"source_commit":os.environ.get("FIXTURE_SOURCE_COMMIT"),"generator_sha256":hash_file(Path(__file__)),"config_sha256":hash_file(Path(__file__).with_name("config.py")),"profile":a.profile,"security_level":profile["level"],"family":profile["family"],"requested_algorithm":profile["algorithm"],"curve":profile.get("curve"),"digest":profile.get("digest"),"depth_including_root":a.depth,"transmitted_certificates":len(chain),"root_transmitted":False,"validity_days":a.days,"openssl":run("version","-a"),"certificate_checks":certificate_checks,"files_sha256":files}
+    if a.role=="client":meta["role"]="client"
     (a.output/"manifest.json").write_text(json.dumps(meta,indent=2)+"\n")
 if __name__=="__main__":main()

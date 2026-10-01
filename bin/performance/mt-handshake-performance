@@ -43,9 +43,11 @@ Usage:
 CONFIG defaults to .mt-state/handshake-performance.env. When OUTPUT is omitted,
 a new timestamped directory is selected below artifacts/results/. Nothing is
 executed by init or plan.
+MTC_ROOT/MTC_VALIDATION may both be empty: reuse the newest valid paired N=16/X25519
+generation, or generate/validate one at run time. Set both paths to pin an override.
 X509_DEPTH defaults to 2 (including the local root; 1 certificate transmitted).
-D=3..5/all require existing X509_CHAIN_FIXTURES (or active CHAIN_FIXTURES).
-Only single authentication supports D>2. Mutual remains D=2 on both sides.
+D=3..5/all resolve or prepare chains lazily. X509_CHAIN_FIXTURES pins server chains.
+Mutual X.509 uses depth D on both sides; MTC remains N=16.
 EOF
 }
 
@@ -122,49 +124,127 @@ depth_plan() {
     printf 'X.509 trust-path depth D=%s (local root included): %s certificate(s) transmitted; root not transmitted\n' "$depth" "$((depth-1))"
     printf '  Scenario: x509-simple-d%s; output: %s\n' "$depth" "$(depth_output "$1" "$depth")"
   done
-  [[ "$X509_DEPTH" == 2 ]] || printf 'Mutual/all-authentication execution: BLOCKED (client fixtures support only D=2). MTC credentials remain unchanged.\n'
+  printf 'Mutual: D includes root on BOTH server and client; MTC credentials remain unchanged.\n'
 }
 
-check_depth_mode() {
-  [[ "$X509_DEPTH" != 2 ]] || return 0
-  case "$command" in
-    run-native-single|run-pcap-single|run-single) ;;
-    *) fail 'D=3..5/all supports single authentication only; mutual client fixtures are D=2. No dependencies started.';;
-  esac
+# Dependency resolution is shared by Native/PCAP: never prepare twice for both.
+needs_mutual() {
+  [[ " ${ACTIVE_CASES[*]} " == *mtc-mutual-* ]]
 }
 
-validate_depth_fixtures() {
-  [[ "$X509_DEPTH" != 2 ]] || return 0
-  if [[ -z "${X509_CHAIN_FIXTURES:-}" && -f "$REPO/.mt-state/cert-scaling/paths.env" ]]; then
-    X509_CHAIN_FIXTURES=$(sed -n 's/^CHAIN_FIXTURES=//p' "$REPO/.mt-state/cert-scaling/paths.env")
+resolve_mutual_inputs() {
+  local mode=$1 candidate stamp
+  if [[ -n "${MUTUAL_CLIENT_ROOT:-}" ]]; then
+    (validate_mutual_fixtures) || fail 'Explicit mutual fixture override invalid; preserved. No measurements started.'
+    echo "Mutual clients: FOUND ($MUTUAL_CLIENT_ROOT)"
+    return
   fi
-  [[ "${X509_CHAIN_FIXTURES:-}" == artifacts/* ]] || fail "Missing chain root: profile=${PROFILES[0]}, D=${X509_DEPTHS[0]}, expected <CHAIN_FIXTURES>/${PROFILES[0]}/depth-${X509_DEPTHS[0]}. Run bin/base/mt-prepare run ALL and configure X509_CHAIN_FIXTURES below artifacts/."
-  python3 -B - "$REPO" "$X509_CHAIN_FIXTURES" "${X509_DEPTHS[*]}" "${PROFILES[*]}" <<'PYDEPTH'
-import json, re, sys
+  while IFS= read -r candidate; do
+    MUTUAL_CLIENT_ROOT=$candidate
+    if (validate_mutual_fixtures) >/dev/null 2>&1; then
+      echo "Mutual clients: FOUND ($MUTUAL_CLIENT_ROOT)"
+      return
+    fi
+  done < <(python3 - "$REPO" <<'PYM'
 from pathlib import Path
-repo=Path(sys.argv[1]); root=(repo/sys.argv[2]).resolve()
-if not root.is_relative_to((repo/'artifacts').resolve()): raise SystemExit('Chain fixtures must remain below artifacts/')
-sys.path.insert(0,str(repo/'campaigns/scaling/cert_chain_scaling'))
-from result_state import validate_fixture
-for depth in map(int,sys.argv[3].split()):
- if depth==2: continue  # Preserve original population credentials, including in All.
- for profile in sys.argv[4].split():
-  directory=root/profile/f'depth-{depth}'
-  try:
-   validate_fixture(directory,profile,depth)
-   meta=json.loads((directory/'manifest.json').read_text())
-   names=['root.pem','server.pem','server.key','intermediates.pem','server-chain.pem']
-   if not all(n in meta['files_sha256'] for n in names): raise ValueError('Incomplete fixture hashes: '+str(directory))
-   def certs(name): return re.findall(rb'-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----', (directory/name).read_bytes(),re.S)
-   root_certs,leaf,intermediates,chain=[certs(n) for n in ('root.pem','server.pem','intermediates.pem','server-chain.pem')]
-   if not (len(root_certs)==len(leaf)==1 and len(intermediates)==depth-2 and chain==leaf+intermediates and root_certs[0] not in chain
-           and meta['transmitted_certificates']==depth-1 and meta['root_transmitted'] is False):
-    raise ValueError('Invalid depth/transmitted chain: '+str(directory))
-  except Exception as error:
-   raise SystemExit(f'ERROR: Chain fixture profile={profile}, D={depth}, expected {directory}: {error}. Run bin/base/mt-prepare run ALL. Existing invalid fixtures are preserved for inspection.')
-print('PASS existing chain fixture hashes/counts; TLS execution NOT CHECKED')
-PYDEPTH
+import sys
+repo=Path(sys.argv[1])
+for p in sorted((repo/'artifacts/validation').glob('*/manifest.json'),reverse=True):
+ print(p.parent.relative_to(repo))
+PYM
+  )
+  MUTUAL_CLIENT_ROOT=
+  echo 'Mutual clients: MISSING (run prepares matching nine-profile clients)'
+  [[ "$mode" == run ]] || return 0
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)-$$
+  MUTUAL_CLIENT_ROOT="artifacts/validation/handshake-performance-mutual-$stamp"
+  python3 "$REPO/campaigns/validation/protocol_validation/mutual_authentication/generate_fixtures.py" \
+    --performance-clients --image "$IMAGE" --output "$REPO/$MUTUAL_CLIENT_ROOT" --execute \
+    || fail 'Dependency preparation failed: mutual clients. No measurements started.'
+  (validate_mutual_fixtures) || fail 'Dependency validation failed: mutual clients. No measurements started.'
 }
+
+chain_path() {
+  local profile depth role path
+  while IFS='|' read -r profile depth role path; do
+    if [[ "$profile|$depth|$role" == "$1|$2|$3" ]]; then printf '%s\n' "$path"; return; fi
+  done <<< "$CHAIN_BINDINGS"
+  fail "Missing resolved chain: $1 D=$2 $3"
+}
+
+resolve_dependencies() {
+  local mode=${1:-inspect} chain_args=()
+  printf 'Resolving dependencies: KEM=%s, depths=%s\n' "$KEM_GROUP" "${X509_DEPTHS[*]}"
+  if [[ "$mode" == run ]]; then
+    preflight_mtc_generation
+    case "$command" in
+      run-pcap*|run-native-pcap|run-single|run-mutual)
+        docker image inspect "$CAPTURE_IMAGE" >/dev/null 2>&1 \
+          || fail "Capture image missing: $CAPTURE_IMAGE. Run bin/base/mt-prepare rebuild 3. No measurements started.";;
+    esac
+  fi
+  resolve_mtc_inputs "$mode"
+  if [[ "$command" != run-retry ]]; then
+    if needs_mutual; then
+      resolve_mutual_inputs "$mode"
+      chain_args+=(--mutual)
+    fi
+    [[ -z "${X509_CHAIN_FIXTURES:-}" ]] || chain_args+=(--preferred "$X509_CHAIN_FIXTURES")
+    [[ "$mode" != run ]] || chain_args+=(--execute)
+    CHAIN_BINDINGS=$(python3 -B "$REPO/bin/performance/handshake_dependencies.py" \
+      --profile "${PROFILES[@]}" --depth "${X509_DEPTHS[@]}" --image "$IMAGE" "${chain_args[@]}") \
+      || fail 'Dependency preparation failed: X.509 chains. No measurements started.'
+  fi
+}
+
+show_dependencies() (
+  load_config "$1"
+  configure_depth "${X509_DEPTH:-2}"
+  resolve_dependencies inspect
+  echo 'Functional readiness for the selected KEM/cases is checked only on run; no generation in status/plan.'
+)
+
+validate_selected_dependencies() (
+  # Separate, unmeasured functional gate: same commands as measurements, with
+  # the selected group. Existing X25519 MTC reports are NOT hybrid evidence.
+  local profile case_name log server_log depth stamp output
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)-$$
+  output="$REPO/artifacts/results/handshake-dependencies-$stamp"
+  mkdir -p "$output" || fail 'Cannot create dependency validation output.'
+  trap cleanup EXIT
+  docker network create "$NETWORK" >/dev/null || fail 'Cannot create dependency validation network. No measurements started.'
+  for depth in "${X509_DEPTHS[@]}"; do
+    CURRENT_X509_DEPTH=$depth
+    for profile in "${PROFILES[@]}"; do
+      for case_name in "${ACTIVE_CASES[@]}"; do
+        # MTC credentials do not vary with X.509 depth.
+        [[ "$case_name" == x509-* || "$depth" == "${X509_DEPTHS[0]}" ]] || continue
+        log="$output/$profile-$case_name-d$depth.log"
+        server_log="$output/$profile-$case_name-d$depth-server.log"
+        printf '  VALIDATING %s %s D=%s %s...\n' "$profile" "$case_name" "$depth" "$KEM_GROUP"
+        start_server "$profile" "$case_name"
+        printf 'GET / HTTP/1.0\r\n\r\n' | client_command -ign_eof >"$log" 2>&1 \
+          || fail "Dependency validation failed: $profile $case_name D=$depth. Inspect $log. No measurements started."
+        docker logs "$SERVER" >"$server_log" 2>&1
+        grep -q 'Verify return code: 0 (ok)' "$log" &&
+          grep -q 'New, TLSv1.3, Cipher is TLS_AES_256_GCM_SHA384' "$log" &&
+          grep -q 'HTTP/1.0 200' "$log" \
+          || fail "Dependency TLS gate failed: $log. No measurements started."
+        if [[ "$case_name" == mtc-* ]]; then
+          grep -q 'MTC verification: OK' "$log" || fail "MTC authentication missing: $log. No measurements started."
+        fi
+        if [[ "$case_name" == *-mutual* ]]; then
+          grep -q 'read client certificate' "$server_log" && grep -q 'read certificate verify' "$server_log" && grep -q 'read finished' "$server_log" \
+            || fail "Mutual authentication missing: $server_log. No measurements started."
+        fi
+        printf '  PASS %s %s D=%s %s\n' "$profile" "$case_name" "$depth" "$KEM_GROUP"
+      done
+    done
+  done
+  printf '{"passed":true,"openssl_group":"%s","depths":"%s","cases":"%s","mtc_root":"%s","mutual_root":"%s"}\n' \
+    "$KEM_GROUP" "${X509_DEPTHS[*]}" "${ACTIVE_CASES[*]}" "$MTC_ROOT" "${MUTUAL_CLIENT_ROOT:-}" > "$output/validation.json"
+  printf '%s\n' "$CHAIN_BINDINGS" > "$output/chains.txt"
+)
 
 default_performance_output() {
   printf 'artifacts/results/handshake-performance-%s-%s-%s\n' "$KEM_SLUG" "$(date -u +%Y%m%dT%H%M%SZ)" "$$"
@@ -179,13 +259,13 @@ config_template() {
 # Paths are relative to the repository and must remain below artifacts/.
 KEM=x25519
 X509_DEPTH=2
-# Optional existing cert_chain_scaling fixture root; empty uses active CHAIN_FIXTURES.
+# Optional server-chain root override; empty discovers compatible existing cells.
 X509_CHAIN_FIXTURES=
 RUNS=30
 WARMUPS=5
 PCAP_RUNS=30
 
-# Explicit validated N=16 fixture inputs.
+# Optional reproducible override: set both, or leave both empty for automatic resolution.
 MTC_ROOT=
 MTC_VALIDATION=
 MUTUAL_CLIENT_ROOT=
@@ -200,7 +280,7 @@ create_configuration() {
   mkdir -p "$(dirname "$config")"
   config_template | sed -e "s/^KEM=x25519$/KEM=$KEM/" -e "s/^X509_DEPTH=2$/X509_DEPTH=$X509_DEPTH/" > "$config"
   select_active_config "$config"
-  echo "Created $config with key establishment $KEM_LABEL ($KEM_GROUP). A run will replace placeholders from existing validated fixtures; prepare them first with bin/base/mt-prepare run ALL."
+  echo "Created $config with key establishment $KEM_LABEL ($KEM_GROUP). A run resolves or prepares and validates the required dependencies lazily before measurements start."
 }
 
 load_config() {
@@ -221,6 +301,10 @@ load_config() {
     || fail 'RUNS/WARMUPS/PCAP_RUNS must be integers.'
 
   configure_kem "${KEM:-x25519}"
+}
+
+# Shared integrity gate for explicit overrides, discovered pairs and new outputs.
+validate_mtc_inputs() (
 
   [[ "${MTC_ROOT:-}" == artifacts/* ]] \
     || fail 'MTC_ROOT must be an explicit path below artifacts/.'
@@ -289,7 +373,123 @@ print(
     f"Validated MTC fixture binding: {len(fixture_hashes)} SHA-256 hashes match."
 )
 PYVALID
+)
+
+preflight_mtc_generation() {
+  [[ ${DEPENDENCY_DOCKER_READY:-0} == 0 ]] || return 0
+  local reason rebuild='bin/base/mt-prepare rebuild 2'
+  command -v docker >/dev/null 2>&1 \
+    || fail 'Docker command not found. No dependencies or measurements started.'
+  docker info >/dev/null 2>&1 \
+    || fail 'Docker daemon is not running or is not accessible. Start Docker and retry.'
+  docker image inspect "$IMAGE" >/dev/null 2>&1 \
+    || fail "MTC Docker image is missing: $IMAGE. Run: $rebuild (builds mt-tls-mtc:local)."
+  # Invoke the authoritative check, without entering generation/validation or
+  # maintaining a second list of image-controlled source files in this driver.
+  if ! reason=$(docker run --rm --network none --read-only \
+      -v "$REPO:/repo:ro" --entrypoint python3 "$IMAGE" -B -c '
+import sys
+sys.path.insert(0, "/repo/campaigns/scaling/mtc_profile_scaling")
+from workflow import require_current_mtc_image
+try:
+    require_current_mtc_image()
+except (ValueError, OSError) as error:
+    print(str(error), file=sys.stderr)
+    sys.exit(1)
+' 2>&1); then
+    fail "MTC image preflight failed for $IMAGE. Reason: $reason. Run: $rebuild (builds mt-tls-mtc:local)."
+  fi
+  DEPENDENCY_DOCKER_READY=1
 }
+
+resolve_mtc_inputs() {
+  local mode=${1:-inspect} candidates candidate_root candidate_validation stamp workflow
+  if [[ -n "${MTC_ROOT:-}" || -n "${MTC_VALIDATION:-}" ]]; then
+    [[ -n "${MTC_ROOT:-}" && -n "${MTC_VALIDATION:-}" ]] \
+      || fail 'Set both MTC_ROOT and MTC_VALIDATION, or leave both empty for automatic resolution.'
+    validate_mtc_inputs || fail 'Explicit MTC fixture override failed validation; no automatic fallback.'
+    return
+  fi
+  candidates=$(python3 - "$REPO" "${PROFILES[@]}" <<'PYPAIRS'
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+repo = Path(sys.argv[1])
+pairs = []
+for root in (repo/'artifacts/mtc').glob('n16-*'):
+    # Credential bytes are KEM-independent; historical path labels are not
+    # negotiated-group evidence. The selected-group gate runs separately.
+    stamp = None
+    for prefix in ('n16-x25519-', 'n16-x25519-mlkem512-', 'n16-x25519_mlkem512-', 'n16-mlkem512-'):
+        if root.name.startswith(prefix):
+            candidate = root.name[len(prefix):]
+            if candidate[:4].isdigit():
+                stamp = candidate
+                break
+    if stamp is None:
+        continue
+    validation = repo/'artifacts/results'/('mtc-'+root.name)/'validation.json'
+    if not (root/'manifest.json').is_file() or not validation.is_file():
+        continue
+    try:
+        date = datetime.strptime(stamp, '%Y%m%dT%H%M%SZ')
+    except ValueError:
+        try:
+            date = datetime.strptime(stamp, '%Y%m%dT%H%M%S.%fZ')
+        except ValueError:
+            continue
+    try:
+        manifest = json.loads((root/'manifest.json').read_text())
+        if 16 not in manifest.get('sizes', []) or not set(sys.argv[2:]) <= set(manifest.get('profiles', [])):
+            continue
+    except (OSError, ValueError, TypeError, AttributeError):
+        continue
+    pairs.append((date, root.relative_to(repo), validation.relative_to(repo)))
+for _, root, validation in sorted(pairs, reverse=True):
+    print(str(root)+'|'+str(validation))
+PYPAIRS
+  ) || fail 'Unable to discover existing N=16/X25519 fixture pairs.'
+  while IFS='|' read -r candidate_root candidate_validation; do
+    [[ -n "$candidate_root" ]] || continue
+    MTC_ROOT=$candidate_root MTC_VALIDATION=$candidate_validation
+    if validate_mtc_inputs >/dev/null 2>&1; then
+      printf 'MTC inputs: AUTO READY (%s; %s)\n' "$MTC_ROOT" "$MTC_VALIDATION"
+      return
+    fi
+    printf 'Skipping invalid MTC fixture pair: %s\n' "$candidate_root" >&2
+  done <<< "$candidates"
+  MTC_ROOT= MTC_VALIDATION=
+  if [[ "$mode" != run ]]; then
+    echo 'MTC inputs: AUTO PENDING (run will generate and functionally validate N=16/X25519).'
+    return
+  fi
+  preflight_mtc_generation
+  stamp=$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ"))')
+  MTC_ROOT="artifacts/mtc/n16-x25519-$stamp"
+  MTC_VALIDATION="artifacts/results/mtc-n16-x25519-$stamp/validation.json"
+  workflow="$REPO/campaigns/scaling/mtc_profile_scaling/workflow.py"
+  [[ ! -e "$REPO/$MTC_ROOT" && ! -e "$REPO/${MTC_VALIDATION%/*}" ]] \
+    || fail 'New MTC dependency paths already exist; preserving them.'
+  printf 'Preparing N=16/X25519 dependencies: %s\n' "$MTC_ROOT"
+  python3 "$workflow" generate --sizes 16 --image "$IMAGE" --output "$REPO/$MTC_ROOT" --execute \
+    || fail "Unable to generate N=16/X25519 dependency: $MTC_ROOT. Partial outputs preserved; no measurements started."
+  printf 'Validating N=16/X25519 dependencies...\n'
+  python3 "$workflow" validate --fixtures "$REPO/$MTC_ROOT" --image "$IMAGE" --output "$REPO/${MTC_VALIDATION%/*}" --execute \
+    || fail "Functional validation failed for N=16/X25519: $MTC_VALIDATION. Outputs preserved; no measurements started."
+  validate_mtc_inputs || fail 'Generated MTC dependencies failed the integrity/PASS gate; no measurements started.'
+  printf 'Validation PASS\nMTC dependencies ready:\n  MTC_ROOT=%s\n  MTC_VALIDATION=%s\n' "$MTC_ROOT" "$MTC_VALIDATION"
+}
+
+show_mtc_inputs() (
+  local MTC_ROOT MTC_VALIDATION
+  MTC_ROOT=$(sed -nE 's/^MTC_ROOT=//p' "$1" | tail -1)
+  MTC_VALIDATION=$(sed -nE 's/^MTC_VALIDATION=//p' "$1" | tail -1)
+  resolve_mtc_inputs inspect
+  if [[ -n "$MTC_ROOT" ]]; then
+    printf 'Server fixtures: READY (%s)\nMTC functional validation: READY (%s)\n' "$MTC_ROOT" "$MTC_VALIDATION"
+  fi
+)
 
 load_plan_counts() {
   local file=$1 name value
@@ -329,11 +529,11 @@ load_fixture_paths() {
 }
 
 ensure_dependencies() {
-  [[ -f "$REPO/.mt-state/cert-scaling/paths.env" ]] \
-    || fail 'Missing certificate-scaling configuration required by Trust Anchor Retry.'
-  load_fixture_paths
-  [[ -f "$MTC16/manifest.json" && -f "$MTC_VALID/validation.json" ]] \
-    || fail 'Missing N=16 fixtures/validation required by Trust Anchor Retry.'
+  resolve_dependencies run
+  MTC16=$MTC_ROOT
+  MTC_VALID=${MTC_VALIDATION%/*}
+  (ACTIVE_CASES=(mtc-simple-landmark); X509_DEPTHS=(2); validate_selected_dependencies)     || fail 'Retry dependency validation failed. No measurements started.'
+  echo 'ALL REQUIRED DEPENDENCIES READY'
 }
 
 ensure_kem_supported() {
@@ -366,7 +566,7 @@ validate_mutual_fixtures() {
   [[ -f "$REPO/$MUTUAL_CLIENT_ROOT/manifest.json" ]] \
     || fail "Missing mutual fixture manifest: $MUTUAL_CLIENT_ROOT/manifest.json"
 
-  python3 - "$REPO/$MUTUAL_CLIENT_ROOT" <<'PYMUTUAL'
+  python3 - "$REPO/$MUTUAL_CLIENT_ROOT" <<'PYMUTUAL' || return
 import hashlib
 import json
 import sys
@@ -484,7 +684,8 @@ case_args() {
       server_args=(-cert "$(inside "$population/0.pem")" -key "$(inside "$population/0.key")")
       client_args=(-CAfile "$(inside "$population/ca.pem")" -verify_hostname server)
       if [[ "${CURRENT_X509_DEPTH:-2}" != 2 ]]; then
-        local chain="$X509_CHAIN_FIXTURES/$profile/depth-$CURRENT_X509_DEPTH"
+        local chain
+        chain=$(chain_path "$profile" "$CURRENT_X509_DEPTH" server)
         server_args=(-cert "$(inside "$chain/server.pem")" -key "$(inside "$chain/server.key")" -cert_chain "$(inside "$chain/intermediates.pem")")
         client_args=(-CAfile "$(inside "$chain/root.pem")" -verify_hostname server)
       fi
@@ -510,9 +711,15 @@ case_args() {
 
       case "$case_name" in
         x509-mutual)
-          [[ "${CURRENT_X509_DEPTH:-2}" == 2 ]] || fail 'Mutual X.509 supports D=2 only.'
           server_args=(-cert "$(inside "$population/0.pem")" -key "$(inside "$population/0.key")" -CAfile "$(inside "$client/x509/client-ca.pem")" -Verify 1 -verify_return_error)
           client_args=(-CAfile "$(inside "$population/ca.pem")" -verify_hostname server -cert "$(inside "$client/x509/client.pem")" -key "$(inside "$client/x509/client.key")")
+          if [[ "${CURRENT_X509_DEPTH:-2}" != 2 ]]; then
+            local chain client_chain
+            chain=$(chain_path "$profile" "$CURRENT_X509_DEPTH" server)
+            client_chain=$(chain_path "$profile" "$CURRENT_X509_DEPTH" client)
+            server_args=(-cert "$(inside "$chain/server.pem")" -key "$(inside "$chain/server.key")" -cert_chain "$(inside "$chain/intermediates.pem")" -CAfile "$(inside "$client_chain/root.pem")" -Verify "$((CURRENT_X509_DEPTH-2))" -verify_return_error)
+            client_args=(-CAfile "$(inside "$chain/root.pem")" -verify_hostname server -cert "$(inside "$client_chain/server.pem")" -key "$(inside "$client_chain/server.key")" -cert_chain "$(inside "$client_chain/intermediates.pem")")
+          fi
           ;;
         mtc-mutual-landmark)
           server_args=(-cert "$(inside "$mtc/landmark-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id.1.1.1" -mtc_client_trust "$(inside "$client_mtc/trust.bin")" -mtc_landmark -Verify 1 -verify_return_error)
@@ -548,7 +755,7 @@ start_server() {
 client_command() {
   docker run --rm -i --network "$NETWORK" -v "$REPO/artifacts:/work:ro" \
     --entrypoint /opt/mtc/openssl.sh "$IMAGE" s_client -connect "$SERVER:4433" -servername server \
-    "${client_args[@]}" "${common[@]}" -no_ticket -verify_return_error -lab_metrics
+    "${client_args[@]}" "${common[@]}" -no_ticket -verify_return_error -lab_metrics "$@"
 }
 
 prepare_run() {
@@ -698,14 +905,48 @@ measure_pcap() {
 
 write_summary() {
   local output=$1
-  python3 - "$output" "$KEM" "$KEM_LABEL" "$KEM_GROUP" "$CURRENT_X509_DEPTH" "${X509_CHAIN_FIXTURES:-}" <<'PY'
-import csv,json,math,statistics,sys
+  CHAIN_BINDINGS="${CHAIN_BINDINGS:-}" python3 - "$output" "$KEM" "$KEM_LABEL" "$KEM_GROUP" "$CURRENT_X509_DEPTH" "${X509_CHAIN_FIXTURES:-}" <<'PY'
+import csv,json,math,os,statistics,sys
 from pathlib import Path
+
+depth=int(sys.argv[5])
+override=sys.argv[6]
+bindings=[]
+for line in os.environ.get('CHAIN_BINDINGS','').splitlines():
+ parts=line.split('|',3)
+ if len(parts)==4:
+  profile,binding_depth,role,path=parts
+  if binding_depth==str(depth):
+   bindings.append({
+    'profile':profile,
+    'depth_including_root':int(binding_depth),
+    'role':role,
+    'path':path,
+   })
+
+if depth <= 2:
+ fixture_provenance={
+  'source':'baseline',
+  'description':'original MTC population X.509 baseline',
+ }
+elif bindings:
+ fixture_provenance={
+  'source':'override' if override else 'resolved',
+  'configured_override':override or None,
+  'bindings':bindings,
+ }
+else:
+ fixture_provenance={
+  'source':'override' if override else 'unresolved',
+  'configured_override':override or None,
+  'bindings':[],
+ }
+
 root=Path(sys.argv[1]); result={
  'key_establishment':{'id':sys.argv[2],'label':sys.argv[3],'openssl_group':sys.argv[4]},
- 'x509_trust_path':{'depth_including_root':int(sys.argv[5]),'transmitted_certificates':int(sys.argv[5])-1,'root_transmitted':False,
-                    'fixtures':sys.argv[6] if int(sys.argv[5])>2 else 'original MTC population X.509 baseline',
-                    'scope':'X.509 only; MTC credentials unchanged; mutual supports D=2 only'},
+ 'x509_trust_path':{'depth_including_root':depth,'transmitted_certificates':depth-1,'root_transmitted':False,
+                    'fixtures':fixture_provenance,
+                    'scope':'X.509 only; MTC credentials unchanged; mutual uses D on both sides'},
  'mutual_authentication':{'signature_pairing':'client_and_server_use_the_same_profile'},
  'definitions':{
  'process_wall_ms':'host monotonic time around one Docker client process; includes process/container overhead',
@@ -778,7 +1019,6 @@ run_retry_profile() {
   mt_images_required "$IMAGE" || return
   ensure_retry_group_support
   ensure_kem_supported
-  load_fixture_paths
   run_retry_profile_inner "$profile" "$requested" 0 70
   output=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$requested")
   report="$REPO/artifacts/reports/$(basename "$requested")/report.html"
@@ -798,7 +1038,6 @@ run_retry_matrix() {
   mt_images_required "$IMAGE" || return
   ensure_retry_group_support
   ensure_kem_supported
-  load_fixture_paths
   mkdir -p "$output"
   report_root="$REPO/artifacts/reports/$(basename "$requested")"
   started_epoch=$(date +%s)
@@ -823,7 +1062,6 @@ run_retry_matrix() {
 
 status_config() {
   local config=${1:-$(active_config)}
-  local mtc_root mtc_validation mutual_root
 
   if [[ ! -f "$config" ]]; then
     printf 'Configuration: MISSING (%s)\nRun init or select initialization from the menu.\n' "$config"
@@ -832,40 +1070,12 @@ status_config() {
 
   printf 'ACTIVE CONFIGURATION\nConfiguration: %s\n' "$config"
 
-  mtc_root=$(sed -nE 's/^MTC_ROOT=//p' "$config" | tail -1)
-  mtc_validation=$(sed -nE 's/^MTC_VALIDATION=//p' "$config" | tail -1)
-  mutual_root=$(sed -nE 's/^MUTUAL_CLIENT_ROOT=//p' "$config" | tail -1)
-
-  if [[ -n "$mtc_root" && -n "$mtc_validation" &&
-        -f "$REPO/$mtc_root/manifest.json" &&
-        -f "$REPO/$mtc_validation" ]]; then
-    echo 'Status: CONFIGURED'
-  else
-    echo 'Status: INCOMPLETE (set explicit MTC_ROOT and MTC_VALIDATION).'
-  fi
+  show_dependencies "$config" || return 1
 
   load_plan_counts "$config"
   depth_plan '(selected output)'
   printf 'Key establishment: %s (%s)\nRepetitions: native=%s measured + %s warmups; PCAP=%s\n' \
     "$KEM_LABEL" "$KEM_GROUP" "$RUNS" "$WARMUPS" "$PCAP_RUNS"
-
-  if [[ -n "$mtc_root" && -f "$REPO/$mtc_root/manifest.json" ]]; then
-    printf 'Server fixtures: READY (%s)\n' "$mtc_root"
-  else
-    echo 'Server fixtures: PENDING'
-  fi
-
-  if [[ -n "$mtc_validation" && -f "$REPO/$mtc_validation" ]]; then
-    printf 'MTC functional validation: READY (%s)\n' "$mtc_validation"
-  else
-    echo 'MTC functional validation: PENDING'
-  fi
-
-  if [[ -n "$mutual_root" && -f "$REPO/$mutual_root/manifest.json" ]]; then
-    printf 'Matching mutual-client fixtures: READY (%s)\n' "$mutual_root"
-  else
-    echo 'Matching mutual-client fixtures: NOT CONFIGURED (required only for mutual authentication)'
-  fi
 }
 
 menu() {
@@ -929,11 +1139,11 @@ case "$command" in
     load_plan_counts "$config"
     output=${3:-$(default_performance_output)}
     depth_plan "$output"
-    validate_depth_fixtures
 
     printf 'EXECUTION PLAN\nConfiguration: %s\nKey establishment: %s (%s)\n' "$config" "$KEM_LABEL" "$KEM_GROUP"
+    show_dependencies "$config"
     printf 'Signature profiles (9): %s\n' "${PROFILES[*]}"
-    [[ "$X509_DEPTH" == 2 ]] || printf 'Counts below are per depth cell. Only single-authentication options are supported for this selection.\n'
+    [[ "$X509_DEPTH" == 2 ]] || printf 'Counts below are per depth cell. Mutual uses the same depth on both sides.\n'
     printf 'Mutual authentication: client and server use the same signature profile.\n\n'
     printf ' 4 Native single:        27 scenarios; %d measured + %d warmups\n' "$((27 * RUNS))" "$((27 * WARMUPS))"
     printf ' 5 Native mutual:        27 scenarios; %d measured + %d warmups\n' "$((27 * RUNS))" "$((27 * WARMUPS))"
@@ -953,7 +1163,8 @@ case "$command" in
     if [[ "${2:-}" == artifacts/results/* ]]; then config=$(active_config); requested_output=$2
     else requested_output=${3:-}; fi
     [[ -f "$config" ]] || fail "Missing configuration: $config. Run $SELF init first."
-    load_plan_counts "$config"
+    load_config "$config"
+    configure_depth "${X509_DEPTH:-2}"
     run_retry_matrix "${requested_output:-$(default_retry_output)}"
     ;;
   run-native|run-native-single|run-native-mutual|run-pcap|run-pcap-single|run-pcap-mutual|run-native-pcap|run-single|run-mutual|run-all)
@@ -974,36 +1185,29 @@ case "$command" in
     fi
     load_plan_counts "$config"
     requested_output=${3:-$(default_performance_output)}
-    check_depth_mode
-    validate_depth_fixtures
     # Check every output before checking dependencies or starting any cell.
     for depth in "${X509_DEPTHS[@]}"; do
       candidate=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$(depth_output "$requested_output" "$depth")")
       [[ "$candidate" == "$REPO"/artifacts/results/* && ! -e "$candidate" ]] || fail "Invalid or existing output: $candidate"
     done
-    if grep -q REPLACE "$config" ||
-       ! grep -q '^MTC_ROOT=.' "$config" ||
-       ! grep -q '^MTC_VALIDATION=.' "$config"; then
-      fail 'Performance configuration requires explicit MTC_ROOT and MTC_VALIDATION.'
+    if grep -q REPLACE "$config"; then
+      fail 'Replace unresolved configuration placeholders before running.'
     fi
     load_config "$config"
 
-    for case_name in "${ACTIVE_CASES[@]}"; do
-      if [[ "$case_name" == *-mutual ]]; then
-        validate_mutual_fixtures
-        break
-      fi
-    done
-
-    # Recheck depth selection. Never regenerate chain-depth fixtures.
     configure_depth "${X509_DEPTH:-2}"
-    check_depth_mode
-    validate_depth_fixtures
+    resolve_dependencies run
+    validate_selected_dependencies || fail 'Dependency validation failed. No measurements started.'
+    echo 'ALL REQUIRED DEPENDENCIES READY'
     base_cases=("${ACTIVE_CASES[@]}")
     for CURRENT_X509_DEPTH in "${X509_DEPTHS[@]}"; do
     ACTIVE_CASES=("${base_cases[@]}")
     if [[ "$X509_DEPTH" != 2 ]]; then
-      ACTIVE_CASES=("x509-simple-d$CURRENT_X509_DEPTH" mtc-simple-landmark mtc-simple-standalone)
+      ACTIVE_CASES=()
+      for case_name in "${base_cases[@]}"; do
+        if [[ "$case_name" == x509-* ]]; then ACTIVE_CASES+=("$case_name-d$CURRENT_X509_DEPTH")
+        else ACTIVE_CASES+=("$case_name"); fi
+      done
     fi
     output=$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve())' "$(depth_output "$requested_output" "$CURRENT_X509_DEPTH")")
     trap cleanup EXIT INT TERM

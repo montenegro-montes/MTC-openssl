@@ -131,8 +131,10 @@ def performance_client(root, profile):
 def generate_performance_clients(output):
     os.umask(0o077)
     output.mkdir(parents=True, exist_ok=False)
-    for profile in PROFILES:
+    for index, profile in enumerate(PROFILES, 1):
+        print(f"  [{index}/{len(PROFILES)}] mutual clients {profile} generating...", flush=True)
         performance_client(output, profile)
+        print(f"  [{index}/{len(PROFILES)}] mutual clients {profile} GENERATED", flush=True)
     files = {str(p.relative_to(output)): digest(p) for p in sorted(output.rglob("*")) if p.is_file()}
     manifest = {
         "schema": 1,

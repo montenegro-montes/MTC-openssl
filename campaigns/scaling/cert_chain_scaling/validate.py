@@ -6,13 +6,16 @@ from config import IMAGE,PROFILES
 REPO=Path(__file__).resolve().parents[3]
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
 def main():
- p=argparse.ArgumentParser();p.add_argument("fixtures",type=Path);p.add_argument("--analysis",type=Path);p.add_argument("--output",type=Path,required=True);p.add_argument("--image",default=IMAGE);a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument("fixtures",type=Path);p.add_argument("--profile",action="append",choices=PROFILES);p.add_argument("--depth",action="append",type=int,choices=range(2,6));p.add_argument("--role",choices=("server","client"),default="server");p.add_argument("--analysis",type=Path);p.add_argument("--output",type=Path,required=True);p.add_argument("--image",default=IMAGE);a=p.parse_args()
  if a.output.exists():p.error("output exists")
  checks=[];failures=[];manifests=list(a.fixtures.glob("*/depth-*/manifest.json"))
- expected=len(PROFILES)*4
+ profiles=a.profile or list(PROFILES);depths=a.depth or [2,3,4,5]
+ expected=len(profiles)*len(depths)
+ if len(manifests)==expected and {(p.parent.parent.name,p.parent.name) for p in manifests}!={(profile,f"depth-{depth}") for profile in profiles for depth in depths}:failures.append("fixture cells differ from requested profile/depth selection")
  if len(manifests)!=expected:failures.append(f"expected {expected} fixture manifests, found {len(manifests)}")
  for path in manifests:
   d=path.parent;m=json.loads(path.read_text());depth=m["depth_including_root"]
+  if m.get("role","server")!=a.role:failures.append(f"{d}: incorrect certificate role")
   required=["root.pem","root.key","server.pem","server.key","server-chain.pem","intermediates.pem"]+[f"{x}.der" for x in ["root","server"]+[f"intermediate-{i}" for i in range(1,depth-1)]]
   for name in required:
    if not (d/name).is_file():failures.append(str(d/name)+" missing")
@@ -27,7 +30,7 @@ def main():
    if not item.get("signature_algorithms"):failures.append(f"{d}/{name}: missing signature algorithm evidence")
    else:observed.append(item["signature_algorithms"][-1].lower().replace("-","").replace("_",""))
   if len(set(observed))>1:failures.append(f"{d}: mixed certificate signature algorithms: {observed}")
-  cmd=["docker","run","--rm","-v",f"{d.resolve()}:/fixture:ro","--entrypoint","/opt/openssl/bin/openssl",a.image,"verify","-CAfile","/fixture/root.pem","-verify_hostname","server"]
+  cmd=["docker","run","--rm","-v",f"{d.resolve()}:/fixture:ro","--entrypoint","/opt/openssl/bin/openssl",a.image,"verify","-CAfile","/fixture/root.pem","-verify_hostname","server","-purpose","sslclient" if a.role=="client" else "sslserver"]
   if depth>2:cmd += ["-untrusted","/fixture/intermediates.pem"]
   cmd += ["/fixture/server.pem"];r=subprocess.run(cmd,capture_output=True,text=True)
   if r.returncode:failures.append(f"{d}: chain verification failed: {r.stderr.strip()}")

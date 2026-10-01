@@ -105,12 +105,14 @@ def populate(directory,name,count,server_hostname='server'):
 def generate(args):
     require_current_mtc_image()
     sizes=sorted(set(args.sizes));prov=provenance();profiles=args.profile or list(SIGNATURE_PROFILES)
+    print('Generating MTC fixtures (N='+','.join(map(str,sizes))+'):',flush=True)
     hostname_meta={'server_hostname':args.server_hostname} if args.server_hostname!='server' else {}
     if sizes!=[16] or args.seed_fixtures:gate(args.validated_n16,args.seed_fixtures,prov['image_id'])
     os.umask(0o077);args.output.mkdir(parents=True,exist_ok=False)
     population=args.output/'population'
     if args.seed_fixtures:shutil.copytree(args.seed_fixtures/'population',population)
-    for name in profiles:
+    for position,name in enumerate(profiles,1):
+        print(f'  [{position}/{len(profiles)}] {name} generating...',flush=True)
         populate(population/name,name,max(sizes),args.server_hostname)
         for n in sizes:
             out=args.output/f'batch{n}'/'mtc'/name;out.parent.mkdir(parents=True,exist_ok=True)
@@ -190,6 +192,7 @@ def generate(args):
                 **options)
             # Separate file so the generated manifest itself is covered as evidence.
             dump(out/'fixture-sha256.json',hashes(out))
+        print(f'  [{position}/{len(profiles)}] {name} GENERATED',flush=True)
     transparency=args.output/'transparency'
     if transparency.exists():
         dump(args.output/'transparency-sha256.json',hashes(transparency))
@@ -257,6 +260,7 @@ def validate(args):
     require_current_mtc_image()
     if read(args.fixtures/'manifest.json').get('server_hostname','server')!=args.server_hostname:
         raise ValueError('Fixture hostname differs from --server-hostname; use matching immutable fixtures')
+    print('Validating MTC fixtures: hashing inputs and preparing native verifier...',flush=True)
     args.output.mkdir(parents=True,exist_ok=False);before=hashes(args.fixtures);cells=[]
     binary=args.output/'verify-profile'
     checked(['cc','-std=c11','-D_POSIX_C_SOURCE=200809L','-I/opt/openssl/include','-I'+str(REPO/'src/mtc'),
@@ -264,7 +268,8 @@ def validate(args):
     try:
         # Finish parsing, public-key policy and real signature checks for all
         # profiles before starting either TLS mode (manual validation steps 2–4).
-        for name in profiles:
+        for position,name in enumerate(profiles,1):
+            print(f'  [{position}/{len(profiles)}] {name} checking certificates/signatures...',flush=True)
             p=SIGNATURE_PROFILES[name];directory=args.fixtures/'batch16/mtc'/name
             meta=check_fixture(directory,name,16)
             if meta['provenance']['image_id']!=prov['image_id'] or meta['provenance']['source_hashes']!=prov['source_hashes']:
@@ -280,10 +285,13 @@ def validate(args):
                 checked([OPENSSL,'pkeyutl','-sign','-rawin','-inkey',directory/f'cosigner-{i}.key','-in',message,'-out',signature,*digest])
                 checked([OPENSSL,'pkeyutl','-verify','-rawin','-pubin','-keyform','DER','-inkey',directory/f'cosigner-{i}.spki',
                          '-in',message,'-sigfile',signature,*digest])
+            print(f'  [{position}/{len(profiles)}] {name} cryptographic checks PASS',flush=True)
         for mode in modes:
-            for name in profiles:
+            print(f'Validating TLS 1.3/X25519: {mode}...',flush=True)
+            for position,name in enumerate(profiles,1):
                 p=SIGNATURE_PROFILES[name];directory=args.fixtures/'batch16/mtc'/name
                 tls_once(directory,args.fixtures/'population'/name,name,mode,args.output/(name+'-'+mode),args.server_hostname)
+                print(f'  [{position}/{len(profiles)}] {name} {mode} PASS',flush=True)
                 cells.append(dict(profile=name,standard_name=p['standard_name'],implementation_algorithm=p['implementation_algorithm'],
                     security_level=p['security_level'],tree_size=16,mtc_mode=mode,draft=DRAFT,success=True,handshakes=1,
                     fixture_hash=sha(directory/'manifest.json'),**{k:prov[k] for k in ('git_commit','openssl_version','liboqs_version','oqs_provider_commit','image_id')}))

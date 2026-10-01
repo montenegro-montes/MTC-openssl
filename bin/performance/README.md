@@ -54,3 +54,25 @@ Historical artifacts may contain directory labels that do not match the
 key-establishment group recorded by their configuration and OpenSSL logs.
 Directory names must not be treated as protocol evidence. Existing artifacts
 must not be rewritten; verify their recorded configuration before reuse.
+
+### Automatic dependencies
+
+`status` and `plan` only inspect dependencies. A run resolves existing MTC
+N=16/validation pairs, matching mutual clients (when needed), and the selected
+X.509 chain cells before any measurement. Missing cells use the existing
+fixture generators; existing partial/invalid directories are preserved.
+Explicit MTC_ROOT/MTC_VALIDATION and chain/client roots remain pinned overrides.
+Docker images must already exist and match the required MTC sources; rebuilding
+is always explicit (`bin/base/mt-prepare rebuild 2`, or stage 3 for capture).
+
+X.509 D includes the local root on **both** sides of mutual authentication:
+D-2 intermediates, D-1 transmitted certificates. D=2 keeps the original
+credentials. Deeper client chains reuse the chain generator with `--role client`
+(`clientAuth`); its existing `server.pem`/`server.key` filenames are retained.
+MTC stays N=16 and is independent of X.509 depth. Credential bytes are also
+KEM-independent. The older X25519 validation is not hybrid validation evidence:
+a separate unmeasured gate exercises all selected cases with the configured
+TLS group before `ALL REQUIRED DEPENDENCIES READY`. Logs are retained under
+`artifacts/results/handshake-dependencies-*`; these are not measurement samples.
+Native+PCAP shares one dependency resolution. Retry shares N=16 resolution and
+checks landmark authentication with its selected group before the retry matrix.
