@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 from core import verify_consistency
 from landmarks import active, subtrees, validate_sequence
 from snapshots import authenticate_snapshot
+from rp_state import RPStateStore
 from trusted_subtrees import (
     SubtreeEvidence,
     encode_trusted_subtrees,
@@ -212,3 +213,33 @@ def build_trusted_subtree_configuration(
     )
 
     return trusted, encode_trusted_subtrees(trusted)
+
+
+def update_and_publish(
+        base_url, trusted_authority, checker, state_directory,
+        log_number, sequence, now, max_active_landmarks=None,
+        authenticate=authenticate_snapshot):
+    """Run one complete fail-closed relying-party update transaction."""
+    store = RPStateStore(state_directory)
+    current = store.load_current()
+
+    previous = None if current is None else current["checkpoint"]
+
+    checkpoint = fetch_and_advance_checkpoint(
+        base_url,
+        trusted_authority,
+        checker,
+        previous=previous,
+        authenticate=authenticate,
+    )
+
+    _, mts1 = build_trusted_subtree_configuration(
+        base_url,
+        log_number,
+        sequence,
+        now,
+        checkpoint,
+        max_active_landmarks=max_active_landmarks,
+    )
+
+    return store.publish(checkpoint, mts1)

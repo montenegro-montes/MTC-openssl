@@ -8,10 +8,13 @@ import threading
 
 import prepare
 from crypto_profiles import crypto_profile
+from landmarks import Landmark
 from local_log import LocalLog
 from log_service import LogServer
-from rp_updater import fetch_and_advance_checkpoint
+from rp_state import RPStateStore
+from rp_updater import fetch_and_advance_checkpoint, update_and_publish
 from snapshots import export_snapshot
+from trusted_subtrees import decode_trusted_subtrees
 
 
 def rejected(operation, text):
@@ -116,6 +119,39 @@ def main():
             )
             assert state8["tree_size"] == 8
 
+            sequence = [
+                Landmark(0, 0, 0),
+                Landmark(1, 8, 100),
+                Landmark(2, 16, 200),
+            ]
+            rp_directory = temp / "rp-state"
+
+            # Bootstrap the persistent RP state while the authenticated HTTP
+            # publication and the underlying log are still exactly N=8.
+            published8 = update_and_publish(
+                base_url,
+                authority,
+                checker,
+                rp_directory,
+                1,
+                sequence,
+                50,
+            )
+            assert published8["checkpoint"] == state8
+
+            store = RPStateStore(rp_directory)
+            retained8 = store.load_current()
+            assert retained8["checkpoint"] == state8
+            selected8 = store.current.readlink()
+
+            trusted8 = decode_trusted_subtrees(
+                published8["trusted_subtrees"])
+            assert [(item.log_number, item.start, item.end)
+                    for item in trusted8] == [
+                (1, 0, 4),
+                (1, 4, 8),
+            ]
+
             # Grow the real persistent log and publish a new signed snapshot.
             log = LocalLog(log_directory)
             for entry in entries[8:]:
@@ -125,8 +161,8 @@ def main():
             export_snapshot(log, snapshot16, args.profile, keys)
             published.write_bytes(snapshot16.read_bytes())
 
-            # The updater authenticates N=16 and requires the real HTTP
-            # RFC 9162 consistency proof from the retained N=8 checkpoint.
+            # Keep the focused checkpoint-evolution assertion: N=16 must be
+            # RFC 9162-consistent with the independently retained N=8 state.
             state16 = fetch_and_advance_checkpoint(
                 base_url,
                 authority,
@@ -135,6 +171,64 @@ def main():
             )
             assert state16["tree_size"] == 16
             assert state16 == log.state()
+
+            # Now exercise the complete operational transaction.  It must
+            # recover N=8 from RPStateStore, authenticate N=16, verify the
+            # RFC 9162 8->16 transition, validate Section 7.4 evidence, and
+            # atomically select the new checkpoint + MTS1 generation.
+            published_state = update_and_publish(
+                base_url,
+                authority,
+                checker,
+                rp_directory,
+                1,
+                sequence,
+                50,
+            )
+
+            assert published_state["checkpoint"] == state16
+            assert store.current.readlink() != selected8
+            trusted = decode_trusted_subtrees(
+                published_state["trusted_subtrees"])
+            assert [(item.log_number, item.start, item.end)
+                    for item in trusted] == [
+                (1, 0, 4),
+                (1, 4, 8),
+                (1, 8, 12),
+                (1, 12, 16),
+            ]
+
+            store = RPStateStore(rp_directory)
+            retained = store.load_current()
+            assert retained["checkpoint"] == state16
+            assert retained["trusted_subtrees"] == (
+                published_state["trusted_subtrees"])
+            selected_before_failure = store.current.readlink()
+
+            # A later unauthenticated publication must fail before atomic
+            # state publication and leave the selected generation untouched.
+            published.write_bytes(b"not-authenticated")
+            rejected(
+                lambda: update_and_publish(
+                    base_url,
+                    authority,
+                    checker,
+                    rp_directory,
+                    1,
+                    sequence,
+                    50,
+                ),
+                "unauthenticated operational update accepted",
+            )
+
+            retained = store.load_current()
+            assert store.current.readlink() == selected_before_failure
+            assert retained["checkpoint"] == state16
+            assert retained["trusted_subtrees"] == (
+                published_state["trusted_subtrees"])
+
+            # Restore the authentic N=16 publication for subsequent tests.
+            published.write_bytes(snapshot16.read_bytes())
 
             # An independently valid snapshot signed by substituted keys must
             # not authenticate against the relying party's provisioned trust.
