@@ -53,3 +53,18 @@ class ExternalCosigner:
             self.identity, self.key, self.ca_id, 0,
             self.accepted.tree_size, self.accepted.root_hash,
             self.family, timestamp, self.log)
+
+    def cosign_subtree(self, start, end, subtree_hash,
+                       subtree_consistency_proof, timestamp=0):
+        """Cosign a canonical subtree proven against the accepted checkpoint."""
+        if self.accepted is None:
+            raise ValueError("no accepted checkpoint")
+        if (start, end) not in core.cover(0, self.accepted.tree_size):
+            raise ValueError("subtree is not in the canonical cover")
+        if not core.verify_subtree_consistency(
+                start, end, self.accepted.tree_size, subtree_hash,
+                self.accepted.root_hash, subtree_consistency_proof):
+            raise ValueError("subtree is inconsistent with accepted checkpoint")
+        return prepare.cosign(
+            self.identity, self.key, self.ca_id, start, end, subtree_hash,
+            self.family, timestamp, self.log)

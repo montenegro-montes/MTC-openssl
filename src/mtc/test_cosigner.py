@@ -17,6 +17,18 @@ def rejected(call, expected_state):
     assert signer.accepted == expected_state
 
 
+def subtree_rejected(call, cosigner, expected_state):
+    with patch("prepare.cosign") as forbidden_cosign:
+        try:
+            call()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("subtree should have been rejected")
+    forbidden_cosign.assert_not_called()
+    assert cosigner.accepted is expected_state
+
+
 entries = [bytes([i]) for i in range(8)]
 signer = ExternalCosigner(
     "32473.102", Path("external.key"), "32473.101", "ecdsa-p256")
@@ -63,5 +75,71 @@ rejected(lambda: signer.accept_view(
 with patch("prepare.cosign", return_value=(signer.identity, b"signature")) as cosign:
     signer.cosign_accepted()
 assert cosign.call_args.args[4:6] == (grown.tree_size, grown.root_hash)
+
+# A subtree cannot be signed before this cosigner has accepted a checkpoint.
+uninitialized = ExternalCosigner(
+    signer.identity, signer.key, signer.ca_id, signer.family)
+subtree_rejected(
+    lambda: uninitialized.cosign_subtree(0, 4, core.root(entries[:4]), []),
+    uninitialized, None)
+
+# Every canonical covering subtree is signed using the standalone parameters.
+accepted_before_subtrees = signer.accepted
+for start, end in core.cover(0, grown.tree_size):
+    subtree_hash = core.root(entries[start:end])
+    subtree_proof = core.subtree_consistency(entries, start, end)
+    with patch(
+            "prepare.cosign",
+            return_value=(signer.identity, b"subtree-signature")) as cosign:
+        assert signer.cosign_subtree(
+            start, end, subtree_hash, subtree_proof) == (
+                signer.identity, b"subtree-signature")
+    cosign.assert_called_once_with(
+        signer.identity, signer.key, signer.ca_id, start, end,
+        subtree_hash, signer.family, 0, signer.log)
+    assert signer.accepted is accepted_before_subtrees
+
+start, end = core.cover(0, grown.tree_size)[0]
+subtree_hash = core.root(entries[start:end])
+subtree_proof = core.subtree_consistency(entries, start, end)
+
+# A structurally valid subtree outside the canonical cover is still rejected.
+noncover = (0, 2)
+subtree_rejected(lambda: signer.cosign_subtree(
+    *noncover, core.root(entries[slice(*noncover)]),
+    core.subtree_consistency(entries, *noncover)), signer,
+    accepted_before_subtrees)
+
+corrupt_hash = bytes([subtree_hash[0] ^ 1]) + subtree_hash[1:]
+subtree_rejected(lambda: signer.cosign_subtree(
+    start, end, corrupt_hash, subtree_proof), signer,
+    accepted_before_subtrees)
+
+corrupt_subtree_proof = list(subtree_proof)
+corrupt_subtree_proof[0] = (
+    bytes([corrupt_subtree_proof[0][0] ^ 1])
+    + corrupt_subtree_proof[0][1:])
+subtree_rejected(lambda: signer.cosign_subtree(
+    start, end, subtree_hash, corrupt_subtree_proof), signer,
+    accepted_before_subtrees)
+subtree_rejected(lambda: signer.cosign_subtree(
+    start, end, subtree_hash, subtree_proof[:-1]), signer,
+    accepted_before_subtrees)
+
+# Proofs and roots from another view cannot authorize this accepted view.
+other_entries = list(entries)
+other_entries[-1] = b"other-view"
+other_proof = core.subtree_consistency(other_entries, start, end)
+subtree_rejected(lambda: signer.cosign_subtree(
+    start, end, subtree_hash, other_proof), signer,
+    accepted_before_subtrees)
+
+other_signer = ExternalCosigner(
+    signer.identity, signer.key, signer.ca_id, signer.family)
+other_signer.accept_view(len(other_entries), core.root(other_entries))
+other_accepted = other_signer.accepted
+subtree_rejected(lambda: other_signer.cosign_subtree(
+    start, end, subtree_hash, subtree_proof), other_signer,
+    other_accepted)
 
 print("PASS: independent local external cosigner")
