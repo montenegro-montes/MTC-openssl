@@ -1,7 +1,10 @@
 """Local external cosigner with an independent accepted issuance-log view."""
 
 from dataclasses import dataclass
+import json
+import os
 from pathlib import Path
+import tempfile
 
 import core
 import prepare
@@ -14,13 +17,56 @@ class AcceptedCheckpoint:
 
 
 class ExternalCosigner:
-    def __init__(self, identity, key, ca_id, family, log=1):
+    def __init__(self, identity, key, ca_id, family, log=1, state_path=None):
         self.identity = identity
         self.key = Path(key)
         self.ca_id = ca_id
         self.family = family
         self.log = log
-        self.accepted = None
+        self.state_path = Path(state_path) if state_path is not None else None
+        self.accepted = self._load_state()
+
+    def _load_state(self):
+        if self.state_path is None or not self.state_path.exists():
+            return None
+        try:
+            state = json.loads(self.state_path.read_text(encoding="utf-8"))
+            if not isinstance(state, dict) or set(state) != {
+                    "tree_size", "root_hash"}:
+                raise ValueError
+            tree_size = state["tree_size"]
+            root_hex = state["root_hash"]
+            if type(tree_size) is not int or not 0 <= tree_size < 1 << 48:
+                raise ValueError
+            if not isinstance(root_hex, str) or len(root_hex) != 64:
+                raise ValueError
+            root_hash = bytes.fromhex(root_hex)
+            if len(root_hash) != 32:
+                raise ValueError
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+            raise ValueError("invalid persisted cosigner state") from error
+        return AcceptedCheckpoint(tree_size, root_hash)
+
+    def _persist(self, accepted):
+        if self.state_path is None:
+            return
+        data = json.dumps({
+            "tree_size": accepted.tree_size,
+            "root_hash": accepted.root_hash.hex(),
+        }, separators=(",", ":")) + "\n"
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=self.state_path.name + ".", dir=self.state_path.parent)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+                output.write(data)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, self.state_path)
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
 
     def accept_view(self, tree_size, root_hash, consistency_proof=()):
         """Accept a first or consistent later checkpoint, otherwise raise."""
@@ -42,7 +88,9 @@ class ExternalCosigner:
                 self.accepted.root_hash, root_hash, proof):
             raise ValueError("inconsistent checkpoint")
 
-        self.accepted = AcceptedCheckpoint(tree_size, root_hash)
+        accepted = AcceptedCheckpoint(tree_size, root_hash)
+        self._persist(accepted)
+        self.accepted = accepted
         return self.accepted
 
     def cosign_accepted(self, timestamp=0):

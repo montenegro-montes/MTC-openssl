@@ -1,6 +1,7 @@
 """Focused tests for the independent local external cosigner."""
 
 from pathlib import Path
+import tempfile
 from unittest.mock import patch
 
 import core
@@ -141,5 +142,88 @@ other_accepted = other_signer.accepted
 subtree_rejected(lambda: other_signer.cosign_subtree(
     start, end, subtree_hash, subtree_proof), other_signer,
     other_accepted)
+
+# Optional state survives restart and retains consistency enforcement.
+with tempfile.TemporaryDirectory(prefix="mtc-cosigner-state-") as temporary:
+    state_path = Path(temporary) / "accepted.json"
+    persistent = ExternalCosigner(
+        signer.identity, signer.key, signer.ca_id, signer.family,
+        state_path=state_path)
+    persisted_first = AcceptedCheckpoint(3, core.root(entries[:3]))
+    assert persistent.accept_view(
+        persisted_first.tree_size, persisted_first.root_hash
+    ) == persisted_first
+    assert state_path.read_bytes() == (
+        b'{"tree_size":3,"root_hash":"'
+        + persisted_first.root_hash.hex().encode("ascii") + b'"}\n')
+
+    restarted = ExternalCosigner(
+        signer.identity, signer.key, signer.ca_id, signer.family,
+        state_path=state_path)
+    assert restarted.accepted == persisted_first
+
+    persisted_grown = AcceptedCheckpoint(len(entries), core.root(entries))
+    assert restarted.accept_view(
+        persisted_grown.tree_size, persisted_grown.root_hash,
+        core.consistency(entries, persisted_first.tree_size)
+    ) == persisted_grown
+    valid_state = state_path.read_bytes()
+    accepted_after_restart = restarted.accepted
+
+    def persistent_rejected(call):
+        try:
+            call()
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("persisted view should have been rejected")
+        assert restarted.accepted is accepted_after_restart
+        assert state_path.read_bytes() == valid_state
+
+    persistent_rejected(lambda: restarted.accept_view(
+        7, core.root(entries[:7])))
+    persistent_rejected(lambda: restarted.accept_view(
+        persisted_grown.tree_size, different_root))
+    persistent_rejected(lambda: restarted.accept_view(
+        len(larger_entries), core.root(larger_entries), corrupt_proof))
+
+    # Subtree authorization uses the checkpoint loaded from disk.
+    loaded = ExternalCosigner(
+        signer.identity, signer.key, signer.ca_id, signer.family,
+        state_path=state_path)
+    loaded_start, loaded_end = core.cover(0, len(entries))[0]
+    loaded_hash = core.root(entries[loaded_start:loaded_end])
+    loaded_proof = core.subtree_consistency(
+        entries, loaded_start, loaded_end)
+    with patch(
+            "prepare.cosign",
+            return_value=(loaded.identity, b"persisted-signature")) as cosign:
+        loaded.cosign_subtree(
+            loaded_start, loaded_end, loaded_hash, loaded_proof)
+    cosign.assert_called_once_with(
+        loaded.identity, loaded.key, loaded.ca_id, loaded_start, loaded_end,
+        loaded_hash, loaded.family, 0, loaded.log)
+    assert loaded.accepted == persisted_grown
+
+    corrupt_states = [
+        b"not json",
+        b'{}',
+        b'{"tree_size":-1,"root_hash":"' + b"00" * 32 + b'"}',
+        b'{"tree_size":281474976710656,"root_hash":"'
+        + b"00" * 32 + b'"}',
+        b'{"tree_size":8,"root_hash":"not-hex"}',
+        b'{"tree_size":8,"root_hash":"' + b"00" * 31 + b'"}',
+    ]
+    for index, corrupt in enumerate(corrupt_states):
+        corrupt_path = Path(temporary) / f"corrupt-{index}.json"
+        corrupt_path.write_bytes(corrupt)
+        try:
+            ExternalCosigner(
+                signer.identity, signer.key, signer.ca_id, signer.family,
+                state_path=corrupt_path)
+        except ValueError as error:
+            assert str(error) == "invalid persisted cosigner state"
+        else:
+            raise AssertionError("corrupt persisted state was accepted")
 
 print("PASS: independent local external cosigner")
