@@ -1,5 +1,5 @@
 """Create immutable MTC issuance snapshots from an explicit X.509 population."""
-import json,shutil,subprocess,time
+import json,shutil,subprocess,tempfile,time
 from datetime import datetime, timezone
 from pathlib import Path
 from core import *
@@ -11,9 +11,10 @@ def keygen(path,family):
     command('genpkey','-algorithm',profile['implementation_algorithm'],*(['-pkeyopt','ec_paramgen_curve:'+profile['curve']] if profile['curve'] else []),'-out',path)
 def sign(path,data,family):
     profile=crypto_profile(family)
-    tmp=path.parent/'sign-input.tmp';tmp.write_bytes(data)
-    try:return command('pkeyutl','-sign','-rawin','-inkey',path,'-in',tmp,*(['-digest',profile['digest']] if profile['digest'] else []))
-    finally:tmp.unlink()
+    with tempfile.NamedTemporaryFile() as tmp:
+        tmp.write(data)
+        tmp.flush()
+        return command('pkeyutl','-sign','-rawin','-inkey',path,'-in',tmp.name,*(['-digest',profile['digest']] if profile['digest'] else []))
 def cosign(ident,key,caid,start,end,subtree_hash,family,timestamp=0,log=1):
     return ident,sign(key,message(ident,caid,start,end,subtree_hash,timestamp,log),family)
 def checkpoint_signature(ident,key,caid,n,checkpoint,timestamp,family):
