@@ -229,11 +229,23 @@ class CosignerHTTPHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
-            path = urlsplit(self.path).path
+            parsed = urlsplit(self.path)
         except ValueError:
             self.reply(400, {"error": "Malformed request target"})
             return
-        if path in self.endpoints:
+        if parsed.query or parsed.fragment:
+            self.reply(400, {"error": "unexpected request parameters"})
+            return
+        if parsed.path == "/accepted":
+            accepted = self.server.cosigner.accepted
+            if accepted is None:
+                self.reply(200, {"accepted": None})
+            else:
+                self.reply(200, {"accepted": {
+                    "tree_size": accepted.tree_size,
+                    "root_hash": accepted.root_hash.hex(),
+                }})
+        elif parsed.path in self.endpoints:
             self.reply(405, {"error": "Method not allowed"}, "POST")
         else:
             self.reply(404, {"error": "Unknown endpoint"})

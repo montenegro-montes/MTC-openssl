@@ -50,7 +50,10 @@ with tempfile.TemporaryDirectory(prefix="mtc-cosigner-http-") as temporary:
         entries = [bytes([index]) for index in range(8)]
         first = entries[:3]
         first_root = core.root(first)
+        assert client.accepted_checkpoint() is None
         assert client.accept_view(3, first_root, []) == {
+            "tree_size": 3, "root_hash": first_root}
+        assert client.accepted_checkpoint() == {
             "tree_size": 3, "root_hash": first_root}
         retained = state.read_bytes()
         assert json.loads(retained) == {
@@ -213,7 +216,10 @@ with tempfile.TemporaryDirectory(prefix="mtc-cosigner-http-") as temporary:
     try:
         mtls_entries = [b"mtls-0", b"mtls-1", b"mtls-2"]
         mtls_root = core.root(mtls_entries)
+        assert mtls_client.accepted_checkpoint() is None
         assert mtls_client.accept_view(3, mtls_root, []) == {
+            "tree_size": 3, "root_hash": mtls_root}
+        assert mtls_client.accepted_checkpoint() == {
             "tree_size": 3, "root_hash": mtls_root}
         mtls_identity, mtls_signature = mtls_client.cosign_accepted(456)
         verify(public, core.message(

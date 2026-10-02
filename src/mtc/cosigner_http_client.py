@@ -39,6 +39,13 @@ class CosignerHTTPClient:
         request = Request(
             self.base_url + path, data=data,
             headers={"Content-Type": "application/json"}, method="POST")
+        return self._request(request)
+
+    def _get(self, path):
+        request = Request(self.base_url + path, method="GET")
+        return self._request(request)
+
+    def _request(self, request):
         try:
             with urlopen(
                     request, timeout=self.timeout,
@@ -70,6 +77,28 @@ class CosignerHTTPClient:
                 "cosigner HTTP service returned an invalid response",
                 status, body)
         return result
+
+    def accepted_checkpoint(self):
+        result = self._get("/accepted")
+        try:
+            if set(result) != {"accepted"}:
+                raise ValueError
+            accepted = result["accepted"]
+            if accepted is None:
+                return None
+            if not isinstance(accepted, dict) or set(accepted) != {
+                    "tree_size", "root_hash"}:
+                raise ValueError
+            tree_size = accepted["tree_size"]
+            root_hash = bytes.fromhex(accepted["root_hash"])
+            if type(tree_size) is not int or not 0 <= tree_size < 1 << 48:
+                raise ValueError
+            if len(root_hash) != 32:
+                raise ValueError
+        except (TypeError, ValueError) as error:
+            raise CosignerHTTPError(
+                "cosigner HTTP service returned an invalid checkpoint") from error
+        return {"tree_size": tree_size, "root_hash": root_hash}
 
     @staticmethod
     def _proof(proof):
