@@ -106,15 +106,24 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
     for i,e in enumerate(entries):(log/f'{i:06d}.entry').write_bytes(e)
     checkpoint=root(entries);timestamp=int(time.time());subtrees=cover(0,n)
     expiration=max(timestamp+1,max(not_after(t) for t in tbs))
-    # Each local cosigner independently reconstructs its entire initial view.
+    # Each cosigner independently reconstructs its entire initial view.
     cp_sigs=[];sub_sigs={}
-    for ident,key in zip(ids,keys):
-        mirror=[(log/f'{i:06d}.entry').read_bytes() for i in range(n)]
-        assert root(mirror)==checkpoint
-        cp_sigs.append(checkpoint_signature(ident,key,caid,n,checkpoint,timestamp,family))
-        for start,end in subtrees:
-            sub_sigs.setdefault((start,end),[]).append(
-                cosign(ident,key,caid,start,end,root(mirror[start:end]),family))
+    mirror=[(log/f'{i:06d}.entry').read_bytes() for i in range(n)]
+    assert root(mirror)==checkpoint
+    cp_sigs.append(checkpoint_signature(ids[0],keys[0],caid,n,checkpoint,timestamp,family))
+    for start,end in subtrees:
+        sub_sigs.setdefault((start,end),[]).append(
+            cosign(ids[0],keys[0],caid,start,end,root(mirror[start:end]),family))
+    from cosigner import ExternalCosigner
+    external=ExternalCosigner(ids[1],keys[1],caid,family)
+    mirror=[(log/f'{i:06d}.entry').read_bytes() for i in range(n)]
+    assert root(mirror)==checkpoint
+    external.accept_view(n,checkpoint,consistency(mirror,0))
+    cp_sigs.append(external.cosign_accepted(timestamp))
+    for start,end in subtrees:
+        sub_sigs[start,end].append(external.cosign_subtree(
+            start,end,root(mirror[start:end]),
+            subtree_consistency(mirror,start,end)))
     for i,t in enumerate(tbs):
         start,end=next(x for x in subtrees if x[0]<=i<x[1]);path=inclusion(entries[start:end],i-start)
         assert evaluate(entries[i],i,start,end,path)==root(entries[start:end])

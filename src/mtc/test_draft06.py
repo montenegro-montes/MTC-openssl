@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from unittest.mock import patch
 
 import core
 import prepare
@@ -108,7 +109,53 @@ def main():
                     damaged=bytearray(snapshot.read_bytes());damaged[len(trusted.read_bytes())+4+6+8]^=1
                     bad=temp/f'{family}-bad-root.mcf1';bad.write_bytes(damaged)
                     reject_generation('corrupted-checkpoint',authenticated_snapshot=bad)
-                meta=prepare.prepare(out,temp,family,n,originals=[cert]*n,**options)
+                from cosigner import ExternalCosigner
+                accepted=[];signed_subtrees=[]
+                original_accept=ExternalCosigner.accept_view
+                original_cosign_subtree=ExternalCosigner.cosign_subtree
+                def record_accept(self,*values,**kwargs):
+                    accepted.append((self,values,kwargs))
+                    return original_accept(self,*values,**kwargs)
+                def record_subtree(self,*values,**kwargs):
+                    signed_subtrees.append((self,values,kwargs))
+                    return original_cosign_subtree(self,*values,**kwargs)
+                with patch.object(ExternalCosigner,'accept_view',record_accept), \
+                     patch.object(ExternalCosigner,'cosign_subtree',record_subtree):
+                    meta=prepare.prepare(out,temp,family,n,originals=[cert]*n,**options)
+                assert len(accepted)==1
+                external,values,kwargs=accepted[0]
+                assert not kwargs and values==(n,core.root([
+                    (out/'log'/f'{i:06d}.entry').read_bytes() for i in range(n)
+                ]),core.consistency([
+                    (out/'log'/f'{i:06d}.entry').read_bytes() for i in range(n)
+                ],0))
+                assert external.identity==prepare.crypto_profile(family)['cosigner_ids'][1]
+                assert external.key==out/'cosigner-1.key'
+                assert len(signed_subtrees)==len(core.cover(0,n))
+                for recorded,(start,end) in zip(signed_subtrees,core.cover(0,n)):
+                    signer,values,kwargs=recorded
+                    subtree_hash=core.root([
+                        (out/'log'/f'{i:06d}.entry').read_bytes()
+                        for i in range(start,end)
+                    ])
+                    assert signer is external and not kwargs
+                    assert values[:3]==(start,end,subtree_hash)
+                    assert core.verify_subtree_consistency(
+                        start,end,n,subtree_hash,
+                        bytes.fromhex(meta['checkpoint']['hash']),values[3])
+                if n==1 and family==args.profiles[0]:
+                    bad_consistency=temp/'rejected-external-consistency'
+                    with patch.object(prepare,'consistency',return_value=[core.root([])]), \
+                         patch.object(ExternalCosigner,'cosign_subtree') as subtree_sign:
+                        try:prepare.prepare(bad_consistency,temp,family,n,originals=[cert]*n)
+                        except ValueError:pass
+                        else:raise AssertionError('Accepted invalid external consistency proof')
+                    subtree_sign.assert_not_called()
+                    bad_subtree=temp/'rejected-external-subtree'
+                    with patch.object(prepare,'subtree_consistency',return_value=[core.root([])]):
+                        try:prepare.prepare(bad_subtree,temp,family,n,originals=[cert]*n)
+                        except ValueError:pass
+                        else:raise AssertionError('Accepted invalid subtree consistency proof')
                 if options:
                     assert meta['tree_size']==state16['tree_size']==16
                     assert meta['checkpoint']['hash']==state16['hash']
