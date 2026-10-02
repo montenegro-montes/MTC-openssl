@@ -7,6 +7,7 @@ import tempfile
 import threading
 
 import prepare
+from build_check_snapshot import build_check_snapshot
 from crypto_profiles import crypto_profile
 from landmarks import Landmark
 from local_log import LocalLog
@@ -39,11 +40,6 @@ def main():
     prefix = args.openssl_prefix.resolve()
     prepare.OPENSSL = str(prefix / "bin/openssl")
 
-    lib = prefix / "lib"
-    if not lib.is_dir():
-        lib = prefix / "lib64"
-
-    source = Path(__file__).resolve().parent
     profile = crypto_profile(args.profile)
 
     with tempfile.TemporaryDirectory(
@@ -51,16 +47,7 @@ def main():
         temp = Path(temporary)
         checker = temp / "check_snapshot"
 
-        subprocess.run([
-            args.cc,
-            "-Wall", "-Wextra", "-Werror",
-            "-I" + str(prefix / "include"),
-            str(source / "check_snapshot.c"),
-            "-L" + str(lib),
-            "-Wl,-rpath," + str(lib),
-            "-lcrypto",
-            "-o", str(checker),
-        ], check=True)
+        build_check_snapshot(prefix, checker, args.cc)
 
         def provision(label):
             keys = [temp / f"{label}-{i}.key" for i in range(2)]

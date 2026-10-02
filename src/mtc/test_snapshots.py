@@ -2,10 +2,10 @@
 import argparse
 import json
 from pathlib import Path
-import subprocess
 import tempfile
 
 import prepare
+from build_check_snapshot import build_check_snapshot
 from core import root
 from crypto_profiles import crypto_profile
 from local_log import LocalLog
@@ -27,16 +27,11 @@ def main():
     parser.add_argument('--cc',default='cc')
     args=parser.parse_args();prefix=args.openssl_prefix.resolve()
     prepare.OPENSSL=str(prefix/'bin/openssl')
-    lib=prefix/'lib'
-    if not lib.is_dir():lib=prefix/'lib64'
-    source=Path(__file__).resolve().parent
     profile=crypto_profile(args.profile)
     with tempfile.TemporaryDirectory(prefix='mtc-authenticated-snapshots-') as temporary:
         temp=Path(temporary);checker=temp/'check_snapshot'
-        subprocess.run([args.cc,'-Wall','-Wextra','-g','-fsanitize=address,undefined',
-                        '-fno-omit-frame-pointer','-I'+str(prefix/'include'),
-                        str(source/'check_snapshot.c'),'-L'+str(lib),
-                        '-Wl,-rpath,'+str(lib),'-lcrypto','-o',str(checker)],check=True)
+        build_check_snapshot(prefix, checker, args.cc, (
+            '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer'))
         # Independently provision trust BEFORE exporting or reading any snapshot.
         def provision(label):
             keys=[temp/f'{label}-{i}.key' for i in range(2)]
