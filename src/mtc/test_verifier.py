@@ -31,6 +31,14 @@ with tempfile.TemporaryDirectory() as temp:
             variants={'leaf':certificate(mtc_tbs(cert,'32473.9',0),p),'no proof':certificate(tbs,b''),
                       'extra proof':certificate(tbs,p+b'\0'),'trailing DER':cert+b'\0',
                       'subtree':certificate(tbs,p[:2]+b'\xff'*6+p[8:]),'length':certificate(tbs,b'\xff\xff'+p[2:])}
+            # Draft-06 Section 5.2.1 extension-vector framing and canonical order.
+            variants.update({
+                'valid different extensions':certificate(tbs,b'\0\4\x12\x34\0\0'+p[2:]),
+                'incomplete extension':certificate(tbs,b'\0\2\x12\x34'+p[2:]),
+                'truncated extension data':certificate(tbs,b'\0\5\0\1\0\2x'+p[2:]),
+                'duplicate extensions':certificate(tbs,b'\0\10\0\1\0\0\0\1\0\0'+p[2:]),
+                'unordered extensions':certificate(tbs,b'\0\10\0\2\0\0\0\1\0\0'+p[2:]),
+            })
             variants.update(malformed_proofs(cert))
             if int.from_bytes(p[14:16],'big'):
                 v=bytearray(p);v[16]^=1;variants['inclusion mutation']=certificate(tbs,bytes(v))

@@ -134,7 +134,8 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
         start,end=next(x for x in subtrees if x[0]<=i<x[1]);path=inclusion(entries[start:end],i-start)
         assert evaluate(entries[i],i,start,end,path)==root(entries[start:end])
         for mode,sigs in [('standalone',sub_sigs[start,end]),('landmark',[])]:
-            p=proof(start,end,path,sigs);cert=certificate(t,p)
+            # Reuse the exact canonical bytes authenticated in entries[i].
+            p=proof(start,end,path,sigs,entry_extensions(entries[i]));cert=certificate(t,p)
             (out/f'{mode}-{i:04d}.der').write_bytes(cert);(out/f'{mode}-{i:04d}.pem').write_bytes(pem(cert))
     # OOB configuration: keys, serial limits, signed checkpoint and its two covering subtrees.
     # This file is a lab storage format, never sent as an MTC certificate.

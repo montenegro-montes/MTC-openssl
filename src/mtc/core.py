@@ -4,6 +4,7 @@ No code or wire formats imported from the older experimental Merkle protocol.
 import base64
 import hashlib
 import struct
+from dataclasses import dataclass
 DRAFT='draft-ietf-plants-merkle-tree-certs-06'
 TA_DRAFT='draft-ietf-tls-trust-anchor-ids-04'
 PROOF_OID='1.3.6.1.4.1.44363.47.0'
@@ -60,6 +61,223 @@ def certificate_parts(cert):
     if len(tbs)<7 or tbs[0][0]!=0xa0:raise ValueError('only v3 fixtures')
     return outer,tbs
 
+NULL_ENTRY=0
+TBS_CERT_ENTRY=1
+
+def parse_mtc_extensions(data):
+    """Parse MTCLogEntryExtension vector *contents* (without uint16 length).
+
+    Received encodings are never reordered or repaired.  Draft-06 Section
+    5.2.1 requires strictly increasing extension_type values and no duplicates.
+    Unknown, well-formed extensions remain opaque and byte-exact.
+    """
+    if not isinstance(data,bytes) or len(data)>0xffff:
+        raise ValueError('MTC extensions')
+    out=[];offset=0;previous=-1
+    while offset<len(data):
+        if len(data)-offset<4:raise ValueError('truncated MTC extension')
+        extension_type=int.from_bytes(data[offset:offset+2],'big')
+        length=int.from_bytes(data[offset+2:offset+4],'big');offset+=4
+        if extension_type<=previous:raise ValueError('unordered or duplicate MTC extension')
+        if length>len(data)-offset:raise ValueError('truncated MTC extension data')
+        value=data[offset:offset+length];offset+=length
+        out.append((extension_type,value));previous=extension_type
+    return tuple(out)
+
+def encode_mtc_extensions(extensions=()):
+    """Encode structured ``(uint16 type, bytes value)`` pairs as vector contents.
+
+    This returns the bytes inside the TLS ``extensions<0..2^16-1>`` vector,
+    not its two-byte length prefix.  Structured input is canonically sorted;
+    duplicate types are rejected.  Bytes input is already-encoded vector
+    content and is strictly validated without normalization.
+    """
+    if isinstance(extensions,bytes):
+        parse_mtc_extensions(extensions)
+        return extensions
+    values=[];seen=set()
+    try:
+        for extension_type,value in extensions:
+            if (not isinstance(extension_type,int) or isinstance(extension_type,bool)
+                    or not 0<=extension_type<=0xffff or not isinstance(value,bytes)
+                    or len(value)>0xffff):
+                raise ValueError('MTC extension')
+            if extension_type in seen:raise ValueError('duplicate MTC extension')
+            seen.add(extension_type);values.append((extension_type,value))
+    except (TypeError,ValueError):
+        raise ValueError('MTC extensions') from None
+    values.sort()
+    encoded=b''.join(uint(t,2)+vec(value) for t,value in values)
+    if len(encoded)>0xffff:raise ValueError('MTC extensions too long')
+    return encoded
+
+def _validate_der(data):
+    """Validate the DER properties needed by TBSCertificateLogEntry."""
+    values=items(data)
+    if len(values)!=1 or values[0][2]!=data:raise ValueError('DER value')
+    tag,body,_=values[0]
+    if not tag or (tag&0xc0)==0 and bool(tag&0x20)!=(tag in (0x30,0x31)):
+        raise ValueError('invalid DER form')
+    if tag in (2,10):
+        if not body or (len(body)>1 and ((body[0]==0 and not body[1]&0x80)
+                                        or (body[0]==0xff and body[1]&0x80))):
+            raise ValueError('noncanonical integer')
+    elif tag==1 and body not in (b'\0',b'\xff'):
+        raise ValueError('noncanonical boolean')
+    elif tag==3:
+        if not body or body[0]>7 or (body[0] and body[-1]&((1<<body[0])-1)):
+            raise ValueError('invalid bit string')
+    elif tag==5 and body:
+        raise ValueError('invalid NULL')
+    elif tag==23 and (len(body)!=13 or body[-1:]!=b'Z' or not body[:-1].isdigit()):
+        raise ValueError('noncanonical UTCTime')
+    elif tag==24 and (len(body)!=15 or body[-1:]!=b'Z' or not body[:-1].isdigit()):
+        raise ValueError('noncanonical GeneralizedTime')
+    elif tag in (6,13):
+        if not body:raise ValueError('invalid object identifier')
+        i=0
+        while i<len(body):
+            if body[i]==0x80:raise ValueError('noncanonical object identifier')
+            while True:
+                if i>=len(body):raise ValueError('truncated object identifier')
+                last=not body[i]&0x80;i+=1
+                if last:break
+    if tag&0x20:
+        children=items(body)
+        if tag==0x31 and [x[2] for x in children]!=sorted(x[2] for x in children):
+            raise ValueError('noncanonical SET')
+        for child in children:_validate_der(child[2])
+    return data
+
+@dataclass(frozen=True)
+class TBSCertificateLogEntry:
+    """Draft-06 Section 5.2.1 ASN.1 value, stored as exact DER fields."""
+    version: bytes|None
+    issuer: bytes
+    validity: bytes
+    subject: bytes
+    subject_public_key_algorithm: bytes
+    subject_public_key_info_hash: bytes
+    issuer_unique_id: bytes|None=None
+    subject_unique_id: bytes|None=None
+    extensions: bytes|None=None
+
+    def encode(self):
+        fields=[self.version] if self.version is not None else []
+        fields += [self.issuer,self.validity,self.subject,
+                   self.subject_public_key_algorithm,self.subject_public_key_info_hash]
+        fields += [x for x in (self.issuer_unique_id,self.subject_unique_id,self.extensions)
+                   if x is not None]
+        data=b''.join(fields)
+        return self.decode(data)._unchecked_encode()
+
+    def _unchecked_encode(self):
+        fields=[self.version] if self.version is not None else []
+        fields += [self.issuer,self.validity,self.subject,
+                   self.subject_public_key_algorithm,self.subject_public_key_info_hash]
+        fields += [x for x in (self.issuer_unique_id,self.subject_unique_id,self.extensions)
+                   if x is not None]
+        return b''.join(fields)
+
+    def der(self):return der(0x30,self.encode())
+
+    @classmethod
+    def decode(cls,data):
+        if not isinstance(data,bytes):raise ValueError('TBSCertificateLogEntry')
+        fields=items(data)
+        for field in fields:_validate_der(field[2])
+        i=0;version=None
+        if i<len(fields) and fields[i][0]==0xa0:
+            version=fields[i][2]
+            encoded_version=items(content(version,0xa0))
+            if (len(encoded_version)!=1 or encoded_version[0][0]!=2 or
+                    not 0<=int.from_bytes(encoded_version[0][1],'big',signed=True)<=2):
+                raise ValueError('TBSCertificateLogEntry version')
+            i+=1
+        required=(0x30,0x30,0x30,0x30,0x04)
+        if len(fields)-i<5 or tuple(x[0] for x in fields[i:i+5])!=required:
+            raise ValueError('TBSCertificateLogEntry fields')
+        base=[x[2] for x in fields[i:i+5]];i+=5
+        optional={0x81:None,0x82:None,0xa3:None};last=0x80
+        while i<len(fields):
+            tag=fields[i][0]
+            if tag not in optional or optional[tag] is not None or tag<=last:
+                raise ValueError('TBSCertificateLogEntry optional fields')
+            if tag in (0x81,0x82):
+                body=fields[i][1]
+                if not body or body[0]>7 or (body[0] and body[-1]&((1<<body[0])-1)):
+                    raise ValueError('invalid unique identifier')
+            optional[tag]=fields[i][2];last=tag;i+=1
+        return cls(version,*base,optional[0x81],optional[0x82],optional[0xa3])
+
+    @classmethod
+    def from_tbs_certificate(cls,tbs):
+        fields=items(content(tbs,0x30))
+        if len(fields)<7:raise ValueError('TBSCertificate fields')
+        i=1 if fields[0][0]==0xa0 else 0
+        if len(fields)-i<6 or tuple(x[0] for x in fields[i:i+6])!=(2,0x30,0x30,0x30,0x30,0x30):
+            raise ValueError('TBSCertificate fields')
+        spki=items(content(fields[i+5][2],0x30))
+        if len(spki)!=2 or spki[0][0]!=0x30 or spki[1][0]!=3:
+            raise ValueError('SubjectPublicKeyInfo')
+        # version is copied; serialNumber and signature are deliberately omitted.
+        contents=((fields[0][2] if i else b'')+fields[i+2][2]+fields[i+3][2]+
+                  fields[i+4][2]+spki[0][2]+der(4,H(fields[i+5][2]))+
+                  b''.join(x[2] for x in fields[i+6:]))
+        return cls.decode(contents)
+
+@dataclass(frozen=True)
+class MTCLogEntry:
+    """Canonical Draft-06 Section 5.2.1 log entry."""
+    extensions: bytes
+    entry_type: int
+    entry_data: bytes=b''
+
+    def encode(self):
+        extensions=encode_mtc_extensions(self.extensions)
+        if not isinstance(self.entry_type,int) or not 0<=self.entry_type<=0xffff:
+            raise ValueError('MTC log entry type')
+        if not isinstance(self.entry_data,bytes):raise ValueError('MTC log entry data')
+        if self.entry_type==NULL_ENTRY and self.entry_data:
+            raise ValueError('null_entry payload')
+        if self.entry_type==TBS_CERT_ENTRY:
+            TBSCertificateLogEntry.decode(self.entry_data)
+        value=vec(extensions)+uint(self.entry_type,2)+self.entry_data
+        if len(value)>0xffff:raise ValueError('MTC log entry too long')
+        return value
+
+    @classmethod
+    def decode(cls,data):
+        if not isinstance(data,bytes) or len(data)>0xffff or len(data)<4:
+            raise ValueError('MTC log entry')
+        length=int.from_bytes(data[:2],'big')
+        if length>len(data)-2:raise ValueError('truncated MTC extensions')
+        extensions=data[2:2+length];parse_mtc_extensions(extensions)
+        offset=2+length
+        if len(data)-offset<2:raise ValueError('missing MTC log entry type')
+        entry_type=int.from_bytes(data[offset:offset+2],'big');entry_data=data[offset+2:]
+        value=cls(extensions,entry_type,entry_data)
+        value.encode()
+        return value
+
+    @classmethod
+    def null(cls,extensions=()):return cls(encode_mtc_extensions(extensions),NULL_ENTRY)
+
+    @classmethod
+    def from_tbs_certificate(cls,tbs,extensions=()):
+        value=TBSCertificateLogEntry.from_tbs_certificate(tbs)
+        return cls(encode_mtc_extensions(extensions),TBS_CERT_ENTRY,value.encode())
+
+    def tbs_certificate_log_entry(self):
+        if self.entry_type!=TBS_CERT_ENTRY:raise ValueError('not a tbs_cert_entry')
+        return TBSCertificateLogEntry.decode(self.entry_data)
+
+def null_entry(extensions=()):return MTCLogEntry.null(extensions).encode()
+
+def entry_extensions(encoded_entry):
+    """Return the exact canonical extension-vector contents from a log entry."""
+    return MTCLogEntry.decode(encoded_entry).extensions
+
 def mtc_tbs(original,caid,index,log=1):
     _,t=certificate_parts(original)
     fields=[x[2] for x in t]
@@ -72,8 +290,8 @@ def mtc_tbs(original,caid,index,log=1):
             fields[i]=der(0xa3,seq(*exts))
     return seq(*fields)
 def entry(tbs,extensions=b''):
-    t=items(content(tbs,0x30));spki=items(content(t[6][2],0x30))
-    return vec(extensions)+b'\0\1'+b''.join(t[i][2] for i in [0,3,4,5])+spki[0][2]+der(4,H(t[6][2]))+b''.join(x[2] for x in t[7:])
+    """Encode a tbs_cert_entry; extensions are MTC vector contents, not X.509."""
+    return MTCLogEntry.from_tbs_certificate(tbs,extensions).encode()
 def root(entries):
     if not entries:return H(b'')
     if len(entries)==1:return H(b'\0'+entries[0])
@@ -243,5 +461,41 @@ def signatures(values,outer_width=2):
     # MCF1 retains uint16; only MTCProof uses a uint24 outer vector.
     return vec(b''.join(vec(relid(i),1)+vec(s) for i,s in sorted(values,key=lambda x:(len(relid(x[0])),relid(x[0])))),outer_width)
 def proof(start,end,path,sigs=(),extensions=b''):
+    """Encode MTCProof; extensions are canonical MTC vector contents."""
+    extensions=encode_mtc_extensions(extensions)
     return vec(extensions)+uint(start,6)+uint(end,6)+vec(b''.join(path))+signatures(sigs,3)
+
+def proof_extensions(encoded_proof):
+    """Validate an MTCProof framing and return exact extension-vector contents."""
+    if not isinstance(encoded_proof,bytes) or len(encoded_proof)<19:
+        raise ValueError('MTCProof')
+    offset=0
+    def vector(width):
+        nonlocal offset
+        if len(encoded_proof)-offset<width:raise ValueError('truncated MTCProof vector')
+        length=int.from_bytes(encoded_proof[offset:offset+width],'big');offset+=width
+        if length>len(encoded_proof)-offset:raise ValueError('truncated MTCProof vector')
+        value=encoded_proof[offset:offset+length];offset+=length
+        return value
+    extensions=vector(2);parse_mtc_extensions(extensions)
+    if len(encoded_proof)-offset<12:raise ValueError('truncated MTCProof interval')
+    offset+=12
+    inclusion_proof=vector(2)
+    if len(inclusion_proof)%32:raise ValueError('MTCProof inclusion proof')
+    signature_block=vector(3)
+    if offset!=len(encoded_proof):raise ValueError('trailing MTCProof data')
+    position=0;previous=None
+    while position<len(signature_block):
+        if len(signature_block)-position<1:raise ValueError('MTCProof signature')
+        length=signature_block[position];position+=1
+        if not length or length>len(signature_block)-position:raise ValueError('MTCProof signer')
+        identity=signature_block[position:position+length];position+=length
+        if previous is not None and (len(identity),identity)<=(len(previous),previous):
+            raise ValueError('MTCProof signature order')
+        previous=identity
+        if len(signature_block)-position<2:raise ValueError('MTCProof signature')
+        length=int.from_bytes(signature_block[position:position+2],'big');position+=2
+        if length>len(signature_block)-position:raise ValueError('MTCProof signature')
+        position+=length
+    return extensions
 def certificate(tbs,p):return seq(tbs,ALG,der(3,b'\0'+p))

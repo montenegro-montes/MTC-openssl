@@ -69,7 +69,7 @@ print('draft-06 wire/issuer/empty/singleton/boundary tests PASS; issuer DER:',ex
 
 # Draft-06 Section 6.2 certificate-format/MTCProof encoding.
 # Keep this byte-level and deterministic: no OpenSSL or generated fixtures.
-exts = b'\x12\x34'
+exts = b'\x12\x34\x00\x00'
 path = [b'a' * 32, b'b' * 32]
 sigs = [('32473.101', b'ca-signature'), ('32473.102', b'cosigner-signature')]
 start, end = 0x010203040506, 0x01020304050a
@@ -117,6 +117,10 @@ while q < len(sig_block):
 assert q == len(sig_block)
 assert seen == sorted(seen, key=lambda x: (len(x), x))
 assert len(seen) == len(set(seen))
+
+try:core.proof(start,end,path,sigs,b'\x12\x34')
+except ValueError:pass
+else:raise AssertionError('accepted legacy incomplete MTC extension')
 
 # Landmark-relative MTCProof has no subtree signatures.
 landmark = core.proof(0, 1, [], (), b'')

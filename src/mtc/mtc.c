@@ -28,6 +28,15 @@ static double tick(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);ret
 static int take(Slice *s,size_t n,Slice *out){if(n>s->n)return 0;out->p=s->p;out->n=n;s->p+=n;s->n-=n;return 1;}
 static int number(Slice *s,unsigned n,uint64_t *v){Slice x;if(!take(s,n,&x))return 0;*v=0;for(unsigned i=0;i<n;i++)*v=(*v<<8)|x.p[i];return 1;}
 static int vector(Slice *s,unsigned width,Slice *out){uint64_t n;return number(s,width,&n)&&take(s,(size_t)n,out);}
+static int mtc_extensions(Slice extensions){
+    uint64_t type,previous=0;Slice value;int first=1;
+    while(extensions.n){
+        if(!number(&extensions,2,&type)||!vector(&extensions,2,&value)||
+           (!first&&type<=previous))return 0;
+        first=0;previous=type;
+    }
+    return 1;
+}
 static int tlv(Slice *s,TLV *t){
     const unsigned char *begin=s->p;uint64_t tag,n,k;Slice b;
     if(!number(s,1,&tag)||(tag&31)==31||!number(s,1,&n))return 0;
@@ -336,7 +345,7 @@ int mtc_verify(X509 *x,MTCConfig *c){
     X509_get0_signature(&signature,&alg,x);
     if(!algorithm(alg)||(signature->flags&7)||signature->length<0||!ASN1_INTEGER_get_uint64(&serial,X509_get_serialNumber(x))||serial<c->min||serial>c->max||serial_revoked(c,serial)||(serial>>48)!=c->log)return 0;
     index=serial&0xffffffffffffULL;p=(Slice){signature->data,(size_t)signature->length};
-    if(!vector(&p,2,&extensions)||extensions.n||!number(&p,6,&start)||!number(&p,6,&end)||!vector(&p,2,&proof)||!vector(&p,3,&sigs)||p.n)return 0;
+    if(!vector(&p,2,&extensions)||!mtc_extensions(extensions)||!number(&p,6,&start)||!number(&p,6,&end)||!vector(&p,2,&proof)||!vector(&p,3,&sigs)||p.n)return 0;
     if(!leaf_hash(x,extensions,leaf)||!mtc_eval(leaf,index,start,end,proof.p,proof.n,root))return 0;
     if(c->landmark){
         if(sigs.n)return 0;
