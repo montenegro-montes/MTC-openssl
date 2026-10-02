@@ -62,7 +62,8 @@ def not_after(tbs):
     if not text.endswith('Z') or not text[:-1].isdigit():raise ValueError('Invalid notAfter encoding')
     return int(datetime.strptime(text,'%Y%m%d%H%M%SZ').replace(tzinfo=timezone.utc).timestamp())
 def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
-            persistent_log=None,authenticated_snapshot=None,trusted_authority=None,snapshot_checker=None):
+            persistent_log=None,authenticated_snapshot=None,trusted_authority=None,snapshot_checker=None,
+            external_cosigner=None,external_consistency_proof=None):
     """Generate the usual material, optionally bound to an authenticated log view.
 
     Originals supply certificate fields absent from MTCLogEntry. Their derived
@@ -73,6 +74,8 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
     profile=crypto_profile(family)
     if not 1<=n<=1024:raise ValueError('Unsupported MTC population')
     if originals is None:raise ValueError('MTC requires an explicit same-profile X.509 population')
+    if external_cosigner is not None and external_consistency_proof is None:
+        raise ValueError('Injected external cosigner requires an explicit consistency proof')
     begin=time.perf_counter();caid=profile['ca_id'];ids=list(profile['cosigner_ids'])
     if len(originals)!=n:raise ValueError('Population length differs from N')
     certs=[from_pem(p.read_bytes()) for p in originals]
@@ -114,14 +117,16 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
     for start,end in subtrees:
         sub_sigs.setdefault((start,end),[]).append(
             cosign(ids[0],keys[0],caid,start,end,root(mirror[start:end]),family))
-    from cosigner import ExternalCosigner
-    external=ExternalCosigner(ids[1],keys[1],caid,family)
     mirror=[(log/f'{i:06d}.entry').read_bytes() for i in range(n)]
     assert root(mirror)==checkpoint
-    external.accept_view(n,checkpoint,consistency(mirror,0))
-    cp_sigs.append(external.cosign_accepted(timestamp))
+    if external_cosigner is None:
+        from cosigner import ExternalCosigner
+        external_cosigner=ExternalCosigner(ids[1],keys[1],caid,family)
+        external_consistency_proof=consistency(mirror,0)
+    external_cosigner.accept_view(n,checkpoint,external_consistency_proof)
+    cp_sigs.append(external_cosigner.cosign_accepted(timestamp))
     for start,end in subtrees:
-        sub_sigs[start,end].append(external.cosign_subtree(
+        sub_sigs[start,end].append(external_cosigner.cosign_subtree(
             start,end,root(mirror[start:end]),
             subtree_consistency(mirror,start,end)))
     for i,t in enumerate(tbs):

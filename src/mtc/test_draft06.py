@@ -22,6 +22,8 @@ def main():
     parser.add_argument('--cc',default='cc')
     parser.add_argument('--persistent',action='store_true',
                         help='Also generate N=16 material from an authenticated persistent log')
+    parser.add_argument('--injection-only',action='store_true',
+                        help='Run the focused N=1 external-cosigner injection path')
     parser.add_argument('--profiles',nargs=2,default=['ecdsa-p256','mldsa65'])
     args=parser.parse_args()
     if args.profiles[0]==args.profiles[1]:parser.error('Two distinct profiles are required')
@@ -58,7 +60,7 @@ def main():
                             '-addext','basicConstraints=critical,CA:FALSE',
                             '-addext','extendedKeyUsage=serverAuth')
             originals[family]=cert
-        for n in [1,16]:
+        for n in ([1] if args.injection_only else [1,16]):
             batch=temp/('n'+str(n));batch.mkdir()
             for family in args.profiles:
                 cert=originals[family];before=cert.read_bytes();out=batch/family
@@ -156,6 +158,89 @@ def main():
                         try:prepare.prepare(bad_subtree,temp,family,n,originals=[cert]*n)
                         except ValueError:pass
                         else:raise AssertionError('Accepted invalid subtree consistency proof')
+                    class RecordingCosigner:
+                        def __init__(self,delegate):
+                            self.delegate=delegate;self.calls=[];self.signatures=[]
+                        def accept_view(self,*values):
+                            self.calls.append(('accept_view',values))
+                            return self.delegate.accept_view(*values)
+                        def cosign_accepted(self,*values):
+                            self.calls.append(('cosign_accepted',values))
+                            result=self.delegate.cosign_accepted(*values)
+                            self.signatures.append(result);return result
+                        def cosign_subtree(self,*values):
+                            self.calls.append(('cosign_subtree',values))
+                            result=self.delegate.cosign_subtree(*values)
+                            self.signatures.append(result);return result
+                    injected_proof=[]
+                    delegate=ExternalCosigner(
+                        prepare.crypto_profile(family)['cosigner_ids'][1],
+                        out/'cosigner-1.key',
+                        prepare.crypto_profile(family)['ca_id'],family)
+                    injected=RecordingCosigner(delegate)
+                    injected_out=temp/f'{family}-injected'
+                    with patch('cosigner.ExternalCosigner',side_effect=AssertionError('fallback')):
+                        injected_meta=prepare.prepare(
+                            injected_out,temp,family,n,originals=[cert]*n,
+                            signer_keys=[out/'cosigner-0.key',out/'cosigner-1.key'],
+                            external_cosigner=injected,
+                            external_consistency_proof=injected_proof)
+                    injected_entries=[
+                        (injected_out/'log'/f'{i:06d}.entry').read_bytes()
+                        for i in range(n)
+                    ]
+                    injected_checkpoint=core.root(injected_entries)
+                    assert injected.calls[0]==(
+                        'accept_view',(n,injected_checkpoint,injected_proof))
+                    assert injected.calls[0][1][2] is injected_proof
+                    assert injected.calls[1][0]=='cosign_accepted'
+                    subtree_calls=[call for call in injected.calls
+                                   if call[0]=='cosign_subtree']
+                    assert len(subtree_calls)==len(core.cover(0,n))
+                    assert [call[1][:2] for call in subtree_calls]==core.cover(0,n)
+                    standalone=(injected_out/'standalone-0000.der').read_bytes()
+                    outer,_=core.certificate_parts(standalone)
+                    encoded_proof=outer[2][1][1:]
+                    start,end=core.cover(0,n)[0]
+                    path=core.inclusion(injected_entries[start:end],0)
+                    assert encoded_proof.startswith(
+                        core.vec(b'')+core.uint(start,6)+core.uint(end,6)
+                        +core.vec(b''.join(path)))
+                    external_signature=injected.signatures[1][1]
+                    assert core.vec(core.relid(delegate.identity),1)+core.vec(
+                        external_signature) in encoded_proof
+                    assert injected_meta['subtrees']==meta['subtrees']
+
+                    missing=temp/f'{family}-injected-missing-proof'
+                    try:prepare.prepare(
+                        missing,temp,family,n,originals=[cert]*n,
+                        external_cosigner=injected)
+                    except ValueError as error:
+                        assert str(error)==(
+                            'Injected external cosigner requires an explicit '
+                            'consistency proof')
+                    else:raise AssertionError('Accepted injected cosigner without proof')
+                    assert not missing.exists()
+
+                    class FailingCosigner:
+                        def __init__(self,operation):self.operation=operation
+                        def accept_view(self,*values):
+                            if self.operation=='accept_view':raise RuntimeError(self.operation)
+                        def cosign_accepted(self,*values):
+                            if self.operation=='cosign_accepted':raise RuntimeError(self.operation)
+                            return delegate.identity,b'checkpoint'
+                        def cosign_subtree(self,*values):
+                            raise RuntimeError('cosign_subtree')
+                    for operation in ['accept_view','cosign_accepted','cosign_subtree']:
+                        failed=temp/f'{family}-injected-failed-{operation}'
+                        with patch('cosigner.ExternalCosigner',side_effect=AssertionError('fallback')):
+                            try:prepare.prepare(
+                                failed,temp,family,n,originals=[cert]*n,
+                                signer_keys=[out/'cosigner-0.key',out/'cosigner-1.key'],
+                                external_cosigner=FailingCosigner(operation),
+                                external_consistency_proof=[])
+                            except RuntimeError as error:assert str(error)==operation
+                            else:raise AssertionError('Ignored '+operation+' failure')
                 if options:
                     assert meta['tree_size']==state16['tree_size']==16
                     assert meta['checkpoint']['hash']==state16['hash']
