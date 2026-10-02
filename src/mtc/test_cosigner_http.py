@@ -156,4 +156,85 @@ with tempfile.TemporaryDirectory(prefix="mtc-cosigner-http-") as temporary:
         thread.join(timeout=2)
         assert not thread.is_alive()
 
+    def openssl(*arguments):
+        subprocess.run(
+            [OPENSSL, *map(str, arguments)], check=True,
+            capture_output=True)
+
+    tls_ca_key = directory / "tls-ca.key"
+    tls_ca_cert = directory / "tls-ca.pem"
+    openssl(
+        "req", "-new", "-x509", "-newkey", "rsa:2048", "-nodes",
+        "-keyout", tls_ca_key, "-out", tls_ca_cert,
+        "-subj", "/CN=MTC test TLS CA", "-days", "1",
+        "-addext", "basicConstraints=critical,CA:TRUE",
+        "-addext", "keyUsage=critical,keyCertSign")
+
+    def issue_tls_certificate(name, common_name, extensions):
+        issued_key = directory / f"{name}.key"
+        request = directory / f"{name}.csr"
+        certificate = directory / f"{name}.pem"
+        command = [
+            "req", "-new", "-newkey", "rsa:2048", "-nodes",
+            "-keyout", issued_key, "-out", request,
+            "-subj", f"/CN={common_name}",
+        ]
+        for extension in extensions:
+            command += ["-addext", extension]
+        openssl(*command)
+        openssl(
+            "x509", "-req", "-in", request,
+            "-CA", tls_ca_cert, "-CAkey", tls_ca_key,
+            "-CAcreateserial", "-out", certificate, "-days", "1",
+            "-copy_extensions", "copy")
+        return certificate, issued_key
+
+    server_cert, server_key = issue_tls_certificate(
+        "tls-server", "localhost", (
+            "subjectAltName=DNS:localhost",
+            "extendedKeyUsage=serverAuth",
+        ))
+    client_cert, client_key = issue_tls_certificate(
+        "tls-client", "MTC test client", (
+            "extendedKeyUsage=clientAuth",
+        ))
+    mtls_state = directory / "mtls-accepted.json"
+    mtls_server = CosignerHTTPServer(
+        ("127.0.0.1", 0), "32473.102", key, "32473.101",
+        "ecdsa-p256", mtls_state,
+        tls_cert=server_cert, tls_key=server_key,
+        client_ca=tls_ca_cert, require_client_cert=True)
+    mtls_thread = Thread(target=mtls_server.serve_forever, daemon=True)
+    mtls_thread.start()
+    _, mtls_port = mtls_server.server_address
+    mtls_client = CosignerHTTPClient(
+        f"https://localhost:{mtls_port}", ca_file=tls_ca_cert,
+        client_cert=client_cert, client_key=client_key)
+    try:
+        mtls_entries = [b"mtls-0", b"mtls-1", b"mtls-2"]
+        mtls_root = core.root(mtls_entries)
+        assert mtls_client.accept_view(3, mtls_root, []) == {
+            "tree_size": 3, "root_hash": mtls_root}
+        mtls_identity, mtls_signature = mtls_client.cosign_accepted(456)
+        verify(public, core.message(
+            mtls_identity, "32473.101", 0, 3, mtls_root, 456, 1),
+            mtls_signature, directory, "mtls-checkpoint")
+
+        retained_mtls_state = mtls_state.read_bytes()
+        client_without_certificate = CosignerHTTPClient(
+            f"https://localhost:{mtls_port}", ca_file=tls_ca_cert)
+        try:
+            client_without_certificate.cosign_accepted(457)
+        except CosignerHTTPError as error:
+            assert error.status is None
+        else:
+            raise AssertionError(
+                "mTLS service accepted a client without a certificate")
+        assert mtls_state.read_bytes() == retained_mtls_state
+    finally:
+        mtls_server.shutdown()
+        mtls_server.server_close()
+        mtls_thread.join(timeout=2)
+        assert not mtls_thread.is_alive()
+
 print("PASS: localhost external cosigner HTTP transport")

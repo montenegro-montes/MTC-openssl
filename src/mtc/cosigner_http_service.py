@@ -4,6 +4,7 @@ import argparse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 from pathlib import Path
+import ssl
 import time
 from urllib.parse import urlsplit
 
@@ -49,10 +50,27 @@ def fields(value, expected):
 
 class CosignerHTTPServer(HTTPServer):
     def __init__(self, address, identity, key, ca_id, family, state_path,
-                 log=1):
+                 log=1, tls_cert=None, tls_key=None, client_ca=None,
+                 require_client_cert=False):
         self.cosigner = ExternalCosigner(
             identity, key, ca_id, family, log=log, state_path=state_path)
         super().__init__(address, CosignerHTTPHandler)
+        tls_values = (tls_cert, tls_key)
+        if any(value is not None for value in tls_values):
+            if any(value is None for value in tls_values):
+                raise ValueError("TLS certificate and key are both required")
+            if require_client_cert and client_ca is None:
+                raise ValueError("client CA required for client certificates")
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(tls_cert, tls_key)
+            if client_ca is not None:
+                context.load_verify_locations(cafile=client_ca)
+                context.verify_mode = (
+                    ssl.CERT_REQUIRED if require_client_cert
+                    else ssl.CERT_OPTIONAL)
+            self.socket = context.wrap_socket(self.socket, server_side=True)
+        elif client_ca is not None or require_client_cert:
+            raise ValueError("client certificate verification requires TLS")
 
 
 class CosignerHTTPHandler(BaseHTTPRequestHandler):
@@ -233,10 +251,16 @@ def main():
     parser.add_argument("--log", type=int, default=1)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8081)
+    parser.add_argument("--tls-cert")
+    parser.add_argument("--tls-key")
+    parser.add_argument("--client-ca")
+    parser.add_argument("--require-client-cert", action="store_true")
     args = parser.parse_args()
     with CosignerHTTPServer(
             (args.host, args.port), args.identity, Path(args.key), args.ca_id,
-            args.family, Path(args.state), args.log) as server:
+            args.family, Path(args.state), args.log,
+            args.tls_cert, args.tls_key, args.client_ca,
+            args.require_client_cert) as server:
         try:
             server.serve_forever()
         except KeyboardInterrupt:

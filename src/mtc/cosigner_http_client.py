@@ -1,8 +1,10 @@
 """Minimal urllib client for the external cosigner HTTP service."""
 
 import json
+import ssl
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
 
 
 class CosignerHTTPError(RuntimeError):
@@ -13,9 +15,23 @@ class CosignerHTTPError(RuntimeError):
 
 
 class CosignerHTTPClient:
-    def __init__(self, base_url, timeout=2):
+    def __init__(self, base_url, timeout=2, ca_file=None,
+                 client_cert=None, client_key=None):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        scheme = urlsplit(self.base_url).scheme
+        tls_values = (client_cert, client_key)
+        if any(value is not None for value in tls_values) and any(
+                value is None for value in tls_values):
+            raise ValueError("client certificate and key are both required")
+        if scheme == "https":
+            self.ssl_context = ssl.create_default_context(cafile=ca_file)
+            if client_cert is not None:
+                self.ssl_context.load_cert_chain(client_cert, client_key)
+        elif ca_file is not None or client_cert is not None:
+            raise ValueError("TLS configuration requires an https URL")
+        else:
+            self.ssl_context = None
 
     def _post(self, path, value):
         data = (json.dumps(
@@ -24,7 +40,9 @@ class CosignerHTTPClient:
             self.base_url + path, data=data,
             headers={"Content-Type": "application/json"}, method="POST")
         try:
-            with urlopen(request, timeout=self.timeout) as response:
+            with urlopen(
+                    request, timeout=self.timeout,
+                    context=self.ssl_context) as response:
                 body = response.read(1024 * 1024 + 1)
                 status = response.status
         except HTTPError as error:
