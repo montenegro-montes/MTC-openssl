@@ -1,0 +1,51 @@
+name: mtc-external-cosigner
+
+services:
+  cosigner:
+    build:
+      context: ../..
+      dockerfile: campaigns/external-cosigner-docker/Dockerfile
+    command:
+      - python3
+      - cosigner_http_service.py
+      - --identity
+      - ${COSIGNER_ID:-32473.102}
+      - --key
+      - /run/cosigner/external.key
+      - --ca-id
+      - ${CA_ID:-32473.101}
+      - --family
+      - ${FAMILY:-ecdsa-p256}
+      - --state
+      - /var/lib/mtc-cosigner/accepted.json
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8443"
+      - --tls-cert
+      - /run/cosigner/server.pem
+      - --tls-key
+      - /run/cosigner/server.key
+      - --client-ca
+      - /run/cosigner/client-ca.pem
+      - --require-client-cert
+    ports:
+      - 127.0.0.1:${COSIGNER_PORT:-8443}:8443
+    volumes:
+      - cosigner-secrets:/run/cosigner:ro
+      - cosigner-state:/var/lib/mtc-cosigner
+    restart: "no"
+
+  provision:
+    profiles: ["provision"]
+    build:
+      context: ../..
+      dockerfile: campaigns/external-cosigner-docker/Dockerfile
+    entrypoint: ["/bin/sh", "/app/provision.sh"]
+    volumes:
+      - cosigner-secrets:/run/cosigner
+      - ./client:/client
+
+volumes:
+  cosigner-secrets:
+  cosigner-state:
