@@ -17,14 +17,17 @@ def sign(path,data,family):
         return command('pkeyutl','-sign','-rawin','-inkey',path,'-in',tmp.name,*(['-digest',profile['digest']] if profile['digest'] else []))
 def cosign(ident,key,caid,start,end,subtree_hash,family,timestamp=0,log=1):
     return ident,sign(key,message(ident,caid,start,end,subtree_hash,timestamp,log),family)
-def checkpoint_signature(ident,key,caid,n,checkpoint,timestamp,family):
-    return cosign(ident,key,caid,0,n,checkpoint,family,timestamp)
-def authority_config(caid,ids,public,n):
+def checkpoint_signature(ident,key,caid,n,checkpoint,timestamp,family,log=1):
+    return cosign(ident,key,caid,0,n,checkpoint,family,timestamp,log)
+def authority_config(caid,ids,public,n,*,log_number=1):
     """Existing local MCF1 authority encoding; not a certificate wire format."""
-    if not 1<=n<=1024 or len(ids)!=2 or len(public)!=2:raise ValueError('MCF1 configuration')
+    if (not 1<=n<=1024 or len(ids)!=2 or len(public)!=2
+            or type(log_number) is not int or not 1<=log_number<=65535):
+        raise ValueError('MCF1 configuration')
     config=b'MCF1'+vec(caid.encode(),1)+bytes([len(ids)])
     for ident,spki in zip(ids,public):config+=vec(ident.encode(),1)+vec(spki)
-    return config+uint(1,2)+uint(1<<48,8)+uint((1<<48)+n-1,8)
+    first=log_number<<48
+    return config+uint(log_number,2)+uint(first,8)+uint(first+n-1,8)
 
 def write_trusted_subtrees(path, subtrees):
     """Write authenticated trusted-subtree cache in MTS1 format."""
@@ -64,7 +67,8 @@ def not_after(tbs):
     return int(datetime.strptime(text,'%Y%m%d%H%M%SZ').replace(tzinfo=timezone.utc).timestamp())
 def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
             persistent_log=None,authenticated_snapshot=None,trusted_authority=None,snapshot_checker=None,
-            external_cosigner=None,external_consistency_proof=None):
+            external_cosigner=None,external_consistency_proof=None,
+            log_number=1):
     """Generate the usual material, optionally bound to an authenticated log view.
 
     Originals supply certificate fields absent from MTCLogEntry. Their derived
@@ -74,13 +78,18 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
     """
     profile=crypto_profile(family)
     if not 1<=n<=1024:raise ValueError('Unsupported MTC population')
+    if type(log_number) is not int or not 1<=log_number<=65535:
+        raise ValueError('Invalid issuance log number')
     if originals is None:raise ValueError('MTC requires an explicit same-profile X.509 population')
     if external_cosigner is not None and external_consistency_proof is None:
         raise ValueError('Injected external cosigner requires an explicit consistency proof')
+    if (external_cosigner is not None and hasattr(external_cosigner,'log')
+            and external_cosigner.log!=log_number):
+        raise ValueError('External cosigner issuance log differs from prepare log')
     begin=time.perf_counter();caid=profile['ca_id'];ids=list(profile['cosigner_ids'])
     if len(originals)!=n:raise ValueError('Population length differs from N')
     certs=[from_pem(p.read_bytes()) for p in originals]
-    tbs=[mtc_tbs(c,caid,i) for i,c in enumerate(certs)];entries=[entry(t) for t in tbs]
+    tbs=[mtc_tbs(c,caid,i,log_number) for i,c in enumerate(certs)];entries=[entry(t) for t in tbs]
     authenticated=None
     options=(persistent_log,authenticated_snapshot,trusted_authority,snapshot_checker)
     if any(v is not None for v in options):
@@ -114,15 +123,18 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
     cp_sigs=[];sub_sigs={}
     mirror=[(log/f'{i:06d}.entry').read_bytes() for i in range(n)]
     assert root(mirror)==checkpoint
-    cp_sigs.append(checkpoint_signature(ids[0],keys[0],caid,n,checkpoint,timestamp,family))
+    cp_sigs.append(checkpoint_signature(
+        ids[0],keys[0],caid,n,checkpoint,timestamp,family,log_number))
     for start,end in subtrees:
         sub_sigs.setdefault((start,end),[]).append(
-            cosign(ids[0],keys[0],caid,start,end,root(mirror[start:end]),family))
+            cosign(ids[0],keys[0],caid,start,end,root(mirror[start:end]),
+                   family,log=log_number))
     mirror=[(log/f'{i:06d}.entry').read_bytes() for i in range(n)]
     assert root(mirror)==checkpoint
     if external_cosigner is None:
         from cosigner import ExternalCosigner
-        external_cosigner=ExternalCosigner(ids[1],keys[1],caid,family)
+        external_cosigner=ExternalCosigner(
+            ids[1],keys[1],caid,family,log=log_number)
         external_consistency_proof=consistency(mirror,0)
     external_cosigner.accept_view(n,checkpoint,external_consistency_proof)
     cp_sigs.append(external_cosigner.cosign_accepted(timestamp))
@@ -139,7 +151,7 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
             (out/f'{mode}-{i:04d}.der').write_bytes(cert);(out/f'{mode}-{i:04d}.pem').write_bytes(pem(cert))
     # OOB configuration: keys, serial limits, signed checkpoint and its two covering subtrees.
     # This file is a lab storage format, never sent as an MTC certificate.
-    config=authority_config(caid,ids,public,n)
+    config=authority_config(caid,ids,public,n,log_number=log_number)
     (out/'authority.bin').write_bytes(config)
     config=checkpoint_config(config,entries,timestamp,cp_sigs)
     (out/'trust.bin').write_bytes(config)
@@ -158,7 +170,7 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
             'mtc_cosignature_bytes':sum(len(s) for _,s in ss[1:]),'mtc_checkpoint_bytes':0,'mtc_landmark_reference_bytes':12,
             'mtc_predistributed_bytes':len(config) if mode=='landmark' else 0}
     source_metadata={'source_population':str(batch)}
-    meta={'draft':DRAFT,'trust_anchor_draft':TA_DRAFT,'status':'MTC-experimental','tree_size':n,'crypto_family':family,'ca_id':caid,
+    meta={'draft':DRAFT,'trust_anchor_draft':TA_DRAFT,'status':'MTC-experimental','tree_size':n,'log_number':log_number,'crypto_family':family,'ca_id':caid,
         'cosigner_ids':ids,'cosigner_policy':'CA AND one additional local cosigner; no public transparency claim',
         'subtrees':subtrees,'landmarks':[0,n],'checkpoint':{'tree_size':n,'timestamp':timestamp,'hash':checkpoint.hex()},
         'latest_landmark':1,'landmark_expirations':[0,expiration],
