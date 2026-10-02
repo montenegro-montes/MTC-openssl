@@ -18,6 +18,8 @@ class AcceptedCheckpoint:
 
 class ExternalCosigner:
     def __init__(self, identity, key, ca_id, family, log=1, state_path=None):
+        if type(log) is not int or not 1 <= log <= 65535:
+            raise ValueError("invalid issuance log number")
         self.identity = identity
         self.key = Path(key)
         self.ca_id = ca_id
@@ -32,10 +34,15 @@ class ExternalCosigner:
         try:
             state = json.loads(self.state_path.read_text(encoding="utf-8"))
             if not isinstance(state, dict) or set(state) != {
-                    "tree_size", "root_hash"}:
+                    "log_number", "tree_size", "root_hash"}:
                 raise ValueError
+            log_number = state["log_number"]
             tree_size = state["tree_size"]
             root_hex = state["root_hash"]
+            if type(log_number) is not int or not 1 <= log_number <= 65535:
+                raise ValueError
+            if log_number != self.log:
+                raise ValueError
             if type(tree_size) is not int or not 0 <= tree_size < 1 << 48:
                 raise ValueError
             if not isinstance(root_hex, str) or len(root_hex) != 64:
@@ -51,6 +58,7 @@ class ExternalCosigner:
         if self.state_path is None:
             return
         data = json.dumps({
+            "log_number": self.log,
             "tree_size": accepted.tree_size,
             "root_hash": accepted.root_hash.hex(),
         }, separators=(",", ":")) + "\n"

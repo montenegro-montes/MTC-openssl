@@ -31,6 +31,16 @@ def subtree_rejected(call, cosigner, expected_state):
 
 
 entries = [bytes([i]) for i in range(8)]
+for invalid_log in [True, 0, 65536, "1", None]:
+    try:
+        ExternalCosigner(
+            "32473.102", Path("external.key"), "32473.101",
+            "ecdsa-p256", log=invalid_log)
+    except ValueError as error:
+        assert str(error) == "invalid issuance log number"
+    else:
+        raise AssertionError("invalid issuance log number was accepted")
+
 signer = ExternalCosigner(
     "32473.102", Path("external.key"), "32473.101", "ecdsa-p256")
 
@@ -154,7 +164,7 @@ with tempfile.TemporaryDirectory(prefix="mtc-cosigner-state-") as temporary:
         persisted_first.tree_size, persisted_first.root_hash
     ) == persisted_first
     assert state_path.read_bytes() == (
-        b'{"tree_size":3,"root_hash":"'
+        b'{"log_number":1,"tree_size":3,"root_hash":"'
         + persisted_first.root_hash.hex().encode("ascii") + b'"}\n')
 
     restarted = ExternalCosigner(
@@ -205,9 +215,66 @@ with tempfile.TemporaryDirectory(prefix="mtc-cosigner-state-") as temporary:
         loaded_hash, loaded.family, 0, loaded.log)
     assert loaded.accepted == persisted_grown
 
+    # Persisted checkpoints are bound to exactly one issuance log.  Loading a
+    # log-1 checkpoint as log 2 fails without modifying the state file.
+    log_1_bytes = state_path.read_bytes()
+    try:
+        ExternalCosigner(
+            signer.identity, signer.key, signer.ca_id, signer.family,
+            log=2, state_path=state_path)
+    except ValueError as error:
+        assert str(error) == "invalid persisted cosigner state"
+    else:
+        raise AssertionError("state from another issuance log was accepted")
+    assert state_path.read_bytes() == log_1_bytes
+
+    # Legacy state is deliberately not guessed to belong to log 1.
+    legacy_path = Path(temporary) / "legacy.json"
+    legacy_bytes = (
+        b'{"tree_size":8,"root_hash":"'
+        + core.root(entries).hex().encode("ascii") + b'"}\n')
+    legacy_path.write_bytes(legacy_bytes)
+    try:
+        ExternalCosigner(
+            signer.identity, signer.key, signer.ca_id, signer.family,
+            state_path=legacy_path)
+    except ValueError as error:
+        assert str(error) == "invalid persisted cosigner state"
+    else:
+        raise AssertionError("legacy state without log_number was accepted")
+    assert legacy_path.read_bytes() == legacy_bytes
+
+    # A fresh log 2 has an independent empty history and may accept a
+    # checkpoint with the same tree size as log 1.
+    log_2_path = Path(temporary) / "accepted-log-2.json"
+    log_2_entries = [b"log-2-" + bytes([i]) for i in range(len(entries))]
+    log_2_checkpoint = AcceptedCheckpoint(
+        len(log_2_entries), core.root(log_2_entries))
+    log_2 = ExternalCosigner(
+        signer.identity, signer.key, signer.ca_id, signer.family,
+        log=2, state_path=log_2_path)
+    assert log_2.accepted is None
+    assert log_2.accept_view(
+        log_2_checkpoint.tree_size, log_2_checkpoint.root_hash,
+        core.consistency(log_2_entries, 0)) == log_2_checkpoint
+    assert log_2.accepted == log_2_checkpoint
+    assert loaded.accepted == persisted_grown
+    assert log_2_checkpoint.tree_size == persisted_grown.tree_size
+    assert log_2_checkpoint.root_hash != persisted_grown.root_hash
+    assert b'"log_number":2' in log_2_path.read_bytes()
+
+    restarted_log_2 = ExternalCosigner(
+        signer.identity, signer.key, signer.ca_id, signer.family,
+        log=2, state_path=log_2_path)
+    assert restarted_log_2.accepted == log_2_checkpoint
+
     corrupt_states = [
         b"not json",
         b'{}',
+        b'{"log_number":0,"tree_size":8,"root_hash":"'
+        + b"00" * 32 + b'"}',
+        b'{"log_number":true,"tree_size":8,"root_hash":"'
+        + b"00" * 32 + b'"}',
         b'{"tree_size":-1,"root_hash":"' + b"00" * 32 + b'"}',
         b'{"tree_size":281474976710656,"root_hash":"'
         + b"00" * 32 + b'"}',
