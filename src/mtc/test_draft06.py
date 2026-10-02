@@ -27,6 +27,8 @@ def main():
                         help='Run the focused N=1 external-cosigner injection path')
     parser.add_argument('--cli-cosigner-only',action='store_true',
                         help='Run focused standalone generation through CosignerCLIClient')
+    parser.add_argument('--http-cosigner-only',action='store_true',
+                        help='Run focused standalone generation through CosignerHTTPClient')
     parser.add_argument('--profiles',nargs=2,default=['ecdsa-p256','mldsa65'])
     args=parser.parse_args()
     if args.profiles[0]==args.profiles[1]:parser.error('Two distinct profiles are required')
@@ -63,7 +65,7 @@ def main():
                             '-addext','basicConstraints=critical,CA:FALSE',
                             '-addext','extendedKeyUsage=serverAuth')
             originals[family]=cert
-        sizes=([16] if args.cli_cosigner_only else
+        sizes=([16] if (args.cli_cosigner_only or args.http_cosigner_only) else
                ([1] if args.injection_only else [1,16]))
         for n in sizes:
             batch=temp/('n'+str(n));batch.mkdir()
@@ -116,6 +118,159 @@ def main():
                     damaged=bytearray(snapshot.read_bytes());damaged[len(trusted.read_bytes())+4+6+8]^=1
                     bad=temp/f'{family}-bad-root.mcf1';bad.write_bytes(damaged)
                     reject_generation('corrupted-checkpoint',authenticated_snapshot=bad)
+                if args.http_cosigner_only:
+                    from threading import Thread
+                    from cosigner_http_client import CosignerHTTPClient
+                    from cosigner_http_service import CosignerHTTPServer
+
+                    profile=prepare.crypto_profile(family)
+                    signer_keys=[temp/f'{family}-http-signer-{i}.key'
+                                 for i in range(2)]
+                    for key in signer_keys:prepare.keygen(key,family)
+                    external_public=temp/f'{family}-http-external.pub'
+                    external_public.write_bytes(prepare.command(
+                        'pkey','-in',signer_keys[1],'-pubout'))
+                    state_path=temp/f'{family}-http-state.json'
+
+                    class RecordingHTTPClient(CosignerHTTPClient):
+                        def __init__(self,*values,**kwargs):
+                            super().__init__(*values,**kwargs)
+                            self.calls=[];self.http_operations=[]
+                        def _post(self,path,value):
+                            self.http_operations.append(path)
+                            return super()._post(path,value)
+                        def accept_view(self,*values):
+                            self.calls.append(('accept_view',values))
+                            return super().accept_view(*values)
+                        def cosign_accepted(self,*values):
+                            result=super().cosign_accepted(*values)
+                            self.calls.append(('cosign_accepted',values,result))
+                            return result
+                        def cosign_subtree(self,*values):
+                            result=super().cosign_subtree(*values)
+                            self.calls.append(('cosign_subtree',values,result))
+                            return result
+
+                    encoded=[core.entry(core.mtc_tbs(
+                        core.from_pem(before),profile['ca_id'],i))
+                        for i in range(n)]
+                    checkpoint=core.root(encoded)
+                    initial_proof=core.consistency(encoded,0)
+                    server=CosignerHTTPServer(
+                        ('127.0.0.1',0),profile['cosigner_ids'][1],
+                        signer_keys[1],profile['ca_id'],family,state_path)
+                    thread=Thread(target=server.serve_forever,daemon=True)
+                    thread.start()
+                    host,port=server.server_address
+                    client=RecordingHTTPClient(
+                        f'http://{host}:{port}',timeout=2)
+                    try:
+                        with patch(
+                                'cosigner.ExternalCosigner',
+                                side_effect=AssertionError('local fallback')):
+                            meta=prepare.prepare(
+                                out,temp,family,n,originals=[cert]*n,
+                                signer_keys=signer_keys,
+                                external_cosigner=client,
+                                external_consistency_proof=initial_proof)
+
+                        assert client.calls[0]==(
+                            'accept_view',(n,checkpoint,initial_proof))
+                        assert client.calls[0][1][2] is initial_proof
+                        subtree_calls=[call for call in client.calls
+                                       if call[0]=='cosign_subtree']
+                        assert len(subtree_calls)==len(core.cover(0,n))==2
+                        assert client.http_operations==[
+                            '/accept-view','/cosign-accepted',
+                            '/cosign-subtree','/cosign-subtree']
+
+                        persisted=json.loads(state_path.read_text())
+                        assert persisted=={
+                            'tree_size':n,'root_hash':checkpoint.hex()}
+                        checkpoint_call=next(
+                            call for call in client.calls
+                            if call[0]=='cosign_accepted')
+                        timestamp=checkpoint_call[1][0]
+                        checkpoint_identity,checkpoint_signature=(
+                            checkpoint_call[2])
+
+                        def verify_http_external(message,signature,label):
+                            message_path=temp/f'{family}-{label}.message'
+                            signature_path=temp/f'{family}-{label}.signature'
+                            message_path.write_bytes(message)
+                            signature_path.write_bytes(signature)
+                            selected=prepare.crypto_profile(family)
+                            prepare.command(
+                                'pkeyutl','-verify','-rawin','-pubin',
+                                '-inkey',external_public,'-in',message_path,
+                                '-sigfile',signature_path,
+                                *(['-digest',selected['digest']]
+                                  if selected['digest'] else []))
+
+                        verify_http_external(core.message(
+                            checkpoint_identity,profile['ca_id'],0,n,
+                            checkpoint,timestamp,1),checkpoint_signature,
+                            'http-checkpoint')
+                        trust=(out/'trust.bin').read_bytes()
+                        checkpoint_encoding=(
+                            core.vec(core.relid(checkpoint_identity),1)
+                            +core.vec(checkpoint_signature))
+                        assert checkpoint_encoding in trust
+
+                        generated=[
+                            (out/'log'/f'{i:06d}.entry').read_bytes()
+                            for i in range(n)]
+                        assert generated==encoded
+                        for call,(start,end) in zip(
+                                subtree_calls,core.cover(0,n)):
+                            values=call[1]
+                            identity,signature=call[2]
+                            subtree_hash=core.root(encoded[start:end])
+                            assert values[:3]==(start,end,subtree_hash)
+                            assert core.verify_subtree_consistency(
+                                start,end,n,subtree_hash,checkpoint,values[3])
+                            verify_http_external(core.message(
+                                identity,profile['ca_id'],start,end,
+                                subtree_hash,0,1),signature,
+                                f'http-subtree-{start}-{end}')
+                            index=start
+                            standalone=(
+                                out/f'standalone-{index:04d}.der').read_bytes()
+                            outer,_=core.certificate_parts(standalone)
+                            mtc_proof=outer[2][1][1:]
+                            path=core.inclusion(
+                                encoded[start:end],index-start)
+                            assert mtc_proof.startswith(
+                                core.vec(b'')+core.uint(start,6)
+                                +core.uint(end,6)+core.vec(b''.join(path)))
+                            external_encoding=(
+                                core.vec(core.relid(identity),1)
+                                +core.vec(signature))
+                            assert external_encoding in mtc_proof
+                            ca_marker=core.vec(core.relid(
+                                profile['cosigner_ids'][0]),1)
+                            external_marker=core.vec(core.relid(
+                                profile['cosigner_ids'][1]),1)
+                            assert 0<=mtc_proof.find(
+                                ca_marker)<mtc_proof.find(external_marker)
+
+                        for index in range(n):
+                            result=subprocess.run([
+                                str(temp/'check'),str(out/'authority.bin'),'0',
+                                str(out/f'standalone-{index:04d}.der')],
+                                capture_output=True)
+                            assert result.returncode==0,(
+                                family,index,result.stderr.decode())
+                        assert meta['subtrees']==core.cover(0,n)
+                        print(
+                            f'PASS {family}: standalone through '
+                            'CosignerHTTPClient',flush=True)
+                    finally:
+                        server.shutdown()
+                        server.server_close()
+                        thread.join(timeout=2)
+                        assert not thread.is_alive()
+                    continue
                 if args.cli_cosigner_only:
                     from cosigner_client import CosignerCLIClient
 
