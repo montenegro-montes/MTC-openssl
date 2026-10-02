@@ -194,6 +194,7 @@ def main():
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8080)
     parser.add_argument('--snapshot')
+    parser.add_argument('--ready-file')
     parser.add_argument(
         '--read-only',
         action='store_true',
@@ -205,6 +206,12 @@ def main():
             args.data,
             args.snapshot,
             read_only=args.read_only) as server:
+        if args.ready_file:
+            ready = Path(args.ready_file)
+            if ready.exists() or ready.is_symlink():
+                raise ValueError('Ready file already exists')
+            port = server.server_address[1]
+            ready.write_text(json.dumps({'host': args.host, 'port': port}) + '\n')
         try:server.serve_forever()
         except KeyboardInterrupt:pass
 

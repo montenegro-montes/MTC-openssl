@@ -3,6 +3,10 @@ set -euo pipefail
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 SELF="$REPO/bin/base/mt-protocol-validation"
 cd "$REPO"
+if [[ "${1:-}" == http-transparency ]]; then
+ shift
+ exec python3 campaigns/validation/protocol_validation/http_transparency/run.py "$@"
+fi
 source "$REPO/bin/lib/docker-preflight.sh"
 STATE_ROOT="$REPO/.mt-state/protocol-validation"
 STATE="${MT_PROTOCOL_STATE:-$STATE_ROOT}"
@@ -1016,7 +1020,7 @@ retry_validation() {
 menu() {
  local choice value key
  while true; do
-  printf '\nProtocol validation: 1 Initialize  2 Status  3 Show command\n                     4 Run stage  5 Change path  6 New campaign\n                     7 Run ALL pending stages (includes captures and stress checks)\n                     8 Run ALL PROFILES × ALL LEAVES (9 × 16 identities)\n                     9 Mutual-authentication preflight\n                    10 Trust-anchor retry preflight  0 Back\n'
+  printf '\nProtocol validation: 1 Initialize  2 Status  3 Show command\n                     4 Run stage  5 Change path  6 New campaign\n                     7 Run ALL pending stages (includes captures and stress checks)\n                     8 Run ALL PROFILES × ALL LEAVES (9 × 16 identities)\n                     9 Mutual-authentication preflight\n                    10 Trust-anchor retry preflight\n                    11 HTTP transparency (optional)  0 Back\n'
   read -r -p '> ' choice || return 0
   case "$choice" in
    1) read -r -p 'Date/name (empty=new): ' value; "$SELF" init "${value:-$(date -u +%Y%m%dT%H%M%SZ)}" || true;;
@@ -1030,6 +1034,7 @@ menu() {
    9) "$SELF" mutual-auth --json || true;;
    10) load; printf 'Using configured profile=%s leaf=%s.\n' "$PROFILE" "$LEAF"; read -r -p 'New output below artifacts/results/ (empty=new): ' value
      if [[ -n "$value" ]]; then "$SELF" retry preflight "$value" || true; else "$SELF" retry preflight || true; fi;;
+   11) "$SELF" http-transparency plan || true;;
    0) return 0;;
   esac
  done
@@ -1054,6 +1059,6 @@ case "${1:-menu}" in
   esac;;
  set) set_path "${2:?Variable required}" "${3:?Path required}";;
  menu) menu;;
- help|--help|-h) printf 'Usage: %s [menu|init [NAME]|init-profile NAME PROFILE [LEAF]|new [NAME]|status|list|profiles|show STAGE|run STAGE|run ALL|run ALL-PROFILES [NAME]|mutual-auth [OPTIONS]|retry preflight [OUTPUT] [OPTIONS]|set FIX/KEY/CAP/PROFILE/LEAF VALUE]\nSTAGE accepts a number (05) or full name (05.draft-core-vectors).\nrun ALL executes all pending stages for the configured profile/leaf, beginning with the pinned draft core vectors.\nrun ALL-PROFILES [NAME] evaluates the draft vectors once, then validates all nine profiles across all 16 N=16 leaves (144 identities, landmark + standalone). It displays elapsed time and an ETA, then writes JSON and HTML reports with host and duration metadata.\nmutual-auth and retry automatically prepare missing images, validated MTC fixtures and mutual-authentication fixtures. Retry runs its bundled peer inside the MTC image and chooses a timestamped output when OUTPUT is omitted. Full retry timing belongs in handshake performance.\nManual workflow: init/status/show do not invoke Docker. No builds or deletion.\n' "$SELF";;
+ help|--help|-h) printf 'Usage: %s [menu|init [NAME]|init-profile NAME PROFILE [LEAF]|new [NAME]|status|list|profiles|show STAGE|run STAGE|run ALL|run ALL-PROFILES [NAME]|mutual-auth [OPTIONS]|retry preflight [OUTPUT] [OPTIONS]|http-transparency plan|status|build-checker|show CASE|run CASE|set FIX/KEY/CAP/PROFILE/LEAF VALUE]\nSTAGE accepts a number (05) or full name (05.draft-core-vectors).\nrun ALL executes all pending stages for the configured profile/leaf, beginning with the pinned draft core vectors.\nrun ALL-PROFILES [NAME] evaluates the draft vectors once, then validates all nine profiles across all 16 N=16 leaves (144 identities, landmark + standalone). It displays elapsed time and an ETA, then writes JSON and HTML reports with host and duration metadata.\nmutual-auth, retry and HTTP transparency are separate subvalidations; HTTP transparency keeps Chromium optional and does not alter stages 05-120.\nManual workflow: init/status/show/plan do not invoke Docker, HTTP, or Chromium. No deletion.\n' "$SELF";;
  *) fail 'Unknown command; use help.';;
 esac

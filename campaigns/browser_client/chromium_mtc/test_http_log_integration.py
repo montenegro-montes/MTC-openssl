@@ -1,5 +1,6 @@
 """Focused offline tests for the one-shot HTTP log Chromium bridge."""
 
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -73,6 +74,17 @@ class HttpLogIntegrationTests(unittest.TestCase):
                       "http://127.0.0.1:8080/path"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 bridge.require_local_http_url(value)
+
+    def test_managed_log_accepts_os_selected_or_explicit_port(self):
+        ready = self.root / "ready.json"
+        ready.write_text(json.dumps({"host": "127.0.0.1", "port": 49152}))
+        expected = "http://127.0.0.1:49152/"
+        self.assertEqual(
+            bridge.managed_log_base_url(ready, "127.0.0.1", 0), expected)
+        self.assertEqual(
+            bridge.managed_log_base_url(ready, "127.0.0.1", 49152), expected)
+        with self.assertRaisesRegex(ValueError, "invalid address"):
+            bridge.managed_log_base_url(ready, "127.0.0.1", 8080)
 
 
 if __name__ == "__main__":

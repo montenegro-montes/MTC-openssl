@@ -81,20 +81,32 @@ def audit_updater_get(records):
         rp_updater._get = original
 
 
+def managed_log_base_url(ready, host, requested_port):
+    try:
+        address = json.loads(Path(ready).read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    bv.require(isinstance(address, dict),
+               "read-only HTTP transparency log reported an invalid address")
+    port = address.get("port")
+    bv.require(address.get("host") == host and type(port) is int
+               and 0 < port < 65536
+               and (requested_port == 0 or port == requested_port),
+               "read-only HTTP transparency log reported an invalid address")
+    return f"http://{host}:{port}/"
+
+
 @contextmanager
 def local_log_service(host, port, log_data, snapshot, output):
     log_data = Path(log_data).resolve()
     bv.require(log_data.is_dir() and not log_data.is_symlink(),
                "log data must be an existing non-symlink directory")
-    with socket.socket() as probe:
-        try:
-            probe.bind((host, port))
-        except OSError as error:
-            raise ValueError("transparency log port is already occupied") from error
+    ready = output / "log-service-ready.json"
     command = [
         sys.executable, "-B", str(MTC / "log_service.py"),
         "--host", host, "--port", str(port),
         "--data", str(log_data), "--snapshot", str(snapshot), "--read-only",
+        "--ready-file", str(ready),
     ]
     bv.write(output / "log-service-command.json", {
         "command": command,
@@ -106,19 +118,24 @@ def local_log_service(host, port, log_data, snapshot, output):
         process = subprocess.Popen(command, stdout=stdout, stderr=stderr,
                                    start_new_session=True)
         try:
+            base_url = None
             for _ in range(50):
                 if process.poll() is not None:
                     raise ValueError("read-only HTTP transparency log exited before readiness")
-                try:
-                    with socket.create_connection((host, port), timeout=0.1):
-                        break
-                except OSError:
-                    time.sleep(0.1)
+                base_url = managed_log_base_url(ready, host, port)
+                if base_url:
+                    try:
+                        with socket.create_connection(
+                                (host, urlsplit(base_url).port), timeout=0.1):
+                            break
+                    except OSError:
+                        pass
+                time.sleep(0.1)
             else:
                 raise ValueError("read-only HTTP transparency log readiness not confirmed")
             bv.require(process.poll() is None,
                        "read-only HTTP transparency log exited during readiness")
-            yield f"http://{host}:{port}/"
+            yield base_url
         finally:
             try:
                 os.killpg(process.pid, signal.SIGTERM)
@@ -300,7 +317,9 @@ def main(argv=None):
     source.add_argument("--log-url")
     source.add_argument("--log-data", type=Path)
     parser.add_argument("--log-host", default="127.0.0.1")
-    parser.add_argument("--log-port", type=int, default=8080)
+    parser.add_argument(
+        "--log-port", type=int, default=0,
+        help="managed log port (default: OS-selected loopback port)")
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--fixture", type=Path, required=True)
     parser.add_argument("--validation", type=Path, required=True)
@@ -319,7 +338,7 @@ def main(argv=None):
     parser.add_argument("--timeout", type=int, default=60)
     args = parser.parse_args(argv)
     bv.require(args.log_url or (args.log_host in ("127.0.0.1", "localhost")
-                               and 0 < args.log_port < 65536),
+                               and 0 <= args.log_port < 65536),
                "managed log service requires an explicit loopback host and port")
     bv.require(5 <= args.timeout <= 300, "timeout must be between 5 and 300 seconds")
     output, status = run(args)
