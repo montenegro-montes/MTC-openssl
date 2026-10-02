@@ -14,8 +14,10 @@ def sign(path,data,family):
     tmp=path.parent/'sign-input.tmp';tmp.write_bytes(data)
     try:return command('pkeyutl','-sign','-rawin','-inkey',path,'-in',tmp,*(['-digest',profile['digest']] if profile['digest'] else []))
     finally:tmp.unlink()
+def cosign(ident,key,caid,start,end,subtree_hash,family,timestamp=0,log=1):
+    return ident,sign(key,message(ident,caid,start,end,subtree_hash,timestamp,log),family)
 def checkpoint_signature(ident,key,caid,n,checkpoint,timestamp,family):
-    return ident,sign(key,message(ident,caid,0,n,checkpoint,timestamp),family)
+    return cosign(ident,key,caid,0,n,checkpoint,family,timestamp)
 def authority_config(caid,ids,public,n):
     """Existing local MCF1 authority encoding; not a certificate wire format."""
     if not 1<=n<=1024 or len(ids)!=2 or len(public)!=2:raise ValueError('MCF1 configuration')
@@ -111,7 +113,8 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
         assert root(mirror)==checkpoint
         cp_sigs.append(checkpoint_signature(ident,key,caid,n,checkpoint,timestamp,family))
         for start,end in subtrees:
-            sub_sigs.setdefault((start,end),[]).append((ident,sign(key,message(ident,caid,start,end,root(mirror[start:end])),family)))
+            sub_sigs.setdefault((start,end),[]).append(
+                cosign(ident,key,caid,start,end,root(mirror[start:end]),family))
     for i,t in enumerate(tbs):
         start,end=next(x for x in subtrees if x[0]<=i<x[1]);path=inclusion(entries[start:end],i-start)
         assert evaluate(entries[i],i,start,end,path)==root(entries[start:end])
