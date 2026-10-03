@@ -47,7 +47,9 @@ def _get(base_url, path, binary=False):
 
 def _checkpoint(state):
     if (not isinstance(state, dict)
-            or set(state) != {"tree_size", "hash"}
+            or set(state) != {"log_number", "tree_size", "hash"}
+            or type(state["log_number"]) is not int
+            or not 1 <= state["log_number"] <= 65535
             or type(state["tree_size"]) is not int
             or not 0 <= state["tree_size"] < 1 << 48
             or not isinstance(state["hash"], str)
@@ -83,6 +85,8 @@ def advance_checkpoint(
         return dict(candidate)
 
     previous = _checkpoint(previous)
+    if previous["log_number"] != candidate["log_number"]:
+        raise ValueError("Cannot advance checkpoint across issuance logs")
     old_size = previous["tree_size"]
     new_size = candidate["tree_size"]
 
@@ -199,6 +203,10 @@ def build_trusted_subtree_configuration(
         max_active_landmarks=None):
     """Build validated Section 7.4 trusted-subtree state and MTS1 bytes."""
     checkpoint = dict(_checkpoint(reference_checkpoint))
+    if type(log_number) is not int or not 1 <= log_number <= 65535:
+        raise ValueError("Invalid issuance log number")
+    if checkpoint["log_number"] != log_number:
+        raise ValueError("Trusted-subtree log differs from authenticated checkpoint")
 
     evidence = fetch_subtree_evidence(
         base_url, sequence, now, checkpoint)
@@ -207,7 +215,10 @@ def build_trusted_subtree_configuration(
         log_number,
         sequence,
         now,
-        checkpoint,
+        {
+            "tree_size": checkpoint["tree_size"],
+            "hash": checkpoint["hash"],
+        },
         evidence,
         max_active_landmarks=max_active_landmarks,
     )
@@ -223,7 +234,10 @@ def update_and_publish(
     store = RPStateStore(state_directory)
     current = store.load_current()
 
-    previous = None if current is None else current["checkpoint"]
+    previous = None
+    if (current is not None
+            and current["checkpoint"]["log_number"] == log_number):
+        previous = current["checkpoint"]
 
     checkpoint = fetch_and_advance_checkpoint(
         base_url,
@@ -232,6 +246,11 @@ def update_and_publish(
         previous=previous,
         authenticate=authenticate,
     )
+
+    if checkpoint["log_number"] != log_number:
+        raise ValueError(
+            "Authenticated checkpoint issuance log differs from requested log"
+        )
 
     _, mts1 = build_trusted_subtree_configuration(
         base_url,

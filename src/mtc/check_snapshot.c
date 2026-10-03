@@ -13,7 +13,9 @@ int main(int argc,char **argv){
            EVP_PKEY_eq(trusted->signers[i].key,snapshot->signers[i].key)!=1)goto end;
     }
     /* Output only after BOTH authentication and independent key pinning pass. */
-    printf("{\"tree_size\":%llu,\"hash\":\"",(unsigned long long)snapshot->size);
+    printf("{\"log_number\":%u,\"tree_size\":%llu,\"hash\":\"",
+           (unsigned int)snapshot->log,
+           (unsigned long long)snapshot->size);
     for(unsigned i=0;i<32;i++)printf("%02x",snapshot->root[i]);
     printf("\"}\n");ok=1;
 end:

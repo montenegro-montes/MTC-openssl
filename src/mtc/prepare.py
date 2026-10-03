@@ -114,7 +114,13 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
         authenticated=authenticate_snapshot(authenticated_snapshot,trusted_authority,snapshot_checker)
         with persistent_log._locked():
             persisted,state=persistent_log._read()
-            if state!=authenticated or state['tree_size']!=n:
+            if authenticated['log_number']!=log_number:
+                raise ValueError('Authenticated snapshot issuance log differs from prepare log')
+            authenticated_state={
+                'tree_size':authenticated['tree_size'],
+                'hash':authenticated['hash'],
+            }
+            if state!=authenticated_state or state['tree_size']!=n:
                 raise ValueError('Persistent log differs from authenticated snapshot')
             if entries!=persisted:
                 raise ValueError('Certificate inputs differ from authenticated log entries')

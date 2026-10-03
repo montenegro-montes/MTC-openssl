@@ -92,8 +92,20 @@ def main():
                     checker=temp/'check_snapshot'
                     state8=authenticate_snapshot(old,trusted,checker)
                     state16=authenticate_snapshot(snapshot,trusted,checker)
-                    current,path=persistent.prove_consistency(state8)
-                    assert current==state16 and verify_snapshot_consistency(old,snapshot,trusted,checker,path)
+                    assert state8['log_number']==1
+                    assert state16['log_number']==1
+                    local_state8={
+                        'tree_size':state8['tree_size'],
+                        'hash':state8['hash'],
+                    }
+                    local_state16={
+                        'tree_size':state16['tree_size'],
+                        'hash':state16['hash'],
+                    }
+                    current,path=persistent.prove_consistency(local_state8)
+                    assert current==local_state16
+                    assert verify_snapshot_consistency(
+                        old,snapshot,trusted,checker,path)
                     options=dict(persistent_log=persistent,authenticated_snapshot=snapshot,
                                  trusted_authority=trusted,snapshot_checker=checker,signer_keys=keys)
                     def reject_generation(label,**overrides):
@@ -104,6 +116,10 @@ def main():
                         else:raise AssertionError('Accepted '+label)
                         assert not target.exists(),label+' created output before rejection'
                     reject_generation('old-size',authenticated_snapshot=old)
+                    reject_generation(
+                        'snapshot-log-mismatch',
+                        log_number=2,
+                    )
                     other=originals[args.profiles[1-args.profiles.index(family)]]
                     reject_generation('wrong-certificate-inputs',originals=[other]*n)
                     first=persistent.directory/'log/000000.entry'
@@ -582,6 +598,31 @@ def main():
                                                str(int(mode=='landmark')),
                                                str(out/f'{mode}-{index:04d}.der')],capture_output=True)
                         assert result.returncode==0,(family,n,index,mode,result.stderr.decode())
+
+                # Native RP accepts a non-default issuance-log domain.
+                if n==16:
+                    log2_out=temp/f'{family}-log2'
+                    log2_meta=prepare.prepare(
+                        log2_out,temp,family,n,
+                        originals=[cert]*n,
+                        log_number=2,
+                    )
+                    assert log2_meta['log_number']==2
+
+                    log2_standalone=subprocess.run([
+                        str(temp/'check'),
+                        str(log2_out/'authority.bin'),
+                        '0',
+                        str(log2_out/'standalone-0000.der'),
+                    ],capture_output=True)
+                    assert log2_standalone.returncode==0,(
+                        family,'log 2 standalone native verification',
+                        log2_standalone.stderr.decode()
+                    )
+                    print(
+                        f'PASS {family}: native log 2 standalone verification',
+                        flush=True,
+                    )
 
                 # Sections 6.4.4 and 7.4: an evolved landmark-relative
                 # certificate is trusted only after its subtree is configured.

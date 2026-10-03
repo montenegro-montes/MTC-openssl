@@ -24,6 +24,7 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-state-test-") as temporary:
     assert store.load_current() is None
 
     checkpoint8 = {
+        "log_number": 1,
         "tree_size": 8,
         "hash": root([bytes([i]) for i in range(8)]).hex(),
     }
@@ -43,6 +44,7 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-state-test-") as temporary:
     assert store.current.readlink() == target8
 
     checkpoint16 = {
+        "log_number": 1,
         "tree_size": 16,
         "hash": root([bytes([i]) for i in range(16)]).hex(),
     }
@@ -63,6 +65,7 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-state-test-") as temporary:
     rejected(
         lambda: store.publish(
             {
+                "log_number": 1,
                 "tree_size": 17,
                 "hash": "00" * 32,
             },
@@ -93,14 +96,15 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-state-test-") as temporary:
 
     # A corrupt generation cannot be selected as current.
     corrupt = store.generations / (
-        "%016d-%s-%s" % (
+        "%05d-%016d-%s-%s" % (
+            1,
             17,
             "00" * 32,
             hashlib.sha256(b"bad").hexdigest(),
         ))
     corrupt.mkdir()
     (corrupt / "checkpoint.json").write_text(
-        '{"hash":"' + ("00" * 32) + '","tree_size":17}\n',
+        '{"hash":"' + ("00" * 32) + '","log_number":1,"tree_size":17}\n',
         encoding="ascii",
     )
     (corrupt / "trusted-subtrees.mts1").write_bytes(b"bad")
@@ -124,6 +128,7 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-state-test-") as temporary:
     import rp_state
 
     checkpoint32 = {
+        "log_number": 1,
         "tree_size": 32,
         "hash": root([bytes([i]) for i in range(32)]).hex(),
     }
@@ -159,7 +164,8 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-state-test-") as temporary:
     assert retained["trusted_subtrees"] == refreshed16
 
     generation32 = store.generations / (
-        "%016d-%s-%s" % (
+        "%05d-%016d-%s-%s" % (
+            checkpoint32["log_number"],
             checkpoint32["tree_size"],
             checkpoint32["hash"],
             hashlib.sha256(mts32).hexdigest(),
@@ -169,4 +175,88 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-state-test-") as temporary:
     assert written32_checkpoint == checkpoint32
     assert written32_mts1 == mts32
 
+# Commit 8: RP state is explicitly bound to one issuance-log domain.
+with tempfile.TemporaryDirectory(prefix="mtc-rp-state-log2-test-") as temporary:
+    directory = Path(temporary) / "rp-state"
+    store = RPStateStore(directory)
+
+    shared_hash = root([bytes([i]) for i in range(8)]).hex()
+    checkpoint2 = {
+        "log_number": 2,
+        "tree_size": 8,
+        "hash": shared_hash,
+    }
+    mts2 = encode_trusted_subtrees([
+        TrustedSubtree(2, 0, 4, b"\x55" * 32),
+        TrustedSubtree(2, 4, 8, b"\x66" * 32),
+    ])
+
+    published2 = store.publish(checkpoint2, mts2)
+    assert published2["checkpoint"] == checkpoint2
+    assert published2["trusted_subtrees"] == mts2
+    target2 = store.current.readlink()
+
+    # Restart must preserve the authenticated log identity.
+    restarted = RPStateStore(directory)
+    loaded2 = restarted.load_current()
+    assert loaded2["checkpoint"] == checkpoint2
+    assert loaded2["trusted_subtrees"] == mts2
+    assert restarted.current.readlink() == target2
+
+    # Same tree size/root in another log is still a distinct RP generation.
+    checkpoint1_same = {
+        "log_number": 1,
+        "tree_size": 8,
+        "hash": shared_hash,
+    }
+    empty_mts1 = encode_trusted_subtrees([])
+    published1 = restarted.publish(checkpoint1_same, empty_mts1)
+    assert published1["checkpoint"] == checkpoint1_same
+    assert restarted.current.readlink() != target2
+    assert (restarted.directory / target2).is_dir()
+
+    # Legacy/unbound checkpoints and invalid log identifiers fail closed.
+    invalid_checkpoints = [
+        {"tree_size": 8, "hash": shared_hash},
+        {"log_number": 0, "tree_size": 8, "hash": shared_hash},
+        {"log_number": 65536, "tree_size": 8, "hash": shared_hash},
+        {"log_number": -1, "tree_size": 8, "hash": shared_hash},
+        {"log_number": True, "tree_size": 8, "hash": shared_hash},
+        {"log_number": "2", "tree_size": 8, "hash": shared_hash},
+    ]
+    before_invalid = restarted.current.readlink()
+    for candidate in invalid_checkpoints:
+        rejected(
+            lambda candidate=candidate: restarted.publish(
+                candidate, empty_mts1),
+            "invalid or unbound checkpoint accepted",
+        )
+        assert restarted.current.readlink() == before_invalid
+
+    # A checkpoint and its MTS1 must belong to the same issuance log.
+    cross_log_mts1 = encode_trusted_subtrees([
+        TrustedSubtree(1, 0, 8, b"\x77" * 32),
+    ])
+    rejected(
+        lambda: restarted.publish(checkpoint2, cross_log_mts1),
+        "cross-log MTS1 accepted",
+    )
+    assert restarted.current.readlink() == before_invalid
+
+    # A structurally valid but cross-log generation appearing on disk must
+    # also fail closed when read after publication/restart.
+    cross_name = restarted._generation_name(checkpoint2, cross_log_mts1)
+    cross_generation = restarted.generations / cross_name
+    cross_generation.mkdir()
+    (cross_generation / "checkpoint.json").write_bytes(
+        restarted._checkpoint_bytes(checkpoint2)
+    )
+    (cross_generation / "trusted-subtrees.mts1").write_bytes(cross_log_mts1)
+    rejected(
+        lambda: restarted._read_generation(cross_generation),
+        "cross-log generation accepted from disk",
+    )
+    assert restarted.current.readlink() == before_invalid
+
+print("PASS: RP state log-domain binding and restart")
 print("PASS: atomic fail-closed RP state publication")

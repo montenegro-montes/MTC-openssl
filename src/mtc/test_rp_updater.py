@@ -38,7 +38,10 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-update-test-") as temporary:
     base_url = "http://127.0.0.1:%d/" % server.server_address[1]
 
     states = {
-        b"snapshot-8": state8,
+        b"snapshot-8": {
+            "log_number": 1,
+            **state8,
+        },
     }
 
     def authenticate(snapshot, trusted_authority, checker):
@@ -51,22 +54,28 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-update-test-") as temporary:
         # Authenticated bootstrap.
         current = fetch_and_advance_checkpoint(
             base_url, None, None, authenticate=authenticate)
-        assert current == state8
+        assert current == {"log_number": 1, **state8}
 
         # Same authenticated checkpoint is an idempotent no-op.
         assert fetch_and_advance_checkpoint(
-            base_url, None, None, current, authenticate) == state8
+            base_url, None, None, current, authenticate) == {
+                "log_number": 1,
+                **state8,
+            }
 
         # Grow the real HTTP log to N=16 and publish its authenticated model.
         for entry in entries[8:]:
             log.append(entry)
         state16 = log.state()
-        states[b"snapshot-16"] = state16
+        states[b"snapshot-16"] = {
+            "log_number": 1,
+            **state16,
+        }
         published.write_bytes(b"snapshot-16")
 
         current = fetch_and_advance_checkpoint(
             base_url, None, None, current, authenticate)
-        assert current == state16
+        assert current == {"log_number": 1, **state16}
 
         # The authenticated N=16 checkpoint is the trust root for all
         # subsequently fetched, unsigned Section 4.4 subtree evidence.
@@ -158,7 +167,11 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-update-test-") as temporary:
         rp_updater._get = corrupted_get
         try:
             try:
-                advance_checkpoint(base_url, state8, state16)
+                advance_checkpoint(
+                    base_url,
+                    {"log_number": 1, **state8},
+                    {"log_number": 1, **state16},
+                )
             except ValueError as exc:
                 assert str(exc) == "Checkpoint consistency verification failed"
             else:
@@ -179,13 +192,44 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-update-test-") as temporary:
         rp_updater._get = mismatched_get
         try:
             try:
-                advance_checkpoint(base_url, state8, state16)
+                advance_checkpoint(
+                    base_url,
+                    {"log_number": 1, **state8},
+                    {"log_number": 1, **state16},
+                )
             except ValueError as exc:
                 assert str(exc) == (
                     "Consistency response does not match checkpoints")
             else:
                 raise AssertionError(
                     "mismatched consistency response accepted")
+        finally:
+            rp_updater._get = real_get
+
+        # Checkpoints from different issuance logs are independent domains.
+        # A direct transition must fail before requesting consistency evidence.
+        log1_checkpoint = {"log_number": 1, **state8}
+        log2_checkpoint = {"log_number": 2, **state16}
+        consistency_requested = False
+        real_get = rp_updater._get
+
+        def detect_cross_log_get(url, path, binary=False):
+            global consistency_requested
+            if path.startswith("/proof/consistency?"):
+                consistency_requested = True
+            return real_get(url, path, binary)
+
+        rp_updater._get = detect_cross_log_get
+        try:
+            try:
+                advance_checkpoint(
+                    base_url, log1_checkpoint, log2_checkpoint)
+            except ValueError as exc:
+                assert str(exc) == (
+                    "Cannot advance checkpoint across issuance logs")
+            else:
+                raise AssertionError("cross-log checkpoint transition accepted")
+            assert not consistency_requested
         finally:
             rp_updater._get = real_get
 
@@ -204,7 +248,10 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-update-test-") as temporary:
             "tree_size": 16,
             "hash": root([b"different"] + entries[1:]).hex(),
         }
-        states[b"snapshot-alternate-16"] = alternate16
+        states[b"snapshot-alternate-16"] = {
+            "log_number": 1,
+            **alternate16,
+        }
         published.write_bytes(b"snapshot-alternate-16")
         try:
             fetch_and_advance_checkpoint(
@@ -223,6 +270,32 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-update-test-") as temporary:
             assert "Snapshot authentication failed" in str(exc)
         else:
             raise AssertionError("unauthenticated snapshot accepted")
+
+        # Log 2 is an independent authenticated checkpoint domain.
+        states[b"snapshot-log2-8"] = {
+            "log_number": 2,
+            **state8,
+        }
+        published.write_bytes(b"snapshot-log2-8")
+        log2_current = fetch_and_advance_checkpoint(
+            base_url, None, None, authenticate=authenticate)
+        assert log2_current == {"log_number": 2, **state8}
+
+        # Normal N -> M consistency verification still applies within log 2.
+        states[b"snapshot-log2-16"] = {
+            "log_number": 2,
+            **state16,
+        }
+        published.write_bytes(b"snapshot-log2-16")
+        log2_current = fetch_and_advance_checkpoint(
+            base_url, None, None, log2_current, authenticate)
+        assert log2_current == {"log_number": 2, **state16}
+
+        # Identical size/root values in different logs remain distinct
+        # authenticated checkpoints.
+        assert log2_current["tree_size"] == current["tree_size"]
+        assert log2_current["hash"] == current["hash"]
+        assert log2_current["log_number"] != current["log_number"]
 
     finally:
         server.shutdown()

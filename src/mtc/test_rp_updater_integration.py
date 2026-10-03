@@ -104,6 +104,7 @@ def main():
                 authority,
                 checker,
             )
+            assert state8["log_number"] == 1
             assert state8["tree_size"] == 8
 
             sequence = [
@@ -156,8 +157,12 @@ def main():
                 checker,
                 state8,
             )
+            assert state16["log_number"] == 1
             assert state16["tree_size"] == 16
-            assert state16 == log.state()
+            assert {
+                "tree_size": state16["tree_size"],
+                "hash": state16["hash"],
+            } == log.state()
 
             # Now exercise the complete operational transaction.  It must
             # recover N=8 from RPStateStore, authenticate N=16, verify the
@@ -215,6 +220,60 @@ def main():
                 published_state["trusted_subtrees"])
 
             # Restore the authentic N=16 publication for subsequent tests.
+            published.write_bytes(snapshot16.read_bytes())
+
+            # The same CA/cosigner keys may authenticate an independent
+            # issuance-log domain.  Switching from retained log 1 to log 2
+            # must bootstrap log 2 rather than request cross-log consistency.
+            public = [
+                prepare.command(
+                    "pkey", "-in", key, "-pubout", "-outform", "DER")
+                for key in keys
+            ]
+            authority_log2 = temp / "trusted-log2-authority.bin"
+            authority_log2.write_bytes(
+                prepare.authority_config(
+                    profile["ca_id"],
+                    profile["cosigner_ids"],
+                    public,
+                    16,
+                    log_number=2,
+                )
+            )
+
+            snapshot_log2 = temp / "snapshot-log2-16.mcf1"
+            export_snapshot(
+                log,
+                snapshot_log2,
+                args.profile,
+                keys,
+                log_number=2,
+            )
+            published.write_bytes(snapshot_log2.read_bytes())
+
+            log2_state = update_and_publish(
+                base_url,
+                authority_log2,
+                checker,
+                rp_directory,
+                2,
+                sequence,
+                50,
+            )
+            assert log2_state["checkpoint"]["log_number"] == 2
+            assert log2_state["checkpoint"]["tree_size"] == 16
+            assert log2_state["checkpoint"]["hash"] == state16["hash"]
+
+            retained_log2 = store.load_current()
+            assert retained_log2["checkpoint"] == log2_state["checkpoint"]
+            assert retained_log2["checkpoint"]["log_number"] == 2
+
+            trusted_log2 = decode_trusted_subtrees(
+                retained_log2["trusted_subtrees"])
+            assert trusted_log2
+            assert all(item.log_number == 2 for item in trusted_log2)
+
+            # Restore log 1 before the independent substituted-key test below.
             published.write_bytes(snapshot16.read_bytes())
 
             # An independently valid snapshot signed by substituted keys must

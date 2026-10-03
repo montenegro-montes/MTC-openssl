@@ -11,7 +11,9 @@ from trusted_subtrees import decode_trusted_subtrees
 
 def _checkpoint(state):
     if (not isinstance(state, dict)
-            or set(state) != {"tree_size", "hash"}
+            or set(state) != {"log_number", "tree_size", "hash"}
+            or type(state["log_number"]) is not int
+            or not 1 <= state["log_number"] <= 65535
             or type(state["tree_size"]) is not int
             or not 0 <= state["tree_size"] < 1 << 48
             or not isinstance(state["hash"], str)
@@ -58,7 +60,8 @@ class RPStateStore:
 
     @staticmethod
     def _generation_name(checkpoint, trusted_subtrees):
-        return "%016d-%s-%s" % (
+        return "%05d-%016d-%s-%s" % (
+            checkpoint["log_number"],
             checkpoint["tree_size"],
             checkpoint["hash"],
             hashlib.sha256(trusted_subtrees).hexdigest(),
@@ -108,8 +111,15 @@ class RPStateStore:
         except OSError as exc:
             raise ValueError("invalid RP trusted-subtree state") from exc
 
-        # Full structural validation before a generation can be selected.
-        decode_trusted_subtrees(mts1)
+        # Full structural and log-domain validation before a generation can
+        # be selected.
+        subtrees = decode_trusted_subtrees(mts1)
+        if any(
+                subtree.log_number != checkpoint["log_number"]
+                for subtree in subtrees):
+            raise ValueError(
+                "RP trusted-subtree state differs from checkpoint issuance log"
+            )
 
         return checkpoint, mts1
 
@@ -157,8 +167,14 @@ class RPStateStore:
         if not isinstance(trusted_subtrees, bytes):
             raise ValueError("trusted-subtree state must be bytes")
 
-        # Reject malformed MTS1 before touching persistent state.
-        decode_trusted_subtrees(trusted_subtrees)
+        # Reject malformed or cross-log MTS1 before touching persistent state.
+        subtrees = decode_trusted_subtrees(trusted_subtrees)
+        if any(
+                subtree.log_number != checkpoint["log_number"]
+                for subtree in subtrees):
+            raise ValueError(
+                "RP trusted-subtree state differs from checkpoint issuance log"
+            )
 
         name = self._generation_name(checkpoint, trusted_subtrees)
         final = self.generations / name

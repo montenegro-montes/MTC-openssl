@@ -268,14 +268,14 @@ MTCConfig *mtc_load(const char *path,int landmark){
         if(!c->signers[i].key||p!=x.p+x.n||!supported_signer_key(c->signers[i].key))goto end;
     }
     if(strcmp(c->caid,c->signers[0].id)||!strcmp(c->signers[0].id,c->signers[1].id))goto end;
-    if(!number(&s,2,&c->log)||c->log!=1||!number(&s,8,&c->min)||!number(&s,8,&c->max)||c->min!=(1ULL<<48)||c->max<c->min||c->max-c->min>=1024)goto end;
+    if(!number(&s,2,&c->log)||!c->log||c->log>0xffff||!number(&s,8,&c->min)||!number(&s,8,&c->max)||c->min!=(c->log<<48)||c->max<c->min||c->max-c->min>=1024)goto end;
     if(!landmark){
         if(s.n||!config_signals(c))goto end;
         ok=1;goto end;
     }
-    if(!number(&s,4,&c->number)||c->number!=1||!number(&s,6,&c->size)||!c->size||c->size>1024||!number(&s,8,&c->timestamp)||!c->timestamp||c->timestamp>(uint64_t)time(NULL)||!take(&s,32,&x))goto end;
+    if(!number(&s,4,&c->number)||!c->number||!number(&s,6,&c->size)||!c->size||c->size>1024||!number(&s,8,&c->timestamp)||!c->timestamp||c->timestamp>(uint64_t)time(NULL)||!take(&s,32,&x))goto end;
     memcpy(c->root,x.p,32);
-    if(c->min!=(1ULL<<48)||c->max!=c->min+c->size-1||!vector(&s,2,&sigs)||!number(&s,1,&v)||v!=2)goto end;
+    if(c->min!=(c->log<<48)||c->max!=c->min+c->size-1||!vector(&s,2,&sigs)||!number(&s,1,&v)||v!=2)goto end;
     c->nsubs=(unsigned)v;
     for(unsigned i=0;i<c->nsubs;i++){
         Subtree *sub=&c->subs[i];

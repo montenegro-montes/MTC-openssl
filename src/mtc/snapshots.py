@@ -16,7 +16,7 @@ from crypto_profiles import crypto_profile
 from local_log import LocalLog
 
 
-def export_snapshot(log, destination, family, keys):
+def export_snapshot(log, destination, family, keys, *, log_number=1):
     destination=Path(destination)
     location=destination.resolve()
     if location==log.directory.resolve() or log.directory.resolve() in location.parents:
@@ -36,10 +36,18 @@ def export_snapshot(log, destination, family, keys):
             copied.append(target)
             public.append(prepare.command('pkey','-in',target,'-pubout','-outform','DER'))
         timestamp=int(time.time());r=root(entries)
-        signatures=[prepare.checkpoint_signature(i,k,caid,n,r,timestamp,family)
-                    for i,k in zip(ids,copied)]
-        data=prepare.checkpoint_config(prepare.authority_config(caid,ids,public,n),
-                                       entries,timestamp,signatures)
+        signatures=[
+            prepare.checkpoint_signature(
+                i, k, caid, n, r, timestamp, family, log=log_number)
+            for i, k in zip(ids, copied)
+        ]
+        data=prepare.checkpoint_config(
+            prepare.authority_config(
+                caid, ids, public, n, log_number=log_number),
+            entries,
+            timestamp,
+            signatures,
+        )
         # Exclusive creation: never replaces a retained snapshot, including on failure.
         with destination.open('xb') as out:
             out.write(data);out.flush();os.fsync(out.fileno())
@@ -51,12 +59,19 @@ def authenticate_snapshot(snapshot, trusted_authority, checker):
     result=subprocess.run([str(checker),str(trusted_authority),str(snapshot)],capture_output=True,text=True)
     if result.returncode:raise ValueError('Snapshot authentication failed: '+result.stderr.strip())
     state=json.loads(result.stdout)
-    LocalLog._check_state(state)
+    if not isinstance(state,dict) or set(state)!={'log_number','tree_size','hash'}:
+        raise ValueError('Invalid authenticated snapshot state')
+    log_number=state['log_number']
+    if type(log_number) is not int or not 1<=log_number<=65535:
+        raise ValueError('Invalid authenticated snapshot issuance log')
+    LocalLog._check_state({'tree_size':state['tree_size'],'hash':state['hash']})
     return state
 
 
 def verify_snapshot_consistency(old_snapshot,new_snapshot,trusted_authority,checker,path):
     old=authenticate_snapshot(old_snapshot,trusted_authority,checker)
     new=authenticate_snapshot(new_snapshot,trusted_authority,checker)
+    if old['log_number']!=new['log_number']:
+        raise ValueError('Cannot verify consistency across issuance logs')
     return verify_consistency(old['tree_size'],new['tree_size'],
                               bytes.fromhex(old['hash']),bytes.fromhex(new['hash']),path)
