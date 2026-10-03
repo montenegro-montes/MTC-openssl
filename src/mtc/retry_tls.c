@@ -25,16 +25,13 @@ static TLSState *retry_state(SSL *ssl){
 }
 
 static int retry_id_valid(Slice id) {
-    int first=1;uint64_t value=0;
+    size_t pos=0,used;uint64_t value;
     if (!id.n || id.n>80) return 0; /* local bounded-ID restriction */
-    for (size_t i=0;i<id.n;i++) {
-        if (first && id.p[i]==0x80) return 0;
-        value=(value<<7)|(id.p[i]&127);
-        if(value>0xffffffffULL)return 0;
-        first=!(id.p[i]&0x80);
-        if(first)value=0;
+    while(pos<id.n){
+        if(!oid_uint64_component(id.p+pos,id.n-pos,&used,&value))return 0;
+        pos+=used;
     }
-    return first;
+    return 1;
 }
 static void retry_hex(FILE *out,const unsigned char *p,size_t n) {
     for(size_t i=0;i<n;i++) fprintf(out,"%02x",p[i]);

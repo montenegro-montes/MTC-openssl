@@ -53,11 +53,26 @@ class RetryTests(unittest.TestCase):
         self.assertEqual((r['final_result'], r['retry_count'], requests), ('PASS', 0, [group]))
 
     def test_individual_classification(self):
-        for ident in ('32473.101.1.1.1', '32473.101.1.7.129'):
+        for ident in ('32473.101.1.1.1', '32473.101.1.7.129',
+                      '32473.101.1.7.281474976710655'):
             self.assertTrue(retry.is_individual_landmark_id(ident))
         for ident in ('32473.101', '32473.101.2.1.1', '32473.101.2.7.129',
-                      '32473.101.1.0.1', '32473.101.1.1.0'):
+                      '32473.101.1.0.1', '32473.101.1.1.0',
+                      '32473.101.1.7.281474976710656'):
             self.assertFalse(retry.is_individual_landmark_id(ident))
+
+    def test_uint64_components(self):
+        for value in (4294967296, 281474976710655, (1 << 64) - 1):
+            ident = f'32473.{value}'
+            self.assertEqual(retry.decode_id(retry.encode_id(ident)), ident)
+        with self.assertRaises(ValueError):
+            retry.encode_id(str(1 << 64))
+
+        # 2^64 encoded as one base-128 component overflows uint64.
+        with self.assertRaises(ValueError):
+            retry.decode_id(bytes([0x82] + [0x80] * 8 + [0x00]))
+        with self.assertRaises(ValueError):
+            retry.decode_id(b'\x80\x00')
 
     def test_noninitial_individual_retry_is_not_rewritten_as_group(self):
         target = '32473.101.1.7.129'
@@ -139,7 +154,7 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(r['reason'], 'transport_or_process_failure')
 
     def test_id_bounds(self):
-        for ident in ('', '01', '1.', '-1', '4294967296', '１'):
+        for ident in ('', '01', '1.', '-1', str(1 << 64), '１'):
             with self.assertRaises(ValueError):
                 retry.encode_id(ident)
         for raw in (b'\x81', b'\x80\x01', b'\xff'*10+b'\x7f', b'\0'*81):

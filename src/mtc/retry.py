@@ -13,6 +13,8 @@ import uuid
 
 MAX_RETRIES = 1
 MAX_ID_BYTES = 80
+MAX_UINT64 = (1 << 64) - 1
+MAX_MTC_LANDMARK = (1 << 48) - 1
 
 
 def decode_id(raw):
@@ -22,11 +24,11 @@ def decode_id(raw):
     for byte in raw:
         if first and byte == 0x80:
             raise ValueError('noncanonical ID')
+        if value >= 1 << 57:
+            raise ValueError('ID component overflow')
         value = (value << 7) | (byte & 127)
         first = not byte & 128
         if first:
-            if value > 0xffffffff:
-                raise ValueError('ID component exceeds local limit')
             parts.append(value)
             value = 0
     if not first:
@@ -41,8 +43,8 @@ def encode_id(ident):
     out = bytearray()
     for part in parts:
         value = int(part)
-        if value > 0xffffffff:
-            raise ValueError('ID component exceeds local limit')
+        if value > MAX_UINT64:
+            raise ValueError('ID component overflow')
         encoded = [value & 127]
         value >>= 7
         while value:
@@ -60,7 +62,9 @@ def is_individual_landmark_id(ident):
     The retry target remains bound to the native authenticated config ID.
     """
     parts = tuple(map(int, decode_id(encode_id(ident)).split('.')))
-    return len(parts) >= 4 and parts[-3] == 1 and parts[-2] > 0 and parts[-1] > 0
+    return (len(parts) >= 4 and parts[-3] == 1
+            and 0 < parts[-2] <= 65535
+            and 0 < parts[-1] <= MAX_MTC_LANDMARK)
 
 
 def available_ids(hex_data):

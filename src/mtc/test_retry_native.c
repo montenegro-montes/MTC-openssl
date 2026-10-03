@@ -25,6 +25,26 @@ int main(int argc,char **argv) {
     assert(retry_configure(server,argv[1],1,NULL,cert,key));
     assert(retry_configure(client,argv[1],1,"32473.9.1.1.1",NULL,NULL));
     RetryConfig *r=(RetryConfig *)SSL_CTX_get_ex_data(server,retry_ci),*c=(RetryConfig *)SSL_CTX_get_ex_data(client,retry_ci);
+    {
+        unsigned char encoded[80];size_t encoded_n;
+        const char *valid[]={
+            "4294967296",
+            "281474976710655",
+            "18446744073709551615",
+        };
+        for(size_t i=0;i<sizeof(valid)/sizeof(valid[0]);i++){
+            assert(id_encode(valid[i],encoded,&encoded_n));
+            assert(retry_id_valid((Slice){encoded,encoded_n}));
+        }
+        const unsigned char overflow[]={
+            0x82,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x00
+        };
+        const unsigned char noncanonical[]={0x80,0x00};
+        const unsigned char unterminated[]={0x81};
+        assert(!retry_id_valid((Slice){overflow,sizeof(overflow)}));
+        assert(!retry_id_valid((Slice){noncanonical,sizeof(noncanonical)}));
+        assert(!retry_id_valid((Slice){unterminated,sizeof(unterminated)}));
+    }
     /* Initial CH group selects the exact landmark. EE still names .1, not .2. */
     SSL *group_peer=SSL_new(server);assert(group_peer);
     unsigned char group_list[93];size_t group_len=r->base.trust->request_signal_len;
