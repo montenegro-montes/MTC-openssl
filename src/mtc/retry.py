@@ -11,6 +11,8 @@ import subprocess
 import tempfile
 import uuid
 
+from trust_anchor_ids import decode_identifier, encode_identifier
+
 MAX_RETRIES = 1
 MAX_ID_BYTES = 80
 MAX_UINT64 = (1 << 64) - 1
@@ -20,39 +22,14 @@ MAX_MTC_LANDMARK = (1 << 48) - 1
 def decode_id(raw):
     if not 1 <= len(raw) <= MAX_ID_BYTES:
         raise ValueError('invalid ID length')
-    parts, value, first = [], 0, True
-    for byte in raw:
-        if first and byte == 0x80:
-            raise ValueError('noncanonical ID')
-        if value >= 1 << 57:
-            raise ValueError('ID component overflow')
-        value = (value << 7) | (byte & 127)
-        first = not byte & 128
-        if first:
-            parts.append(value)
-            value = 0
-    if not first:
-        raise ValueError('unfinished ID')
-    return '.'.join(map(str, parts))
+    return decode_identifier(raw)
 
 
 def encode_id(ident):
-    parts = ident.split('.')
-    if any(not p.isascii() or not p.isdecimal() or str(int(p)) != p for p in parts):
-        raise ValueError('noncanonical textual ID')
-    out = bytearray()
-    for part in parts:
-        value = int(part)
-        if value > MAX_UINT64:
-            raise ValueError('ID component overflow')
-        encoded = [value & 127]
-        value >>= 7
-        while value:
-            encoded.append((value & 127) | 128)
-            value >>= 7
-        out.extend(reversed(encoded))
-    decode_id(out)
-    return bytes(out)
+    out = encode_identifier(ident)
+    if not 1 <= len(out) <= MAX_ID_BYTES:
+        raise ValueError('invalid ID length')
+    return out
 
 
 def is_individual_landmark_id(ident):

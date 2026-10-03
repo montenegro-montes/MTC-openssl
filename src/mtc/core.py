@@ -5,6 +5,7 @@ import base64
 import hashlib
 import struct
 from dataclasses import dataclass
+from trust_anchor_ids import decode_identifier, encode_identifier
 DRAFT='draft-ietf-plants-merkle-tree-certs-06'
 TA_DRAFT='draft-ietf-tls-trust-anchor-ids-04'
 PROOF_OID='1.3.6.1.4.1.44363.47.0'
@@ -34,13 +35,7 @@ def content(data,tag):
     xs=items(data)
     if len(xs)!=1 or xs[0][0]!=tag:raise ValueError('DER type')
     return xs[0][1]
-def relid(s):
-    output=b''
-    for part in s.split('.'):
-        n=int(part);b=bytes([n&127]);n>>=7
-        while n:b=bytes([(n&127)|128])+b;n>>=7
-        output+=b
-    return output
+def relid(s):return encode_identifier(s)
 def oid(s):
     ns=list(map(int,s.split('.')))
     return der(6,relid('.'.join(map(str,[40*ns[0]+ns[1]]+ns[2:]))))
@@ -457,9 +452,54 @@ def cover(start,end):
     return [(left,mid),(mid,end)]
 def message(cosigner,caid,start,end,r,timestamp=0,log=1):
     return b'subtree/v1\n\0'+vec(('oid/1.3.6.1.4.1.'+cosigner).encode(),1)+uint(timestamp,8)+vec(('oid/1.3.6.1.4.1.'+caid+'.0.'+str(log)).encode(),1)+uint(start,8)+uint(end,8)+r
+def encode_subtree_signature_block(values):
+    """Encode canonical SubtreeSignature records without an outer length."""
+    encoded=[];seen=set()
+    try:
+        for identity,signature in values:
+            binary=relid(identity)
+            if (not 1<=len(binary)<=0xff or binary in seen
+                    or not isinstance(signature,bytes) or len(signature)>0xffff):
+                raise ValueError('SubtreeSignature')
+            seen.add(binary);encoded.append((binary,signature))
+    except (TypeError,ValueError,OverflowError):
+        raise ValueError('SubtreeSignature') from None
+    encoded.sort(key=lambda value:(len(value[0]),value[0]))
+    return b''.join(vec(identity,1)+vec(signature) for identity,signature in encoded)
+
+def decode_subtree_signature_block(block):
+    """Decode exact, canonically ordered SubtreeSignature records."""
+    if not isinstance(block,bytes):raise ValueError('SubtreeSignature')
+    values=[];position=0;previous=None
+    while position<len(block):
+        if len(block)-position<1:raise ValueError('SubtreeSignature')
+        length=block[position];position+=1
+        if not length or length>len(block)-position:raise ValueError('SubtreeSignature signer')
+        binary=block[position:position+length];position+=length
+        identity=decode_identifier(binary)
+        key=(len(binary),binary)
+        if previous is not None and key<=previous:raise ValueError('SubtreeSignature order')
+        previous=key
+        if len(block)-position<2:raise ValueError('SubtreeSignature')
+        length=int.from_bytes(block[position:position+2],'big');position+=2
+        if length>len(block)-position:raise ValueError('SubtreeSignature')
+        signature=block[position:position+length];position+=length
+        values.append((identity,signature))
+    return tuple(values)
+
+def encode_subtree_signatures(values,outer_width=2):
+    return vec(encode_subtree_signature_block(values),outer_width)
+
+def decode_subtree_signatures(encoded,outer_width=2):
+    if (not isinstance(encoded,bytes) or not 1<=outer_width<=8
+            or len(encoded)<outer_width):raise ValueError('SubtreeSignature vector')
+    length=int.from_bytes(encoded[:outer_width],'big')
+    if length!=len(encoded)-outer_width:raise ValueError('SubtreeSignature vector')
+    return decode_subtree_signature_block(encoded[outer_width:])
+
 def signatures(values,outer_width=2):
-    # MCF1 retains uint16; only MTCProof uses a uint24 outer vector.
-    return vec(b''.join(vec(relid(i),1)+vec(s) for i,s in sorted(values,key=lambda x:(len(relid(x[0])),relid(x[0])))),outer_width)
+    # Compatibility wrapper. MCF1 uses uint16; MTCProof uses uint24.
+    return encode_subtree_signatures(values,outer_width)
 def proof(start,end,path,sigs=(),extensions=b''):
     """Encode MTCProof; extensions are canonical MTC vector contents."""
     extensions=encode_mtc_extensions(extensions)
@@ -484,18 +524,6 @@ def proof_extensions(encoded_proof):
     if len(inclusion_proof)%32:raise ValueError('MTCProof inclusion proof')
     signature_block=vector(3)
     if offset!=len(encoded_proof):raise ValueError('trailing MTCProof data')
-    position=0;previous=None
-    while position<len(signature_block):
-        if len(signature_block)-position<1:raise ValueError('MTCProof signature')
-        length=signature_block[position];position+=1
-        if not length or length>len(signature_block)-position:raise ValueError('MTCProof signer')
-        identity=signature_block[position:position+length];position+=length
-        if previous is not None and (len(identity),identity)<=(len(previous),previous):
-            raise ValueError('MTCProof signature order')
-        previous=identity
-        if len(signature_block)-position<2:raise ValueError('MTCProof signature')
-        length=int.from_bytes(signature_block[position:position+2],'big');position+=2
-        if length>len(signature_block)-position:raise ValueError('MTCProof signature')
-        position+=length
+    decode_subtree_signature_block(signature_block)
     return extensions
 def certificate(tbs,p):return seq(tbs,ALG,der(3,b'\0'+p))
