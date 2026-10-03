@@ -101,6 +101,14 @@ class ExternalCosigner:
         self.accepted = accepted
         return self.accepted
 
+    def accepted_checkpoint(self):
+        if self.accepted is None:
+            return None
+        return {
+            "tree_size": self.accepted.tree_size,
+            "root_hash": self.accepted.root_hash,
+        }
+
     def cosign_accepted(self, timestamp=0):
         """Cosign the currently accepted whole-log checkpoint."""
         if self.accepted is None:

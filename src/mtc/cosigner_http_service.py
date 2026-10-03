@@ -239,9 +239,14 @@ class CosignerHTTPHandler(BaseHTTPRequestHandler):
         if parsed.path == "/accepted":
             accepted = self.server.cosigner.accepted
             if accepted is None:
-                self.reply(200, {"accepted": None})
+                self.reply(200, {
+                    "log_number": self.server.cosigner.log,
+                    "accepted": None,
+                })
             else:
-                self.reply(200, {"accepted": {
+                self.reply(200, {
+                    "log_number": self.server.cosigner.log,
+                    "accepted": {
                     "tree_size": accepted.tree_size,
                     "root_hash": accepted.root_hash.hex(),
                 }})

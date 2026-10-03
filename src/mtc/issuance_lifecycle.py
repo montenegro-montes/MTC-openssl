@@ -40,6 +40,9 @@ class IssuanceLogView:
     def subtree_proof(self, start, end, size):
         return self._log.subtree_proof(start, end, size)
 
+    def prove_consistency(self, old_state):
+        return self._log.prove_consistency(old_state)
+
 
 class IssuanceLifecycle:
     """Select the single issuance log to which the CA may append."""

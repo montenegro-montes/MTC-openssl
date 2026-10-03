@@ -19,6 +19,7 @@ class CosignerHTTPClient:
                  client_cert=None, client_key=None):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self._log = None
         scheme = urlsplit(self.base_url).scheme
         tls_values = (client_cert, client_key)
         if any(value is not None for value in tls_values) and any(
@@ -81,10 +82,14 @@ class CosignerHTTPClient:
     def accepted_checkpoint(self):
         result = self._get("/accepted")
         try:
-            if set(result) != {"accepted"}:
+            if set(result) != {"log_number", "accepted"}:
+                raise ValueError
+            log_number = result["log_number"]
+            if type(log_number) is not int or not 1 <= log_number <= 65535:
                 raise ValueError
             accepted = result["accepted"]
             if accepted is None:
+                self._log = log_number
                 return None
             if not isinstance(accepted, dict) or set(accepted) != {
                     "tree_size", "root_hash"}:
@@ -98,7 +103,12 @@ class CosignerHTTPClient:
         except (TypeError, ValueError) as error:
             raise CosignerHTTPError(
                 "cosigner HTTP service returned an invalid checkpoint") from error
+        self._log = log_number
         return {"tree_size": tree_size, "root_hash": root_hash}
+
+    @property
+    def log(self):
+        return self._log
 
     @staticmethod
     def _proof(proof):
