@@ -55,6 +55,35 @@ int main(int argc,char **argv) {
     assert(add_one(group_peer,MTC_EXT,SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,&out,&out_n,NULL,0,&alert,&r->base)==1);
     assert(out_n==r->base.n+3&&!memcmp(out+3,r->base.trust->signal,r->base.n));
     SSL_free(group_peer);
+    /* TAI Sections 4.1/4.3: an absent extension invokes no parser, while a
+       present empty Requested list is valid discovery and matches nothing. */
+    SSL *absent_peer=SSL_new(server);assert(absent_peer);
+    assert(SSL_get_ex_data(absent_peer,si)==NULL);
+    SSL_free(absent_peer);
+    const unsigned char empty_request[]={0,0};
+    SSL *empty_peer=SSL_new(server);assert(empty_peer);
+    assert(parse_one(empty_peer,MTC_EXT,SSL_EXT_CLIENT_HELLO,
+                     empty_request,sizeof(empty_request),NULL,0,&alert,
+                     &r->base));
+    assert(!state(empty_peer,MTC_ROLE_SERVER_PRESENT)->matched);
+    assert(add_one(empty_peer,MTC_EXT,SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,
+                   &out,&out_n,NULL,0,&alert,&r->base)==1);
+    assert(out_n==r->base.n+3);
+    assert(add_one(empty_peer,MTC_EXT,SSL_EXT_TLS1_3_CERTIFICATE,
+                   &out,&out_n,NULL,0,&alert,&r->base)!=1);
+    SSL_free(empty_peer);
+
+    SSL *empty_retry_peer=SSL_new(server);assert(empty_retry_peer);
+    assert(retry_parse(empty_retry_peer,MTC_EXT,SSL_EXT_CLIENT_HELLO,
+                       empty_request,sizeof(empty_request),NULL,0,&alert,r));
+    assert(!retry_state(empty_retry_peer)->matched);
+    assert(retry_add(empty_retry_peer,MTC_EXT,
+                     SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,
+                     &out,&out_n,NULL,0,&alert,r)==1);
+    assert(out_n==r->base.n+3);
+    assert(retry_add(empty_retry_peer,MTC_EXT,SSL_EXT_TLS1_3_CERTIFICATE,
+                     &out,&out_n,NULL,0,&alert,r)==0);
+    SSL_free(empty_retry_peer);
     /* Component parsing, not a last-three-bytes shortcut. */
     TLSConfig coordinates={0};unsigned char expected_group[80];size_t expected_len;
     assert(id_encode("32473.101.1.7.129",coordinates.id,&coordinates.n));
@@ -228,9 +257,9 @@ int main(int argc,char **argv) {
     assert(verify(check,&c->base));
     X509_STORE_CTX_free(check);X509_STORE_free(store);
     /* CASE D: malformed/canonicality/duplicate handling. */
-    const unsigned char malformed[][8]={{0,0},{0,3,2,0x80,1},{0,2,1,0x81},{0,4,1,1,1,1}};
-    const size_t lengths[]={2,5,4,6};
-    for(size_t i=0;i<4;i++){
+    const unsigned char malformed[][8]={{0,1},{0,1,0},{0,3,2,0x80,1},{0,2,1,0x81},{0,4,1,1,1,1}};
+    const size_t lengths[]={2,3,5,4,6};
+    for(size_t i=0;i<5;i++){
         assert(!retry_parse(s,MTC_EXT,SSL_EXT_CLIENT_HELLO,malformed[i],lengths[i],NULL,0,&alert,r));
         assert(alert==SSL_AD_DECODE_ERROR);
     }

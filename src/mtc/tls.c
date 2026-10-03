@@ -218,15 +218,17 @@ static int add_one(SSL *ssl,unsigned type,unsigned context,const unsigned char *
         *out=c->list;*len=c->list_n;return 1;
     }
 
+    /* AvailableTrustAnchorList advertises candidates independently of
+       whether an empty/subset request matched the selected fallback. */
+    if(context==SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS){
+        if(c->role!=MTC_ROLE_SERVER_PRESENT)return 0;
+        *out=c->list;*len=c->list_n;return 1;
+    }
+
     if(c->role==MTC_ROLE_CLIENT_PRESENT){
         if(!s->available){*alert=SSL_AD_HANDSHAKE_FAILURE;return -1;}
     }else{
         if(!s->matched){*alert=SSL_AD_HANDSHAKE_FAILURE;return -1;}
-    }
-
-    if(context==SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS){
-        if(c->role!=MTC_ROLE_SERVER_PRESENT)return 0;
-        *out=c->list;*len=c->list_n;return 1;
     }
 
     if(context==SSL_EXT_TLS1_3_CERTIFICATE_REQUEST){
@@ -271,7 +273,15 @@ static int parse_one(SSL *ssl,unsigned type,unsigned context,const unsigned char
         goto bad;
     }
 
-    if(!vector(&p,2,&list)||p.n||!list.n)goto bad;
+    if(!vector(&p,2,&list)||p.n)goto bad;
+    if(!list.n){
+        /* RequestedTrustAnchorList may be empty; AvailableTrustAnchorList
+           may not.  An empty request matches no configured candidate. */
+        if(context==SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS)goto bad;
+        if(context==SSL_EXT_CLIENT_HELLO)s->matched=0;
+        else s->available=0;
+        return 1;
+    }
     while(list.n){
         if(!vector(&list,1,&id)||!id.n)goto bad;
         if((context==SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS

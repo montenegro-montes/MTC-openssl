@@ -58,7 +58,14 @@ static int retry_parse(SSL *ssl,unsigned type,unsigned context,const unsigned ch
     if(!s){*alert=SSL_AD_INTERNAL_ERROR;return 0;}
     if(context==SSL_EXT_TLS1_3_CERTIFICATE)
         return parse_one(ssl,type,context,in,n,x,chainidx,alert,c);
-    if(!vector(&p,2,&list)||p.n||!list.n)goto malformed;
+    if(!vector(&p,2,&list)||p.n)goto malformed;
+    if(!list.n){
+        if(context!=SSL_EXT_CLIENT_HELLO)goto malformed;
+        s->matched=0;
+        fprintf(stderr,"MTC_RETRY_SERVER {\"request_satisfied\":false,\"supported_id_hex\":\"");
+        retry_hex(stderr,c->id,c->n);fputs("\"}\n",stderr);
+        return 1;
+    }
     /* This experiment has exactly one candidate/request. No duplicate or
        ambiguous selection is accepted, and every ID is canonical. */
     if(!vector(&list,1,&id)||list.n||!retry_id_valid(id))goto malformed;
