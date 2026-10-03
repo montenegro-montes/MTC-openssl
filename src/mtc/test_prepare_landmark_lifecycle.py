@@ -35,7 +35,8 @@ with tempfile.TemporaryDirectory(prefix="mtc-prepare-landmark-lifecycle-") as va
 
     lifecycle=IssuanceLifecycle(temporary/"lifecycle")
     lifecycle.append(b"lifecycle-entry-1")
-    lifecycle.allocate_landmark(1,2_000_000_000)
+    lifecycle.allocate_landmark(
+        1,2_000_000_000,max_covered_not_after=2_000_000_000)
     log_1_reference=lifecycle.landmark_reference(1,1)
 
     common=dict(

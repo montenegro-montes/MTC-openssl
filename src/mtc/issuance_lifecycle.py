@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 
 from core import root
-from landmarks import Landmark, active, validate_sequence
+from landmarks import Landmark, active, encode_publication, validate_sequence
 from local_log import LocalLog
 
 
@@ -271,11 +271,16 @@ class IssuanceLifecycle:
             raise ValueError("Invalid landmark number")
         return log_number,sequence[:selected+1]
 
-    def allocate_landmark(self,tree_size,expiration):
+    def allocate_landmark(
+            self,tree_size,expiration,*,max_covered_not_after):
         with self._locked():
-            current=self._read()
-            if type(tree_size) is not int or type(expiration) is not int:
+            if (type(tree_size) is not int or type(expiration) is not int
+                    or type(max_covered_not_after) is not int
+                    or max_covered_not_after<0):
                 raise ValueError("Invalid landmark")
+            if expiration<max_covered_not_after:
+                raise ValueError("Landmark expires before covered entries")
+            current=self._read()
             log_state=LocalLog(self._log_path(current)).state()
             if not 0<tree_size<=log_state["tree_size"]:
                 raise ValueError("Landmark exceeds current issuance log")
@@ -285,6 +290,18 @@ class IssuanceLifecycle:
             validate_sequence(updated)
             self._publish_landmarks(current,updated)
             return landmark
+
+    def active_landmark_reference(self,log_number,now):
+        """Return the newest active landmark as a prepare-compatible reference."""
+        sequence=self.landmarks(log_number)
+        candidates=active(sequence,now)
+        if not candidates:
+            return None
+        return log_number,sequence[:candidates[-1].number+1]
+
+    def landmark_publication(self,log_number,now):
+        """Return the canonical draft-06 publication for one issuance log."""
+        return encode_publication(self.landmarks(log_number),now)
 
     def active_landmarks(self,now):
         with self._locked():
