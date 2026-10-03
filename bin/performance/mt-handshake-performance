@@ -832,9 +832,10 @@ PYMETRICS
 }
 
 measure_pcap() {
-  local output=$1 profile case_name repetition directory pcap keylog log capture_log analysis_log first last syn synack bytes packets elapsed tcp_elapsed connection_elapsed ready attempt done_count=0 total_count started now eta
+  local output=$1 profile case_name repetition directory pcap keylog log capture_log analysis_log analysis_values analysis_status ready attempt done_count=0 total_count started now eta
+  local -a analyzer_args
   total_count=$(( ${#PROFILES[@]} * ${#ACTIVE_CASES[@]} * PCAP_RUNS )); started=$(date +%s)
-  printf 'profile,case,key_establishment,openssl_group,repetition,tcp_syn_to_synack_ms,tls_clienthello_to_finished_ms,connection_syn_to_finished_ms,wire_bytes,packet_count\n' > "$output/pcap.csv"
+  printf 'profile,case,key_establishment,openssl_group,repetition,tcp_handshake_ms,tcp_syn_to_clienthello_ms,tls_clienthello_to_client_finished_ms,tcp_syn_to_first_application_request_ms,tls_client_handshake_bytes,tls_server_handshake_bytes,tls_handshake_bytes,tls_client_handshake_wire_bytes,tls_server_handshake_wire_bytes,tls_handshake_wire_bytes,tls_client_handshake_packets,tls_server_handshake_packets,tls_handshake_packets,tls_client_certificate_bytes,tls_server_certificate_bytes,tcp_stream,client_random,analysis_status,analysis_error,tcp_retransmission_packets\n' > "$output/pcap.csv"
   printf '\nPCAP MEASUREMENTS — 9 profiles × %d authentication cases\n' "${#ACTIVE_CASES[@]}"
   for profile in "${PROFILES[@]}"; do
    for case_name in "${ACTIVE_CASES[@]}"; do
@@ -872,32 +873,24 @@ measure_pcap() {
       docker run --rm --network none -v "$directory:/capture:ro" --entrypoint tshark "$CAPTURE_IMAGE" \
         -o tls.keylog_file:/capture/keylog.txt -r /capture/handshake.pcap -Y 'tcp.port == 4433' \
         -T fields -E separator=/t -E occurrence=a -E aggregator=, \
-        -e frame.time_epoch -e frame.len -e tcp.srcport -e tcp.dstport \
-        -e tcp.flags.syn -e tcp.flags.ack -e tls.handshake.type \
+        -e frame.time_epoch -e frame.number -e frame.len -e tcp.stream \
+        -e ip.src -e ip.dst -e ipv6.src -e ipv6.dst -e tcp.srcport -e tcp.dstport \
+        -e tcp.flags.syn -e tcp.flags.ack -e tcp.seq -e tcp.ack -e tcp.len -e tcp.payload \
+        -e tls.handshake.type -e tls.handshake.length -e tls.handshake.random \
+        -e tls.record.length -e http.request.method \
+        -e tcp.analysis.retransmission -e tcp.analysis.fast_retransmission -e tcp.analysis.spurious_retransmission \
         >"$analysis_log" 2>"$directory/tshark.stderr" \
         || fail "$profile $case_name tshark analysis failed; inspect $directory/tshark.stderr"
-      read -r syn synack first last bytes packets < <(awk -F '\t' '
-        function yes(value) { value=tolower(value); return value=="1" || value=="true" }
-        function contains(value, kind) { return ("," value ",") ~ ("," kind ",") }
-        {
-          time[NR]=$1; frame_length[NR]=$2
-          if ($4==4433 && yes($5) && !yes($6) && syn=="") syn=$1
-          if ($3==4433 && yes($5) && yes($6) && synack=="") synack=$1
-          if ($4==4433 && contains($7,1) && first=="") first=$1
-          if ($4==4433 && contains($7,20)) last=$1
-        }
-        END {
-          for (i=1; i<=NR; i++) if (first!="" && last!="" && time[i]>=first && time[i]<=last) { bytes+=frame_length[i]; packets++ }
-          print syn,synack,first,last,bytes,packets
-        }' "$analysis_log")
-      [[ -n "$syn" && -n "$synack" && -n "$first" && -n "$last" && "$packets" -gt 0 ]] \
-        || fail "$profile $case_name PCAP handshake could not be decoded; inspect $analysis_log and $directory/tshark.stderr"
-      tcp_elapsed=$(python3 -c "print(($synack-$syn)*1000)")
-      elapsed=$(python3 -c "print(($last-$first)*1000)")
-      connection_elapsed=$(python3 -c "print(($last-$syn)*1000)")
-      printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$profile" "$case_name" "$KEM_LABEL" "$KEM_GROUP" "$repetition" "$tcp_elapsed" "$elapsed" "$connection_elapsed" "$bytes" "$packets" >> "$output/pcap.csv"
+      analyzer_args=()
+      [[ "$case_name" != *-mutual ]] || analyzer_args+=(--expect-client-certificate)
+      if analysis_values=$(python3 "$REPO/bin/performance/pcap_handshake.py" "$analysis_log" --format csv "${analyzer_args[@]}" 2>>"$directory/tshark.stderr"); then
+        analysis_status=OK
+      else
+        analysis_status=ERROR
+      fi
+      printf '%s,%s,%s,%s,%s,%s\n' "$profile" "$case_name" "$KEM_LABEL" "$KEM_GROUP" "$repetition" "$analysis_values" >> "$output/pcap.csv"
       done_count=$((done_count+1)); now=$(date +%s); eta=$(( done_count ? (now-started)*(total_count-done_count)/done_count : 0 ))
-      printf '[PCAP] %d/%d profile=%s case=%s capture=%d tcp=%sms tls=%sms total=%sms bytes=%s packets=%s elapsed=%ds eta=%ds\n' "$done_count" "$total_count" "$profile" "$case_name" "$repetition" "$tcp_elapsed" "$elapsed" "$connection_elapsed" "$bytes" "$packets" "$((now-started))" "$eta"
+      printf '[PCAP] %d/%d profile=%s case=%s capture=%d analysis=%s elapsed=%ds eta=%ds\n' "$done_count" "$total_count" "$profile" "$case_name" "$repetition" "$analysis_status" "$((now-started))" "$eta"
     done
    done
   done
@@ -954,10 +947,18 @@ root=Path(sys.argv[1]); result={
  'handshake_wall_ms':'native TLS handshake start through handshake completion',
  'connection_establishment_wall_ms_native':'native connection entry through TLS handshake completion',
  'tls_bytes_total':'OpenSSL TLS handshake bytes read plus written; excludes IP/TCP headers',
- 'tcp_syn_to_synack_ms':'PCAP time from initial TCP SYN to SYN-ACK',
- 'tls_clienthello_to_finished_ms':'PCAP time from ClientHello to the last decrypted Finished using the per-run TLS key log',
- 'connection_syn_to_finished_ms':'PCAP time from initial TCP SYN to the last decrypted Finished',
- 'wire_bytes':'sum of captured frame lengths from ClientHello through the last decrypted Finished; includes link/IP/TCP overhead and ACKs in that interval'}}
+ 'tcp_handshake_ms':'PCAP time from initial client TCP SYN to the corresponding client ACK completing the three-way handshake',
+ 'tcp_syn_to_clienthello_ms':'PCAP time from initial client TCP SYN to the first client ClientHello',
+ 'tls_clienthello_to_client_finished_ms':'PCAP time from the first client ClientHello to the client Finished',
+ 'tcp_syn_to_first_application_request_ms':'PCAP time from initial client TCP SYN to the first decrypted client HTTP request',
+ 'tls_handshake_bytes':'complete logical TLS records in the handshake interval, including each five-byte record header once',
+ 'tls_client_handshake_wire_bytes':'sum of frame lengths for client TCP-payload frames from ClientHello through client Finished, inclusive',
+ 'tls_server_handshake_wire_bytes':'sum of frame lengths for server TCP-payload frames over the same TLS interval',
+ 'tls_handshake_wire_bytes':'client plus server handshake wire bytes; pure TCP ACKs are excluded',
+ 'tls_handshake_packets':'client plus server TCP-payload frames in the TLS handshake interval',
+ 'tls_client_certificate_bytes':'complete client Certificate handshake message, including its four-byte handshake header; zero only when not requested; applies to X.509 and project MTC credentials carried in Certificate',
+ 'tls_server_certificate_bytes':'complete server Certificate handshake message, including its four-byte handshake header; applies to X.509 and project MTC credentials carried in Certificate',
+ 'tcp_retransmission_packets':'retransmitted frames retained in wire-byte and packet counts but deduplicated from logical TLS bytes'}}
 T95={1:12.706,2:4.303,3:3.182,4:2.776,5:2.571,6:2.447,7:2.365,8:2.306,9:2.262,10:2.228,11:2.201,12:2.179,13:2.160,14:2.145,15:2.131,16:2.120,17:2.110,18:2.101,19:2.093,20:2.086,21:2.080,22:2.074,23:2.069,24:2.064,25:2.060,26:2.056,27:2.052,28:2.048,29:2.045,30:2.042}
 def describe(values):
  n=len(values); mean=statistics.fmean(values); median=statistics.median(values)
@@ -969,13 +970,13 @@ def describe(values):
 for source,key in [('native.csv','native'),('pcap.csv','pcap')]:
  p=root/source
  if not p.exists():continue
- rows=list(csv.DictReader(p.open())); measured=[r for r in rows if r.get('phase','measured')=='measured']
+ rows=list(csv.DictReader(p.open())); measured=[r for r in rows if r.get('phase','measured')=='measured' and (key!='pcap' or r.get('analysis_status')=='OK')]
  cases={}
  for profile in sorted({r['profile'] for r in measured}):
   cases[profile]={}
   for name in sorted({r['case'] for r in measured if r['profile']==profile}):
    group=[r for r in measured if r['profile']==profile and r['case']==name]
-   fields=['tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native','process_wall_ms','tls_bytes_total'] if key=='native' else ['tcp_syn_to_synack_ms','tls_clienthello_to_finished_ms','connection_syn_to_finished_ms','wire_bytes','packet_count']
+   fields=['tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native','process_wall_ms','tls_bytes_total'] if key=='native' else ['tcp_handshake_ms','tcp_syn_to_clienthello_ms','tls_clienthello_to_client_finished_ms','tcp_syn_to_first_application_request_ms','tls_client_handshake_bytes','tls_server_handshake_bytes','tls_handshake_bytes','tls_client_handshake_wire_bytes','tls_server_handshake_wire_bytes','tls_handshake_wire_bytes','tls_client_handshake_packets','tls_server_handshake_packets','tls_handshake_packets','tls_client_certificate_bytes','tls_server_certificate_bytes','tcp_retransmission_packets']
    cases[profile][name]={
     'key_establishment':result['key_establishment'],
     **({'depth_including_root':int(sys.argv[5]),'transmitted_certificates':int(sys.argv[5])-1,
