@@ -8,6 +8,13 @@ static int group_text(TLSConfig *config,const char *text){
     return mtc_group_match(config,id,id_len);
 }
 
+static size_t id_list(unsigned char *out,const char *text){
+    size_t n;
+    assert(id_encode(text,out+3,&n));
+    put(out,n+1,2);out[2]=(unsigned char)n;
+    return n+3;
+}
+
 int main(int argc,char **argv) {
     SSL_CTX *server,*client;SSL *s,*cl;BIO *bio;X509 *cert;EVP_PKEY *key;
     const unsigned char *out;size_t out_n;int alert=0;
@@ -99,6 +106,61 @@ int main(int argc,char **argv) {
     assert(!group_text(&standalone_range,"32473.101.2.7"));
     assert(!group_text(&standalone_range,"32473.101.2.7.129.1"));
     assert(!group_text(&standalone_range,"32473.101"));
+
+    /* The exact group sent by this connection accepts only individual
+       landmarks in the same CA/log whose number is at most its bound. */
+    TLSConfig group_client={0};TLSEndpointConfig group_endpoint={0};
+    unsigned char available[83];size_t available_n;
+    group_client.role=MTC_ROLE_CLIENT_VERIFY_SERVER;
+    assert(id_encode("32473.101.1.2.1",group_client.id,&group_client.n));
+    assert(id_encode("32473.101.2.2.2",group_client.group,
+                     &group_client.group_n));
+    group_client.has_group=1;
+    SSL *group_client_ssl=SSL_new(client);assert(group_client_ssl);
+    group_endpoint.verify=&group_client;
+    assert(endpoint_add(group_client_ssl,MTC_EXT,SSL_EXT_CLIENT_HELLO,
+                        &out,&out_n,NULL,0,&alert,&group_endpoint)==1);
+    assert(out_n==group_client.group_n+3
+           &&!memcmp(out+3,group_client.group,group_client.group_n));
+    TLSState *group_client_state=state(
+        group_client_ssl,MTC_ROLE_CLIENT_VERIFY_SERVER);
+    assert(group_client_state);
+    assert(group_client_state->requested_group
+           &&group_client_state->requested_n==group_client.group_n
+           &&!memcmp(group_client_state->requested,group_client.group,
+                      group_client.group_n));
+
+    available_n=id_list(available,"32473.101.1.2.1");
+    assert(parse_one(group_client_ssl,MTC_EXT,
+                     SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,
+                     available,available_n,NULL,0,&alert,&group_client));
+    assert(parse_one(group_client_ssl,MTC_EXT,SSL_EXT_TLS1_3_CERTIFICATE,
+                     (const unsigned char *)"",0,NULL,0,&alert,
+                     &group_client));
+    assert(group_client_state->confirmed);
+    group_client_state->available=0;
+    available_n=id_list(available,"32473.101.1.2.2");
+    assert(parse_one(group_client_ssl,MTC_EXT,
+                     SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,
+                     available,available_n,NULL,0,&alert,&group_client));
+    group_client_state->available=0;
+    available_n=id_list(available,"32473.101.1.2.3");
+    assert(!parse_one(group_client_ssl,MTC_EXT,
+                      SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,
+                      available,available_n,NULL,0,&alert,&group_client));
+    available_n=id_list(available,"32473.101.1.1.2");
+    assert(!parse_one(group_client_ssl,MTC_EXT,
+                      SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,
+                      available,available_n,NULL,0,&alert,&group_client));
+
+    group_client_state->requested_group=0;
+    group_client_state->requested_n=group_client.n;
+    memcpy(group_client_state->requested,group_client.id,group_client.n);
+    available_n=id_list(available,"32473.101.1.2.1");
+    assert(parse_one(group_client_ssl,MTC_EXT,
+                     SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,
+                     available,available_n,NULL,0,&alert,&group_client));
+    SSL_free(group_client_ssl);
 
     unsigned char malformed_group[80];size_t malformed_len,prefix_len;
     assert(id_encode("32473.101.2.7",malformed_group,&prefix_len));

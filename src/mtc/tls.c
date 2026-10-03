@@ -26,6 +26,9 @@ typedef struct {
 
 typedef struct {
     int matched, available, confirmed;
+    unsigned char requested[80];
+    size_t requested_n;
+    int requested_group;
 } TLSState;
 
 typedef struct {
@@ -121,6 +124,43 @@ static int mtc_group_match(const TLSConfig *c,
     if(!oid_uint64_component(id+pos,id_n-pos,&used,&value))return 0;
     (void)value;
     return pos+used==id_n;
+}
+
+static int landmark_id_parts(const unsigned char *id,size_t id_n,
+                             size_t *base_n,uint64_t *kind,
+                             uint64_t *log,uint64_t *landmark){
+    size_t starts[3]={0},pos=0,used;uint64_t values[3]={0};
+    if(!id||!id_n||!base_n||!kind||!log||!landmark)return 0;
+    while(pos<id_n){
+        starts[0]=starts[1];starts[1]=starts[2];starts[2]=pos;
+        values[0]=values[1];values[1]=values[2];
+        if(!oid_uint64_component(id+pos,id_n-pos,&used,&values[2]))return 0;
+        pos+=used;
+    }
+    if(!starts[0])return 0;
+    *base_n=starts[0];*kind=values[0];*log=values[1];*landmark=values[2];
+    return 1;
+}
+
+/* MTC -06 Section 8.2.1: caID.2.N.L contains caID and every
+   caID.1.N.M for M <= L.  Both inputs are exact canonical wire IDs. */
+static int requested_landmark_group_contains(
+        const unsigned char *group,size_t group_n,
+        const unsigned char *individual,size_t individual_n){
+    size_t group_base,individual_base;uint64_t group_kind,group_log,group_l;
+    uint64_t individual_kind,individual_log,individual_l;
+    if(!landmark_id_parts(group,group_n,&group_base,&group_kind,
+                          &group_log,&group_l)
+       ||group_kind!=2||!group_log)return 0;
+    if(individual_n==group_base
+       &&!memcmp(individual,group,group_base))return 1;
+    return landmark_id_parts(individual,individual_n,&individual_base,
+                             &individual_kind,&individual_log,&individual_l)
+           &&individual_base==group_base
+           &&!memcmp(individual,group,group_base)
+           &&individual_kind==1
+           &&individual_log==group_log
+           &&individual_l<=group_l;
 }
 
 static void tls_config_free(TLSConfig *c){
@@ -234,7 +274,16 @@ static int parse_one(SSL *ssl,unsigned type,unsigned context,const unsigned char
     if(!vector(&p,2,&list)||p.n||!list.n)goto bad;
     while(list.n){
         if(!vector(&list,1,&id)||!id.n)goto bad;
-        if((id.n==c->n&&!memcmp(id.p,c->id,id.n))
+        if((context==SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS
+            && s->requested_n
+            && ((!s->requested_group
+                 && id.n==s->requested_n
+                 && !memcmp(id.p,s->requested,id.n))
+                || (s->requested_group
+                    && requested_landmark_group_contains(
+                        s->requested,s->requested_n,id.p,id.n))))
+           || (context!=SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS
+               && id.n==c->n&&!memcmp(id.p,c->id,id.n))
             || (context==SSL_EXT_CLIENT_HELLO
                 && (c->role==MTC_ROLE_SERVER_PRESENT
                     || c->role==MTC_ROLE_SERVER_VERIFY_CLIENT)
@@ -320,6 +369,17 @@ static int client_hello_list(TLSEndpointConfig *endpoint,
     return 1;
 }
 
+static int preserve_client_request(SSL *ssl,TLSConfig *c){
+    TLSState *s;const unsigned char *id;size_t n;
+    if(!c||(c->role!=MTC_ROLE_CLIENT_VERIFY_SERVER
+           &&c->role!=MTC_ROLE_CLIENT_PRESENT))return 1;
+    s=state(ssl,c->role);if(!s)return 0;
+    id=c->has_group?c->group:c->id;n=c->has_group?c->group_n:c->n;
+    if(!n||n>sizeof(s->requested))return 0;
+    memcpy(s->requested,id,n);s->requested_n=n;s->requested_group=c->has_group;
+    return 1;
+}
+
 static int endpoint_add(SSL *ssl,unsigned type,unsigned context,
                         const unsigned char **out,size_t *len,
                         X509 *x,size_t chainidx,int *alert,void *arg){
@@ -344,6 +404,11 @@ static int endpoint_add(SSL *ssl,unsigned type,unsigned context,
                               sizeof(endpoint->client_hello_list),
                               &endpoint->client_hello_list_len))
             return 0;
+        if(!preserve_client_request(ssl,endpoint->verify)
+           ||!preserve_client_request(ssl,endpoint->present)){
+            *alert=SSL_AD_INTERNAL_ERROR;
+            return -1;
+        }
 
         *out=endpoint->client_hello_list;
         *len=endpoint->client_hello_list_len;
