@@ -1,6 +1,7 @@
 """Focused tests for atomic relying-party state publication."""
 
 import hashlib
+import json
 from pathlib import Path
 import tempfile
 
@@ -33,13 +34,14 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-state-test-") as temporary:
         TrustedSubtree(1, 4, 8, b"\x22" * 32),
     ])
 
-    current8 = store.publish(checkpoint8, mts8)
+    current8 = store.publish(checkpoint8, mts8, 1)
     assert current8["checkpoint"] == checkpoint8
     assert current8["trusted_subtrees"] == mts8
+    assert current8["retained_landmark"] == 1
     target8 = store.current.readlink()
 
     # Re-publishing identical immutable state is idempotent.
-    again8 = store.publish(checkpoint8, mts8)
+    again8 = store.publish(checkpoint8, mts8, 1)
     assert again8["checkpoint"] == checkpoint8
     assert store.current.readlink() == target8
 
@@ -55,9 +57,10 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-state-test-") as temporary:
         TrustedSubtree(1, 12, 16, b"\x44" * 32),
     ])
 
-    current16 = store.publish(checkpoint16, mts16)
+    current16 = store.publish(checkpoint16, mts16, 3)
     assert current16["checkpoint"] == checkpoint16
     assert current16["trusted_subtrees"] == mts16
+    assert current16["retained_landmark"] == 3
     target16 = store.current.readlink()
     assert target16 != target8
 
@@ -85,10 +88,13 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-state-test-") as temporary:
     assert refreshed_current16["trusted_subtrees"] == refreshed16
     assert refreshed_target16 != target16
     assert (store.directory / target16).is_dir()
-    previous_checkpoint16, previous_mts16 = store._read_generation(
+    previous_checkpoint16, previous_mts16, previous_landmark16 = (
+        store._read_generation(
         store.directory / target16)
+    )
     assert previous_checkpoint16 == checkpoint16
     assert previous_mts16 == mts16
+    assert previous_landmark16 == 3
 
     # Re-publishing the refreshed state is still idempotent.
     store.publish(checkpoint16, refreshed16)
@@ -171,9 +177,11 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-state-test-") as temporary:
             hashlib.sha256(mts32).hexdigest(),
         ))
     assert generation32.is_dir()
-    written32_checkpoint, written32_mts1 = store._read_generation(generation32)
+    written32_checkpoint, written32_mts1, written32_landmark = (
+        store._read_generation(generation32))
     assert written32_checkpoint == checkpoint32
     assert written32_mts1 == mts32
+    assert written32_landmark is None
 
 # Commit 8: RP state is explicitly bound to one issuance-log domain.
 with tempfile.TemporaryDirectory(prefix="mtc-rp-state-log2-test-") as temporary:
@@ -191,9 +199,10 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-state-log2-test-") as temporary:
         TrustedSubtree(2, 4, 8, b"\x66" * 32),
     ])
 
-    published2 = store.publish(checkpoint2, mts2)
+    published2 = store.publish(checkpoint2, mts2, 3)
     assert published2["checkpoint"] == checkpoint2
     assert published2["trusted_subtrees"] == mts2
+    assert published2["retained_landmark"] == 3
     target2 = store.current.readlink()
 
     # Restart must preserve the authenticated log identity.
@@ -201,7 +210,78 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-state-log2-test-") as temporary:
     loaded2 = restarted.load_current()
     assert loaded2["checkpoint"] == checkpoint2
     assert loaded2["trusted_subtrees"] == mts2
+    assert loaded2["retained_landmark"] == 3
     assert restarted.current.readlink() == target2
+
+    # A legacy generation without retained-landmark.json remains readable,
+    # but its landmark identity is unavailable and is never inferred.
+    legacy_name = restarted._generation_name(checkpoint2, mts2)
+    legacy = restarted.generations / legacy_name
+    legacy.mkdir()
+    (legacy / "checkpoint.json").write_bytes(
+        restarted._checkpoint_bytes(checkpoint2))
+    (legacy / "trusted-subtrees.mts1").write_bytes(mts2)
+    restarted.current.unlink()
+    restarted.current.symlink_to(Path("generations") / legacy_name)
+    legacy_loaded = restarted.load_current()
+    assert legacy_loaded["checkpoint"] == checkpoint2
+    assert legacy_loaded["trusted_subtrees"] == mts2
+    assert legacy_loaded["retained_landmark"] is None
+    restarted.current.unlink()
+    restarted.current.symlink_to(target2)
+
+    # Retained-landmark metadata is strictly log-bound and range-checked.
+    before_bad_landmark = restarted.current.readlink()
+    bad_number = 0
+
+    def bad_landmark_generation(value):
+        nonlocal_name = "bad-landmark-%d" % bad_landmark_generation.number
+        bad_landmark_generation.number += 1
+        path = restarted.generations / nonlocal_name
+        path.mkdir()
+        (path / "checkpoint.json").write_bytes(
+            restarted._checkpoint_bytes(checkpoint2))
+        (path / "trusted-subtrees.mts1").write_bytes(mts2)
+        (path / "retained-landmark.json").write_text(
+            json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="ascii",
+        )
+        return path
+
+    bad_landmark_generation.number = bad_number
+    invalid_landmarks = [0, -1, True, 1 << 48]
+    for landmark in invalid_landmarks:
+        invalid = bad_landmark_generation({
+            "log_number": 2,
+            "retained_landmark": landmark,
+        })
+        rejected(
+            lambda invalid=invalid: restarted._read_generation(invalid),
+            "invalid retained landmark accepted",
+        )
+        assert restarted.current.readlink() == before_bad_landmark
+
+    wrong_log = bad_landmark_generation({
+        "log_number": 1,
+        "retained_landmark": 3,
+    })
+    rejected(
+        lambda: restarted._read_generation(wrong_log),
+        "cross-log retained landmark accepted",
+    )
+    assert restarted.current.readlink() == before_bad_landmark
+
+    malformed_landmark = bad_landmark_generation({
+        "log_number": 2,
+        "retained_landmark": 3,
+    })
+    (malformed_landmark / "retained-landmark.json").write_text(
+        "{not-json\n", encoding="ascii")
+    rejected(
+        lambda: restarted._read_generation(malformed_landmark),
+        "malformed retained-landmark JSON accepted",
+    )
+    assert restarted.current.readlink() == before_bad_landmark
 
     # Same tree size/root in another log is still a distinct RP generation.
     checkpoint1_same = {

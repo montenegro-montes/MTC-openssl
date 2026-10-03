@@ -2,6 +2,12 @@
 #include "retry_tls.c"
 #include <assert.h>
 
+static int group_text(TLSConfig *config,const char *text){
+    unsigned char id[80];size_t id_len;
+    assert(id_encode(text,id,&id_len));
+    return mtc_group_match(config,id,id_len);
+}
+
 int main(int argc,char **argv) {
     SSL_CTX *server,*client;SSL *s,*cl;BIO *bio;X509 *cert;EVP_PKEY *key;
     const unsigned char *out;size_t out_n;int alert=0;
@@ -32,6 +38,83 @@ int main(int argc,char **argv) {
     assert(!initial_group(&coordinates));
     assert(id_encode("32473.101",coordinates.id,&coordinates.n));
     assert(!initial_group(&coordinates));
+
+    /* TAI Sections 3.1 and 4.2; MTC Sections 8.1 and 8.2.1. */
+    TLSConfig landmark_range={0},standalone_range={0};
+    assert(id_encode("32473.101.1.7.129",landmark_range.id,
+                     &landmark_range.n));
+    landmark_range.has_group=initial_group(&landmark_range);
+    assert(landmark_range.has_group);
+    landmark_range.group_n=landmark_range.n;
+
+    /* A CA ID requests any usable credential under that CA.
+       Mirror mtc_server(): no trust object is available here. */
+    assert(!landmark_range.trust);
+    assert(group_text(&landmark_range,"32473.101"));
+    assert(!group_text(&landmark_range,"32473.102"));
+
+    assert(group_text(&landmark_range,"32473.101.2.7.129"));
+    assert(group_text(&landmark_range,"32473.101.2.7.130"));
+    assert(!group_text(&landmark_range,"32473.101.2.7.128"));
+    assert(!group_text(&landmark_range,"32473.101.2.8.129"));
+    assert(!group_text(&landmark_range,"32473.102.2.7.129"));
+    assert(!group_text(&landmark_range,"32473.101.2.7.129.1"));
+    assert(!group_text(&landmark_range,"32473.101.1.7.129"));
+
+    /*
+     * draft-06 permits landmark numbers through 2^48-1.  Exercise the
+     * first value above the former 32-bit implementation limit and the
+     * protocol maximum.
+     */
+    TLSConfig landmark_2p32={0},landmark_2p48m1={0};
+
+    assert(id_encode("32473.101.1.7.4294967296",
+                     landmark_2p32.id,&landmark_2p32.n));
+    landmark_2p32.has_group=initial_group(&landmark_2p32);
+    assert(landmark_2p32.has_group);
+    landmark_2p32.group_n=landmark_2p32.n;
+    assert(group_text(&landmark_2p32,
+                      "32473.101.2.7.4294967296"));
+    assert(group_text(&landmark_2p32,
+                      "32473.101.2.7.4294967297"));
+    assert(!group_text(&landmark_2p32,
+                       "32473.101.2.7.4294967295"));
+
+    assert(id_encode("32473.101.1.7.281474976710655",
+                     landmark_2p48m1.id,&landmark_2p48m1.n));
+    landmark_2p48m1.has_group=initial_group(&landmark_2p48m1);
+    assert(landmark_2p48m1.has_group);
+    landmark_2p48m1.group_n=landmark_2p48m1.n;
+    assert(group_text(&landmark_2p48m1,
+                      "32473.101.2.7.281474976710655"));
+    assert(group_text(&landmark_2p48m1,
+                      "32473.101.2.7.281474976710656"));
+    assert(!group_text(&landmark_2p48m1,
+                       "32473.101.2.7.281474976710654"));
+
+    assert(id_encode("32473.101",standalone_range.id,&standalone_range.n));
+    assert(group_text(&standalone_range,"32473.101.2.1.1"));
+    assert(group_text(&standalone_range,"32473.101.2.7.129"));
+    assert(!group_text(&standalone_range,"32473.101.2"));
+    assert(!group_text(&standalone_range,"32473.101.2.7"));
+    assert(!group_text(&standalone_range,"32473.101.2.7.129.1"));
+    assert(!group_text(&standalone_range,"32473.101"));
+
+    unsigned char malformed_group[80];size_t malformed_len,prefix_len;
+    assert(id_encode("32473.101.2.7",malformed_group,&prefix_len));
+    malformed_group[prefix_len]=0x80;
+    malformed_group[prefix_len+1]=0;
+    malformed_len=prefix_len+2;
+    assert(!mtc_group_match(&landmark_range,malformed_group,malformed_len));
+    malformed_group[prefix_len]=0x81;
+    malformed_len=prefix_len+1;
+    assert(!mtc_group_match(&landmark_range,malformed_group,malformed_len));
+    malformed_group[prefix_len]=0x82;
+    memset(malformed_group+prefix_len+1,0x80,8);
+    malformed_group[prefix_len+9]=0;
+    malformed_len=prefix_len+10;
+    assert(!mtc_group_match(&landmark_range,malformed_group,malformed_len));
+
     s=SSL_new(server);cl=SSL_new(client);assert(s&&cl);
     /* CASE B first attempt: valid incompatible CH, credential-backed EE,
        no confirmation on fallback, explicit client mismatch rejection. */

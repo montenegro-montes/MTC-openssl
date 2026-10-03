@@ -66,8 +66,8 @@ static int retry_parse(SSL *ssl,unsigned type,unsigned context,const unsigned ch
        ambiguous selection is accepted, and every ID is canonical. */
     if(!vector(&list,1,&id)||list.n||!retry_id_valid(id))goto malformed;
     if(context==SSL_EXT_CLIENT_HELLO){
-        match=id.n==c->n && (!memcmp(id.p,c->id,c->n)
-              || (c->has_group&&!memcmp(id.p,c->group,c->n)));
+        match=(id.n==c->n&&!memcmp(id.p,c->id,c->n))
+              || mtc_group_match(c,id.p,id.n);
         s->matched=match;
         fprintf(stderr,"MTC_RETRY_SERVER {\"request_satisfied\":%s,\"supported_id_hex\":\"",match?"true":"false");
         retry_hex(stderr,c->id,c->n);fputs("\"}\n",stderr);
@@ -119,6 +119,7 @@ static int retry_install(SSL_CTX *ctx,RetryConfig *r) {
     if(retry_ci<0||si<0
         ||!SSL_CTX_set_ex_data(ctx,retry_ci,r))return 0;
     put(c->list,c->n+1,2);c->list[2]=(unsigned char)c->n;memcpy(c->list+3,c->id,c->n);
+    c->list_n=c->n+3;
     put(r->request_list,r->requested_len+1,2);r->request_list[2]=(unsigned char)r->requested_len;
     memcpy(r->request_list+3,r->requested,r->requested_len);
     SSL_CTX_set_session_cache_mode(ctx,SSL_SESS_CACHE_OFF);
@@ -139,7 +140,9 @@ static int retry_configure(SSL_CTX *ctx,const char *trust_path,int landmark,
     if(!r)return 0;
     c=&r->base;
     c->trust=mtc_load(trust_path,landmark);if(!c->trust)goto bad;
-    c->n=c->trust->signal_len;memcpy(c->id,c->trust->signal,c->n);c->has_group=landmark&&initial_group(c);
+    c->n=c->trust->signal_len;memcpy(c->id,c->trust->signal,c->n);
+    c->has_group=landmark&&initial_group(c);
+    c->group_n=c->has_group?c->n:0;
     c->role=credential!=NULL
         ? MTC_ROLE_SERVER_PRESENT
         : MTC_ROLE_CLIENT_VERIFY_SERVER;

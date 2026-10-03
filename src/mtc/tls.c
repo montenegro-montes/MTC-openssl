@@ -1,4 +1,6 @@
 #include "mtc.c"
+#include <errno.h>
+#include <sys/stat.h>
 #define CONTEXT (SSL_EXT_TLS_ONLY|SSL_EXT_TLS1_3_ONLY|SSL_EXT_CLIENT_HELLO|SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS|SSL_EXT_TLS1_3_CERTIFICATE|SSL_EXT_TLS1_3_CERTIFICATE_REQUEST)
 typedef int (*SecurityCallback)(const SSL *,const SSL_CTX *,int,int,int,void *,void *);
 enum {
@@ -11,7 +13,7 @@ typedef struct {
     SecurityCallback previous_security;
     MTCConfig *trust;
     unsigned char id[80], group[80], list[83];
-    size_t n;
+    size_t n, group_n, list_n;
     int role, has_group, purpose;
 } TLSConfig;
 
@@ -32,19 +34,95 @@ typedef struct {
 } TLSEndpointState;
 
 static int ci=-1,si=-1;
+static int oid_uint64_component(const unsigned char *p,size_t n,
+                                size_t *used,uint64_t *value){
+    uint64_t v=0;size_t i;
+    if(!p||!n||!used||!value||p[0]==0x80)return 0;
+    for(i=0;i<n;i++){
+        if(v>=(1ULL<<57))return 0;
+        v=(v<<7)|(p[i]&127);
+        if(!(p[i]&128)){
+            *used=i+1;*value=v;return 1;
+        }
+    }
+    return 0;
+}
 /* Recognize an individual suffix by components, including multi-byte numbers.
    This maps only the corresponding exact configured landmark, not a range. */
 static int initial_group(TLSConfig *c){
-    size_t offsets[80],count=0;uint64_t values[80],value=0;int first=1;
-    for(size_t i=0;i<c->n;i++){
-        if(first){if(c->id[i]==0x80)return 0;offsets[count]=i;value=0;first=0;}
-        value=(value<<7)|(c->id[i]&127);
-        if(value>0xffffffffULL)return 0;
-        if(!(c->id[i]&128)){values[count++]=value;first=1;}
+    size_t offsets[80],count=0,pos=0,used;
+    uint64_t values[80];
+
+    while(pos<c->n){
+        if(count>=sizeof(offsets)/sizeof(offsets[0]))return 0;
+        offsets[count]=pos;
+        if(!oid_uint64_component(c->id+pos,c->n-pos,&used,&values[count]))
+            return 0;
+        pos+=used;
+        count++;
     }
-    if(!first||count<4||values[count-3]!=1||!values[count-2]||!values[count-1])return 0;
-    memcpy(c->group,c->id,c->n);c->group[offsets[count-3]]=2;return 1;
+
+    if(count<4||values[count-3]!=1
+       ||!values[count-2]||!values[count-1])return 0;
+
+    memcpy(c->group,c->id,c->n);
+    c->group[offsets[count-3]]=2;
+    return 1;
 }
+static int range_contains(const unsigned char *base,size_t base_n,
+                          uint64_t min,uint64_t max,
+                          const unsigned char *id,size_t id_n){
+    size_t used;uint64_t value;
+    if(!base||!base_n||!id||base[base_n-1]&128||id_n<=base_n||
+       memcmp(base,id,base_n))return 0;
+    return oid_uint64_component(id+base_n,id_n-base_n,&used,&value)&&
+           used==id_n-base_n&&min<=value&&value<=max;
+}
+static int last_component(const unsigned char *id,size_t n,
+                          size_t *offset,uint64_t *value){
+    size_t pos=0,used,start=0;uint64_t component=0;
+    if(!id||!n||!offset||!value)return 0;
+    while(pos<n){
+        start=pos;
+        if(!oid_uint64_component(id+pos,n-pos,&used,&component))return 0;
+        pos+=used;
+    }
+    *offset=start;*value=component;return 1;
+}
+static int mtc_group_match(const TLSConfig *c,
+                           const unsigned char *id,size_t id_n){
+    unsigned char caid[80];size_t caid_n;
+    size_t base_n,used,pos,starts[3]={0};uint64_t min,value,values[3]={0};
+    if(!c||!id)return 0;
+    if(c->trust
+       && id_encode(c->trust->caid,caid,&caid_n)
+       && id_n==caid_n&&!memcmp(id,caid,caid_n))
+        return 1;
+    if(c->has_group){
+        pos=0;
+        while(pos<c->n){
+            starts[0]=starts[1];starts[1]=starts[2];starts[2]=pos;
+            values[0]=values[1];values[1]=values[2];
+            if(!oid_uint64_component(c->id+pos,c->n-pos,&used,&values[2]))
+                return 0;
+            pos+=used;
+        }
+        if(values[0]!=1||!values[1]||!values[2]||!starts[0])
+            return 0;
+        if(id_n==starts[0]&&!memcmp(id,c->id,id_n))
+            return 1;
+        if(!last_component(c->group,c->group_n,&base_n,&min))return 0;
+        return range_contains(c->group,base_n,min,UINT64_MAX,id,id_n);
+    }
+    if(id_n<=c->n+1||memcmp(c->id,id,c->n)||id[c->n]!=2)return 0;
+    pos=c->n+1;
+    if(!oid_uint64_component(id+pos,id_n-pos,&used,&value))return 0;
+    pos+=used;
+    if(!oid_uint64_component(id+pos,id_n-pos,&used,&value))return 0;
+    (void)value;
+    return pos+used==id_n;
+}
+
 static void tls_config_free(TLSConfig *c){
     if(!c)return;
     mtc_free(c->trust);
@@ -97,7 +175,7 @@ static int add_one(SSL *ssl,unsigned type,unsigned context,const unsigned char *
     if(context==SSL_EXT_CLIENT_HELLO){
         if(c->role!=MTC_ROLE_CLIENT_VERIFY_SERVER
             && c->role!=MTC_ROLE_CLIENT_PRESENT)return 0;
-        *out=c->list;*len=c->n+3;return 1;
+        *out=c->list;*len=c->list_n;return 1;
     }
 
     if(c->role==MTC_ROLE_CLIENT_PRESENT){
@@ -108,13 +186,13 @@ static int add_one(SSL *ssl,unsigned type,unsigned context,const unsigned char *
 
     if(context==SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS){
         if(c->role!=MTC_ROLE_SERVER_PRESENT)return 0;
-        *out=c->list;*len=c->n+3;return 1;
+        *out=c->list;*len=c->list_n;return 1;
     }
 
     if(context==SSL_EXT_TLS1_3_CERTIFICATE_REQUEST){
         if(c->role!=MTC_ROLE_SERVER_VERIFY_CLIENT)return 0;
         *out=c->list;
-        *len=c->n+3;
+        *len=c->list_n;
         s->available=1;
         return 1;
     }
@@ -156,13 +234,11 @@ static int parse_one(SSL *ssl,unsigned type,unsigned context,const unsigned char
     if(!vector(&p,2,&list)||p.n||!list.n)goto bad;
     while(list.n){
         if(!vector(&list,1,&id)||!id.n)goto bad;
-        if(id.n==c->n
-            && (!memcmp(id.p,c->id,id.n)
-                || (context==SSL_EXT_CLIENT_HELLO
-                    && (c->role==MTC_ROLE_SERVER_PRESENT
-                        || c->role==MTC_ROLE_SERVER_VERIFY_CLIENT)
-                    && c->has_group
-                    && !memcmp(id.p,c->group,id.n))))
+        if((id.n==c->n&&!memcmp(id.p,c->id,id.n))
+            || (context==SSL_EXT_CLIENT_HELLO
+                && (c->role==MTC_ROLE_SERVER_PRESENT
+                    || c->role==MTC_ROLE_SERVER_VERIFY_CLIENT)
+                && mtc_group_match(c,id.p,id.n)))
             match=1;
     }
     if(!match)goto bad;
@@ -203,7 +279,7 @@ static int client_hello_list(TLSEndpointConfig *endpoint,
             continue;
 
         id=c->has_group?c->group:c->id;
-        n=c->n;
+        n=c->has_group?c->group_n:c->n;
 
         for(size_t j=0;j<i;j++){
             TLSConfig *previous=items[j];
@@ -212,7 +288,8 @@ static int client_hello_list(TLSEndpointConfig *endpoint,
             if(!previous
                 || (previous->role!=MTC_ROLE_CLIENT_VERIFY_SERVER
                     && previous->role!=MTC_ROLE_CLIENT_PRESENT)
-                || previous->n!=n)
+                || (previous->has_group
+                    ? previous->group_n : previous->n)!=n)
                 continue;
 
             previous_id=previous->has_group
@@ -445,13 +522,17 @@ static int install(SSL_CTX *ctx,TLSConfig *c){
     if(*slot)
         return 0;
 
-    put(c->list,c->n+1,2);
-    c->list[2]=(unsigned char)c->n;
+    size_t request_n=(c->role==MTC_ROLE_CLIENT_VERIFY_SERVER
+                      || c->role==MTC_ROLE_CLIENT_PRESENT)
+                     && c->has_group ? c->group_n : c->n;
+    put(c->list,request_n+1,2);
+    c->list[2]=(unsigned char)request_n;
     memcpy(c->list+3,
         (c->role==MTC_ROLE_CLIENT_VERIFY_SERVER
             || c->role==MTC_ROLE_CLIENT_PRESENT)
             && c->has_group ? c->group : c->id,
-        c->n);
+        request_n);
+    c->list_n=request_n+3;
 
     /*
      * Register MTC_EXT exactly once per SSL_CTX.  The callback argument is
@@ -476,9 +557,117 @@ static int install(SSL_CTX *ctx,TLSConfig *c){
 
     return 1;
 }
+static void json_space(const unsigned char **p,const unsigned char *end){
+    while(*p<end&&(**p==' '||**p=='\t'||**p=='\n'||**p=='\r'))(*p)++;
+}
+static int json_byte(const unsigned char **p,const unsigned char *end,
+                     unsigned char value){
+    json_space(p,end);
+    if(*p==end||**p!=value)return 0;
+    (*p)++;
+    return 1;
+}
+static int json_key(const unsigned char **p,const unsigned char *end,
+                    const char **key){
+    static const char log_number[]="log_number";
+    static const char retained_landmark[]="retained_landmark";
+    const unsigned char *start;size_t n;
+    if(!json_byte(p,end,'\"'))return 0;
+    start=*p;
+    while(*p<end&&**p!='\"'){
+        if(**p<' '||**p=='\\')return 0;
+        (*p)++;
+    }
+    if(*p==end)return 0;
+    n=(size_t)(*p-start);(*p)++;
+    if(n==sizeof(log_number)-1&&!memcmp(start,log_number,n))
+        *key=log_number;
+    else if(n==sizeof(retained_landmark)-1
+            &&!memcmp(start,retained_landmark,n))
+        *key=retained_landmark;
+    else return 0;
+    return json_byte(p,end,':');
+}
+static int json_uint(const unsigned char **p,const unsigned char *end,
+                     uint64_t *value){
+    uint64_t result=0;const unsigned char *start;
+    json_space(p,end);start=*p;
+    if(start==end||*start<'0'||*start>'9')return 0;
+    if(*start=='0'&&start+1<end&&start[1]>='0'&&start[1]<='9')return 0;
+    while(*p<end&&**p>='0'&&**p<='9'){
+        unsigned digit=(unsigned)(**p-'0');
+        if(result>(UINT64_MAX-digit)/10)return 0;
+        result=result*10+digit;(*p)++;
+    }
+    *value=result;
+    return 1;
+}
+static int retained_landmark_json(const char *path,uint64_t expected_log,
+                                  uint64_t *retained){
+    unsigned char data[1025];size_t n;FILE *f=fopen(path,"rb");int read_ok;
+    const unsigned char *p,*end;
+    int have_log=0,have_landmark=0,landmark_is_null=0;
+    uint64_t log_number=0,landmark_number=0;
+    if(!f)return 0;
+    n=fread(data,1,sizeof(data),f);
+    read_ok=!ferror(f)&&n<sizeof(data)&&fgetc(f)==EOF;
+    if(fclose(f)||!read_ok)return 0;
+    p=data;end=data+n;
+    if(!json_byte(&p,end,'{'))return 0;
+    for(int field=0;field<2;field++){
+        const char *key;
+        if(field&&!json_byte(&p,end,','))return 0;
+        if(!json_key(&p,end,&key))return 0;
+        if(!strcmp(key,"log_number")){
+            if(have_log||!json_uint(&p,end,&log_number))return 0;
+            have_log=1;
+        }else{
+            json_space(&p,end);
+            if(have_landmark)return 0;
+            if((size_t)(end-p)>=4&&!memcmp(p,"null",4)){
+                p+=4;landmark_is_null=1;
+            }
+            else if(!json_uint(&p,end,&landmark_number))return 0;
+            have_landmark=1;
+        }
+    }
+    if(!json_byte(&p,end,'}'))return 0;
+    json_space(&p,end);
+    if(p!=end||!have_log||!have_landmark
+       ||log_number<1||log_number>65535||log_number!=expected_log
+       ||(!landmark_is_null&&!landmark_number)
+       ||landmark_number>=(1ULL<<48))return 0;
+    *retained=landmark_number;
+    return 1;
+}
+static int rp_landmark_path(const char *mts1,char **metadata){
+    const char *file=strrchr(mts1,'/'),*generation,*generations;
+    size_t parent_n;char *path;int n;
+    *metadata=NULL;
+    if(!file||strcmp(file+1,"trusted-subtrees.mts1"))return 0;
+    generation=file;
+    while(generation>mts1&&generation[-1]!='/')generation--;
+    if(generation==mts1||generation==file)return 0;
+    generations=generation-1;
+    while(generations>mts1&&generations[-1]!='/')generations--;
+    if((size_t)((generation-1)-generations)!=11
+       ||memcmp(generations,"generations",11))return 0;
+    parent_n=(size_t)(file-mts1);
+    path=OPENSSL_malloc(parent_n+1+sizeof("retained-landmark.json"));
+    if(!path)return -1;
+    n=snprintf(path,parent_n+1+sizeof("retained-landmark.json"),
+               "%.*s/retained-landmark.json",(int)parent_n,mts1);
+    if(n<0||(size_t)n>=parent_n+1+sizeof("retained-landmark.json")){
+        OPENSSL_free(path);return -1;
+    }
+    *metadata=path;
+    return 1;
+}
 int mtc_client(SSL_CTX *ctx,const char *path,int landmark,
                const char *trusted_subtrees){
     TLSConfig *c=OPENSSL_zalloc(sizeof(*c));
+    char request[120],*canonical=NULL,*metadata=NULL;int request_n,recognized;
+    uint64_t retained_landmark=0;struct stat st;
     if(!c)return 0;
 
     c->trust=mtc_load(path,landmark);
@@ -491,12 +680,19 @@ int mtc_client(SSL_CTX *ctx,const char *path,int landmark,
      * MTS1 is already-validated relying-party state.  Load it once while
      * configuring the SSL_CTX; handshakes only consult MTCConfig in memory.
      */
-    if(trusted_subtrees &&
-       (!landmark ||
-        !mtc_load_trusted_subtrees(c->trust,trusted_subtrees))){
-        mtc_free(c->trust);
-        OPENSSL_free(c);
-        return 0;
+    if(trusted_subtrees){
+        canonical=realpath(trusted_subtrees,NULL);
+        if(!landmark||!canonical
+           ||!mtc_load_trusted_subtrees(c->trust,canonical))goto error;
+        recognized=rp_landmark_path(canonical,&metadata);
+        if(recognized<0)goto error;
+        if(recognized){
+            if(lstat(metadata,&st)){
+                if(errno!=ENOENT)goto error;
+            }else if(!S_ISREG(st.st_mode)
+                     ||!retained_landmark_json(metadata,c->trust->log,
+                                               &retained_landmark))goto error;
+        }
     }
 
     c->role=MTC_ROLE_CLIENT_VERIFY_SERVER;
@@ -506,19 +702,33 @@ int mtc_client(SSL_CTX *ctx,const char *path,int landmark,
     memcpy(c->id,c->trust->signal,c->n);
 
     if(landmark){
-        c->has_group=initial_group(c);
-        if(!c->has_group){
-            mtc_free(c->trust);
-            OPENSSL_free(c);
-            return 0;
+        if(retained_landmark){
+            request_n=snprintf(request,sizeof(request),"%s.2.%llu.%llu",
+                c->trust->caid,(unsigned long long)c->trust->log,
+                (unsigned long long)retained_landmark);
+            if(request_n<=0||request_n>=(int)sizeof(request)
+                || !id_encode(request,c->group,&c->group_n)){
+                goto error;
+            }
+        }else if(!id_encode(c->trust->caid,c->group,&c->group_n)){
+            goto error;
         }
+        c->has_group=1;
     }
 
+    OPENSSL_free(metadata);
+    free(canonical);
     return install(ctx,c);
+error:
+    OPENSSL_free(metadata);
+    free(canonical);
+    mtc_free(c->trust);
+    OPENSSL_free(c);
+    return 0;
 }
 int mtc_server(SSL_CTX *ctx,const char *id){
     TLSConfig *c=OPENSSL_zalloc(sizeof(*c));if(!c)return 0;c->role=MTC_ROLE_SERVER_PRESENT;
-    if(!id_encode(id,c->id,&c->n)){OPENSSL_free(c);return 0;}c->has_group=initial_group(c);return install(ctx,c);
+    if(!id_encode(id,c->id,&c->n)){OPENSSL_free(c);return 0;}c->has_group=initial_group(c);c->group_n=c->has_group?c->n:0;return install(ctx,c);
 }
 int mtc_server_verify_client(SSL_CTX *ctx,const char *path,int landmark){
     TLSConfig *c=OPENSSL_zalloc(sizeof(*c));if(!c)return 0;
@@ -529,6 +739,7 @@ int mtc_server_verify_client(SSL_CTX *ctx,const char *path,int landmark){
     if(landmark){
         c->has_group=initial_group(c);
         if(!c->has_group){mtc_free(c->trust);OPENSSL_free(c);return 0;}
+        c->group_n=c->n;
     }
     return install(ctx,c);
 }
@@ -547,6 +758,7 @@ int mtc_client_present(SSL_CTX *ctx,const char *id,int landmark){
             OPENSSL_free(c);
             return 0;
         }
+        c->group_n=c->n;
     }
     return install(ctx,c);
 }

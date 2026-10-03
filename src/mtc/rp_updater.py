@@ -223,7 +223,8 @@ def build_trusted_subtree_configuration(
         max_active_landmarks=max_active_landmarks,
     )
 
-    return trusted, encode_trusted_subtrees(trusted)
+    mts1 = encode_trusted_subtrees(trusted)
+    return trusted, mts1
 
 
 def update_and_publish(
@@ -252,7 +253,7 @@ def update_and_publish(
             "Authenticated checkpoint issuance log differs from requested log"
         )
 
-    _, mts1 = build_trusted_subtree_configuration(
+    trusted, mts1 = build_trusted_subtree_configuration(
         base_url,
         log_number,
         sequence,
@@ -260,5 +261,6 @@ def update_and_publish(
         checkpoint,
         max_active_landmarks=max_active_landmarks,
     )
+    retained_landmark = trusted.retained_landmark
 
-    return store.publish(checkpoint, mts1)
+    return store.publish(checkpoint, mts1, retained_landmark)

@@ -96,6 +96,19 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-update-test-") as temporary:
         ]
         assert decode_trusted_subtrees(mts1) == trusted
 
+        # The validation result records the newest completely retained
+        # landmark directly, before the intervals are encoded as MTS1.
+        sequence3 = [
+            Landmark(0, 0, 0),
+            Landmark(1, 4, 100),
+            Landmark(2, 8, 200),
+            Landmark(3, 16, 300),
+        ]
+        through3, through3_mts1 = build_trusted_subtree_configuration(
+            base_url, 1, sequence3, 50, current)
+        assert through3.retained_landmark == 3
+        assert decode_trusted_subtrees(through3_mts1) == through3
+
         # The active-landmark limit retains the older complete prefix.
         limited, limited_mts1 = build_trusted_subtree_configuration(
             base_url, 1, sequence, 50, current,
@@ -134,6 +147,17 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-update-test-") as temporary:
         finally:
             rp_updater._get = real_get
 
+        # Failure at landmark 2 retains landmark 1, but never assigns the
+        # failed or newer landmark identity to the retained prefix.
+        rp_updater._get = corrupt_subtree(4)
+        try:
+            prefix3, prefix3_mts1 = build_trusted_subtree_configuration(
+                base_url, 1, sequence3, 50, current)
+            assert prefix3.retained_landmark == 1
+            assert decode_trusted_subtrees(prefix3_mts1) == prefix3
+        finally:
+            rp_updater._get = real_get
+
         # Failure in landmark 1 prevents incorporation of it and every newer
         # landmark.  The resulting MTS1 is valid but contains no subtrees.
         rp_updater._get = corrupt_subtree(0)
@@ -141,6 +165,7 @@ with tempfile.TemporaryDirectory(prefix="mtc-rp-update-test-") as temporary:
             empty, empty_mts1 = build_trusted_subtree_configuration(
                 base_url, 1, sequence, 50, current)
             assert empty == []
+            assert empty.retained_landmark is None
             assert decode_trusted_subtrees(empty_mts1) == []
         finally:
             rp_updater._get = real_get

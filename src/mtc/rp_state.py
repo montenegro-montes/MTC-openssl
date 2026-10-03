@@ -59,13 +59,17 @@ class RPStateStore:
             raise ValueError("invalid RP state directory")
 
     @staticmethod
-    def _generation_name(checkpoint, trusted_subtrees):
-        return "%05d-%016d-%s-%s" % (
+    def _generation_name(
+            checkpoint, trusted_subtrees, retained_landmark=None):
+        name = "%05d-%016d-%s-%s" % (
             checkpoint["log_number"],
             checkpoint["tree_size"],
             checkpoint["hash"],
             hashlib.sha256(trusted_subtrees).hexdigest(),
         )
+        if retained_landmark is not None:
+            name += "-%012d" % retained_landmark
+        return name
 
     @staticmethod
     def _write_file(path, data):
@@ -85,18 +89,47 @@ class RPStateStore:
         ).encode("ascii")
 
     @staticmethod
+    def _retained_landmark(checkpoint, value):
+        if (not isinstance(value, dict)
+                or set(value) != {"log_number", "retained_landmark"}
+                or type(value["log_number"]) is not int
+                or value["log_number"] != checkpoint["log_number"]):
+            raise ValueError("invalid retained landmark")
+
+        landmark = value["retained_landmark"]
+        if (landmark is not None
+                and (type(landmark) is not int
+                     or not 1 <= landmark < 1 << 48)):
+            raise ValueError("invalid retained landmark")
+        return landmark
+
+    @staticmethod
+    def _retained_landmark_bytes(checkpoint, retained_landmark):
+        value = {
+            "log_number": checkpoint["log_number"],
+            "retained_landmark": retained_landmark,
+        }
+        RPStateStore._retained_landmark(checkpoint, value)
+        return (
+            json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("ascii")
+
+    @staticmethod
     def _read_generation(path):
         if path.is_symlink() or not path.is_dir():
             raise ValueError("invalid RP generation")
 
         checkpoint_path = path / "checkpoint.json"
         mts1_path = path / "trusted-subtrees.mts1"
+        landmark_path = path / "retained-landmark.json"
 
         if (checkpoint_path.is_symlink()
                 or mts1_path.is_symlink()
                 or not checkpoint_path.is_file()
                 or not mts1_path.is_file()):
             raise ValueError("invalid RP generation")
+        if landmark_path.is_symlink():
+            raise ValueError("invalid RP retained landmark")
 
         try:
             checkpoint = json.loads(
@@ -121,7 +154,19 @@ class RPStateStore:
                 "RP trusted-subtree state differs from checkpoint issuance log"
             )
 
-        return checkpoint, mts1
+        retained_landmark = None
+        if landmark_path.exists():
+            if not landmark_path.is_file():
+                raise ValueError("invalid RP retained landmark")
+            try:
+                value = json.loads(
+                    landmark_path.read_text(encoding="ascii"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("invalid RP retained landmark") from exc
+            retained_landmark = RPStateStore._retained_landmark(
+                checkpoint, value)
+
+        return checkpoint, mts1, retained_landmark
 
     def load_current(self):
         if not self.current.exists():
@@ -149,19 +194,21 @@ class RPStateStore:
         except ValueError as exc:
             raise ValueError("current RP state escapes generations") from exc
 
-        checkpoint, mts1 = self._read_generation(resolved)
+        checkpoint, mts1, retained_landmark = self._read_generation(resolved)
 
-        expected = self._generation_name(checkpoint, mts1)
+        expected = self._generation_name(
+            checkpoint, mts1, retained_landmark)
         if resolved.name != expected:
             raise ValueError("generation name does not match checkpoint")
 
         return {
             "checkpoint": checkpoint,
             "trusted_subtrees": mts1,
+            "retained_landmark": retained_landmark,
             "path": resolved,
         }
 
-    def publish(self, checkpoint, trusted_subtrees):
+    def publish(self, checkpoint, trusted_subtrees, retained_landmark=None):
         checkpoint = _checkpoint(checkpoint)
 
         if not isinstance(trusted_subtrees, bytes):
@@ -176,13 +223,18 @@ class RPStateStore:
                 "RP trusted-subtree state differs from checkpoint issuance log"
             )
 
-        name = self._generation_name(checkpoint, trusted_subtrees)
+        landmark_bytes = self._retained_landmark_bytes(
+            checkpoint, retained_landmark)
+        name = self._generation_name(
+            checkpoint, trusted_subtrees, retained_landmark)
         final = self.generations / name
 
         if final.exists() or final.is_symlink():
-            existing_checkpoint, existing_mts1 = self._read_generation(final)
+            existing_checkpoint, existing_mts1, existing_landmark = (
+                self._read_generation(final))
             if (existing_checkpoint != checkpoint
-                    or existing_mts1 != trusted_subtrees):
+                    or existing_mts1 != trusted_subtrees
+                    or existing_landmark != retained_landmark):
                 raise ValueError("generation already exists with other data")
         else:
             temporary = Path(tempfile.mkdtemp(
@@ -199,12 +251,17 @@ class RPStateStore:
                     temporary / "trusted-subtrees.mts1",
                     trusted_subtrees,
                 )
+                self._write_file(
+                    temporary / "retained-landmark.json",
+                    landmark_bytes,
+                )
 
                 # Re-read exactly what would become visible.
-                written_checkpoint, written_mts1 = self._read_generation(
-                    temporary)
+                written_checkpoint, written_mts1, written_landmark = (
+                    self._read_generation(temporary))
                 if (written_checkpoint != checkpoint
-                        or written_mts1 != trusted_subtrees):
+                        or written_mts1 != trusted_subtrees
+                        or written_landmark != retained_landmark):
                     raise ValueError("RP generation validation failed")
 
                 _fsync_directory(temporary)
@@ -241,7 +298,8 @@ class RPStateStore:
         loaded = self.load_current()
         if (loaded is None
                 or loaded["checkpoint"] != checkpoint
-                or loaded["trusted_subtrees"] != trusted_subtrees):
+                or loaded["trusted_subtrees"] != trusted_subtrees
+                or loaded["retained_landmark"] != retained_landmark):
             raise ValueError("published RP state validation failed")
 
         return loaded

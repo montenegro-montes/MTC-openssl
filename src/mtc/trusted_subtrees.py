@@ -27,6 +27,14 @@ class SubtreeEvidence:
     proof: tuple
 
 
+class ValidatedTrustedSubtrees(list):
+    """Trusted-subtree prefix plus its authenticated landmark identity."""
+
+    def __init__(self, values, retained_landmark):
+        super().__init__(values)
+        self.retained_landmark = retained_landmark
+
+
 def build_evidence(log, sequence, now):
     """Build Section 4.4 evidence from the CA/log side."""
     validate_sequence(sequence)
@@ -132,6 +140,7 @@ def validate_trusted_subtrees(
         by_interval[interval] = item
 
     trusted = []
+    retained_landmark = None
 
     for landmark in landmarks:
         # Section 7.4 permits retaining the validated older prefix when the
@@ -172,8 +181,9 @@ def validate_trusted_subtrees(
 
         # Never incorporate only part of a landmark.
         trusted.extend(landmark_trusted)
+        retained_landmark = landmark.number
 
-    return trusted
+    return ValidatedTrustedSubtrees(trusted, retained_landmark)
 
 MTS_MAGIC = b"MTS1"
 MAX_TRUSTED_SUBTREES = 64

@@ -29,6 +29,10 @@ def main():
                         help='Run focused standalone generation through CosignerCLIClient')
     parser.add_argument('--http-cosigner-only',action='store_true',
                         help='Run focused standalone generation through CosignerHTTPClient')
+    parser.add_argument('--log2-landmark-only',action='store_true',
+                        help='Run focused native log-2 evolved-landmark verification')
+    parser.add_argument('--rp-signaling-only',action='store_true',
+                        help='Run focused native RP retained-landmark signaling verification')
     parser.add_argument('--profiles',nargs=2,default=['ecdsa-p256','mldsa65'])
     args=parser.parse_args()
     if args.profiles[0]==args.profiles[1]:parser.error('Two distinct profiles are required')
@@ -56,6 +60,13 @@ def main():
         subprocess.run([str(temp/'test_ids')],check=True)
         subprocess.run([str(temp/'test_revoked_ranges')],check=True)
         subprocess.run([str(temp/'test_trusted_subtrees_c')],check=True)
+        subprocess.run([
+            args.cc,'-Wall','-Wextra','-g',
+            '-fsanitize=address,undefined','-fno-omit-frame-pointer',
+            '-I'+str(prefix/'include'),str(source/'test_rp_signaling.c'),
+            '-L'+str(lib),'-Wl,-rpath,'+str(lib),'-lssl','-lcrypto',
+            '-o',str(temp/'test_rp_signaling'),
+        ],check=True)
         originals={}
         for family in args.profiles:
             key=temp/(family+'.key');cert=temp/(family+'.pem')
@@ -65,7 +76,8 @@ def main():
                             '-addext','basicConstraints=critical,CA:FALSE',
                             '-addext','extendedKeyUsage=serverAuth')
             originals[family]=cert
-        sizes=([16] if (args.cli_cosigner_only or args.http_cosigner_only) else
+        sizes=([16] if (args.cli_cosigner_only or args.http_cosigner_only
+                        or args.log2_landmark_only or args.rp_signaling_only) else
                ([1] if args.injection_only else [1,16]))
         for n in sizes:
             batch=temp/('n'+str(n));batch.mkdir()
@@ -624,6 +636,84 @@ def main():
                         flush=True,
                     )
 
+                    # Sections 6.4.4 and 7.4: log identity remains part of
+                    # the trusted-subtree domain for evolved landmarks.  The
+                    # latest landmark is 3, while index 4 selects landmark 2.
+                    from landmarks import Landmark,relative_proof
+                    from trusted_subtrees import (
+                        TrustedSubtree,
+                        encode_trusted_subtrees,
+                    )
+
+                    log2_expiration=log2_meta['landmark_expirations'][1]
+                    log2_sequence=[
+                        Landmark(0,0,0),
+                        Landmark(1,4,log2_expiration),
+                        Landmark(2,8,log2_expiration+1),
+                        Landmark(3,16,log2_expiration+2),
+                    ]
+                    log2_entries=[
+                        (log2_out/'log'/f'{i:06d}.entry').read_bytes()
+                        for i in range(n)
+                    ]
+                    log2_index=4
+                    selected,start,end,path=relative_proof(
+                        log2_entries,log2_index,log2_sequence
+                    )
+                    assert selected.number==2
+                    assert log2_sequence[-1].number==3
+
+                    log2_source=(
+                        log2_out/f'landmark-{log2_index:04d}.der'
+                    ).read_bytes()
+                    log2_tbs=core.certificate_parts(log2_source)[0][0][2]
+                    assert core.entry(log2_tbs)==log2_entries[log2_index]
+                    log2_relative=temp/f'{family}-log2-landmark-2.der'
+                    log2_relative.write_bytes(core.certificate(
+                        log2_tbs,
+                        core.proof(start,end,path,()),
+                    ))
+                    log2_subtree_hash=core.root(log2_entries[start:end])
+
+                    log2_mts1=temp/f'{family}-log2-landmark-2.mts1'
+                    log2_mts1.write_bytes(encode_trusted_subtrees([
+                        TrustedSubtree(2,start,end,log2_subtree_hash)
+                    ]))
+                    log2_matching=subprocess.run([
+                        str(temp/'check_trusted_subtree'),
+                        str(log2_out/'trust.bin'),
+                        str(log2_relative),
+                        str(log2_mts1),
+                    ],capture_output=True)
+                    assert log2_matching.returncode==0,(
+                        family,'same-log log-2 MTS1 rejected',
+                        log2_matching.stdout.decode(),
+                        log2_matching.stderr.decode(),
+                    )
+
+                    log1_mts1=temp/f'{family}-log1-landmark-2.mts1'
+                    log1_mts1.write_bytes(encode_trusted_subtrees([
+                        TrustedSubtree(1,start,end,log2_subtree_hash)
+                    ]))
+                    log2_cross_log=subprocess.run([
+                        str(temp/'check_trusted_subtree'),
+                        str(log2_out/'trust.bin'),
+                        str(log2_relative),
+                        str(log1_mts1),
+                    ],capture_output=True)
+                    assert log2_cross_log.returncode!=0,(
+                        family,'cross-log MTS1 unexpectedly accepted',
+                        log2_cross_log.stdout.decode(),
+                        log2_cross_log.stderr.decode(),
+                    )
+                    print(
+                        f'PASS {family}: native log 2 landmark '
+                        f'{selected.number} verification and cross-log rejection',
+                        flush=True,
+                    )
+                    if args.log2_landmark_only:
+                        continue
+
                 # Sections 6.4.4 and 7.4: an evolved landmark-relative
                 # certificate is trusted only after its subtree is configured.
                 if n==16:
@@ -703,6 +793,72 @@ def main():
                         b'MTS1 trusted-subtree policy'
                         in configured.stdout
                     )
+
+                    # Section 8.2.1: bind the advertised trust-anchor group
+                    # to the retained landmark of the same immutable RP
+                    # generation.  Missing/null metadata falls back to caID;
+                    # cross-log metadata fails closed.
+                    generations=temp/f'{family}-rp-state'/'generations'
+                    retained_generation=generations/'retained'
+                    null_generation=generations/'null'
+                    legacy_generation=generations/'legacy'
+                    wrong_log_generation=generations/'wrong-log'
+
+                    for generation in [
+                        retained_generation,null_generation,
+                        legacy_generation,wrong_log_generation,
+                    ]:
+                        generation.mkdir(parents=True)
+                        (generation/'trusted-subtrees.mts1').write_bytes(
+                            mts1.read_bytes()
+                        )
+
+                    import json
+                    (retained_generation/'retained-landmark.json').write_text(
+                        json.dumps(
+                            {'log_number':1,'retained_landmark':1},
+                            sort_keys=True,separators=(',',':'),
+                        )
+                    )
+                    (null_generation/'retained-landmark.json').write_text(
+                        json.dumps(
+                            {'log_number':1,'retained_landmark':None},
+                            sort_keys=True,separators=(',',':'),
+                        )
+                    )
+                    (wrong_log_generation/'retained-landmark.json').write_text(
+                        json.dumps(
+                            {'log_number':2,'retained_landmark':3},
+                            sort_keys=True,separators=(',',':'),
+                        )
+                    )
+
+                    signaling=subprocess.run([
+                        str(temp/'test_rp_signaling'),
+                        str(out/'trust.bin'),
+                        str(retained_generation/'trusted-subtrees.mts1'),
+                        str(null_generation/'trusted-subtrees.mts1'),
+                        str(legacy_generation/'trusted-subtrees.mts1'),
+                        str(wrong_log_generation/'trusted-subtrees.mts1'),
+                    ],capture_output=True)
+
+                    assert signaling.returncode==0,(
+                        family,'RP retained-landmark signaling',
+                        signaling.stdout.decode(),
+                        signaling.stderr.decode(),
+                    )
+                    assert (
+                        b'PASS: RP retained-landmark signaling and '
+                        b'fail-closed log binding'
+                        in signaling.stdout
+                    )
+                    print(
+                        f'PASS {family}: RP retained-landmark signaling '
+                        f'and fail-closed log binding',
+                        flush=True,
+                    )
+                    if args.rp_signaling_only:
+                        continue
 
                     wrong_hash=bytes([
                         subtree_hash[0]^1

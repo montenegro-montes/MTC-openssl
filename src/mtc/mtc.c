@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <errno.h>
 typedef struct { const unsigned char *p; size_t n; } Slice;
 typedef struct { Slice raw,body; unsigned tag; } TLV;
 typedef struct { char id[80]; unsigned char binary[80];size_t idlen; EVP_PKEY *key; } Signer;
@@ -60,9 +61,11 @@ int mtc_eval(const unsigned char leaf[32],uint64_t index,uint64_t start,uint64_t
 static void put(unsigned char *p,uint64_t n,unsigned size){while(size){p[--size]=(unsigned char)n;n>>=8;}}
 static int id_encode(const char *s,unsigned char *out,size_t *n){
     size_t j=0;const char *p=s;*n=0;
-    while(*p){char *end;unsigned long v;unsigned char b[10];unsigned k=0;
+    while(*p){char *end;unsigned long long v;unsigned char b[10];unsigned k=0;
         if(*p<'0'||*p>'9'||(*p=='0'&&p[1]&&p[1]!='.'))return 0;
-        v=strtoul(p,&end,10);if(end==p||(*end&&*end!='.')||v>0xffffffffUL)return 0;
+        errno=0;
+        v=strtoull(p,&end,10);
+        if(errno==ERANGE||end==p||(*end&&*end!='.'))return 0;
         b[k++]=(unsigned char)(v&127);while((v>>=7))b[k++]=(unsigned char)((v&127)|128);
         if(j+k>80)return 0;
         while(k)out[j++]=b[--k];
@@ -77,7 +80,8 @@ static int config_signals(MTCConfig *c){
         memcpy(c->request_signal,c->signal,c->signal_len);
         c->request_signal_len=c->signal_len;return 1;
     }
-    if(!c->log||!c->number||c->log>0xffffffffULL||c->number>0xffffffffULL)return 0;
+    if(!c->log||!c->number||c->log>0xffffffffULL
+       ||c->number>=(1ULL<<48))return 0;
     n=snprintf(id,sizeof(id),"%s.1.%llu.%llu",c->caid,
                (unsigned long long)c->log,(unsigned long long)c->number);
     if(n<=0||n>=(int)sizeof(id)||!id_encode(id,c->signal,&c->signal_len))return 0;
