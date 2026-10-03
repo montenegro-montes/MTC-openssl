@@ -119,9 +119,17 @@ def malformed(layout,state=b'{"current_log_number":1}\n'):
     with tempfile.TemporaryDirectory(prefix="mtc-lifecycle-invalid-") as temporary:
         root=Path(temporary)/"lifecycle";root.mkdir()
         (root/"logs").mkdir()
+        (root/"landmarks").mkdir()
         if layout:
             for number in layout:
                 LocalLog(root/"logs"/f"{number:05d}")
+                (root/"landmarks"/f"{number:05d}.json").write_text(
+                    json.dumps({
+                        "log_number":number,
+                        "landmarks":[{
+                            "number":0,"tree_size":0,"expiration":0,
+                        }],
+                    },separators=(",",":")) + "\n")
         (root/"lifecycle.json").write_bytes(state)
         before={path.relative_to(root):path.read_bytes()
                 for path in root.rglob("*") if path.is_file()}

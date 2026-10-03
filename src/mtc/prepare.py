@@ -68,18 +68,31 @@ def not_after(tbs):
 def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
             persistent_log=None,authenticated_snapshot=None,trusted_authority=None,snapshot_checker=None,
             external_cosigner=None,external_consistency_proof=None,
-            log_number=1):
+            log_number=1,landmark_reference=None):
     """Generate the usual material, optionally bound to an authenticated log view.
 
     Originals supply certificate fields absent from MTCLogEntry. Their derived
     entries must match the persisted entries byte-for-byte, in index order.
-    This allocates the existing initial landmark for the selected final tree;
-    it does not evolve/reassign an earlier landmark or embed consistency proofs.
+    Without landmark_reference this retains the legacy initial-landmark output.
+    A supplied reference is selected and persisted by IssuanceLifecycle; this
+    function only consumes its log-bound immutable sequence.
     """
     profile=crypto_profile(family)
     if not 1<=n<=1024:raise ValueError('Unsupported MTC population')
     if type(log_number) is not int or not 1<=log_number<=65535:
         raise ValueError('Invalid issuance log number')
+    landmark_sequence=None
+    if landmark_reference is not None:
+        from landmarks import validate_sequence
+        if (not isinstance(landmark_reference,tuple)
+                or len(landmark_reference)!=2):
+            raise ValueError('Invalid lifecycle landmark reference')
+        landmark_log,landmark_sequence=landmark_reference
+        if type(landmark_log) is not int or landmark_log!=log_number:
+            raise ValueError('Lifecycle landmark issuance log differs from prepare log')
+        if not isinstance(landmark_sequence,tuple):
+            raise ValueError('Invalid lifecycle landmark reference')
+        validate_sequence(landmark_sequence)
     if originals is None:raise ValueError('MTC requires an explicit same-profile X.509 population')
     if external_cosigner is not None and external_consistency_proof is None:
         raise ValueError('Injected external cosigner requires an explicit consistency proof')
@@ -119,6 +132,9 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
     for i,e in enumerate(entries):(log/f'{i:06d}.entry').write_bytes(e)
     checkpoint=root(entries);timestamp=int(time.time());subtrees=cover(0,n)
     expiration=max(timestamp+1,max(not_after(t) for t in tbs))
+    if (landmark_sequence is not None
+            and landmark_sequence[-1].tree_size>n):
+        raise ValueError('Lifecycle landmark exceeds prepared issuance log')
     # Each cosigner independently reconstructs its entire initial view.
     cp_sigs=[];sub_sigs={}
     mirror=[(log/f'{i:06d}.entry').read_bytes() for i in range(n)]
@@ -142,13 +158,31 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
         sub_sigs[start,end].append(external_cosigner.cosign_subtree(
             start,end,root(mirror[start:end]),
             subtree_consistency(mirror,start,end)))
+    landmark_certificates=[]
     for i,t in enumerate(tbs):
         start,end=next(x for x in subtrees if x[0]<=i<x[1]);path=inclusion(entries[start:end],i-start)
         assert evaluate(entries[i],i,start,end,path)==root(entries[start:end])
-        for mode,sigs in [('standalone',sub_sigs[start,end]),('landmark',[])]:
-            # Reuse the exact canonical bytes authenticated in entries[i].
-            p=proof(start,end,path,sigs,entry_extensions(entries[i]));cert=certificate(t,p)
-            (out/f'{mode}-{i:04d}.der').write_bytes(cert);(out/f'{mode}-{i:04d}.pem').write_bytes(pem(cert))
+        p=proof(start,end,path,sub_sigs[start,end],entry_extensions(entries[i]))
+        cert=certificate(t,p)
+        (out/f'standalone-{i:04d}.der').write_bytes(cert)
+        (out/f'standalone-{i:04d}.pem').write_bytes(pem(cert))
+        if landmark_sequence is None:
+            landmark_start,landmark_end,landmark_path=start,end,path
+        else:
+            from landmarks import relative_proof
+            try:
+                _,landmark_start,landmark_end,landmark_path=relative_proof(
+                    entries,i,landmark_sequence)
+            except ValueError as error:
+                if str(error)=='landmark not allocated':
+                    continue
+                raise
+        p=proof(landmark_start,landmark_end,landmark_path,[],
+                entry_extensions(entries[i]))
+        cert=certificate(t,p)
+        (out/f'landmark-{i:04d}.der').write_bytes(cert)
+        (out/f'landmark-{i:04d}.pem').write_bytes(pem(cert))
+        landmark_certificates.append(i)
     # OOB configuration: keys, serial limits, signed checkpoint and its two covering subtrees.
     # This file is a lab storage format, never sent as an MTC certificate.
     config=authority_config(caid,ids,public,n,log_number=log_number)
@@ -159,9 +193,20 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
         # Do not accept output signed with keys different from independently pinned trust.
         generated=authenticate_snapshot(out/'trust.bin',trusted_authority,snapshot_checker)
         if generated!=authenticated:raise ValueError('Generated checkpoint differs from authenticated state')
-    (out/'landmarks.txt').write_text(f'1\n{n} {expiration}\n0 0\n')
+    if landmark_sequence is None:
+        published_landmarks=(0,n);latest_landmark=1
+        landmark_expirations=(0,expiration)
+        landmark_publication=f'1\n{n} {expiration}\n0 0\n'.encode()
+    else:
+        from landmarks import encode_publication
+        published_landmarks=tuple(value.tree_size for value in landmark_sequence)
+        latest_landmark=landmark_sequence[-1].number
+        landmark_expirations=tuple(value.expiration for value in landmark_sequence)
+        landmark_publication=encode_publication(landmark_sequence,timestamp)
+    (out/'landmarks.txt').write_bytes(landmark_publication)
     sizes={}
-    for mode in ['standalone','landmark']:
+    modes=['standalone']+(['landmark'] if landmark_certificates else [])
+    for mode in modes:
         cert=(out/f'{mode}-0000.der').read_bytes();outer,t=certificate_parts(cert)
         start,end=next(x for x in subtrees if x[0]==0);path=inclusion(entries[start:end],0)
         ss=sub_sigs[start,end] if mode=='standalone' else []
@@ -172,14 +217,15 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
     source_metadata={'source_population':str(batch)}
     meta={'draft':DRAFT,'trust_anchor_draft':TA_DRAFT,'status':'MTC-experimental','tree_size':n,'log_number':log_number,'crypto_family':family,'ca_id':caid,
         'cosigner_ids':ids,'cosigner_policy':'CA AND one additional local cosigner; no public transparency claim',
-        'subtrees':subtrees,'landmarks':[0,n],'checkpoint':{'tree_size':n,'timestamp':timestamp,'hash':checkpoint.hex()},
-        'latest_landmark':1,'landmark_expirations':[0,expiration],
+        'subtrees':subtrees,'landmarks':list(published_landmarks),'checkpoint':{'tree_size':n,'timestamp':timestamp,'hash':checkpoint.hex()},
+        'latest_landmark':latest_landmark,'landmark_expirations':list(landmark_expirations),
         'ca_spki_sha256':H(public[0]).hex(),'cosigner_spki_sha256':H(public[1]).hex(),
         'input_sha256':{str(p):H(p.read_bytes()).hex() for p in originals},**source_metadata,
         'setup_ms':(time.perf_counter()-begin)*1000,'sizes':sizes,'trust_file_bytes':len(config),
         'ca_key_note':'Separate from directly-signing X509 CA as required by MTC -06 section 5.4',
         'changed_fields':['issuer','serialNumber','signature algorithm','signatureValue','old authorityKeyIdentifier omitted']}
-    if family in SIGNATURE_PROFILES:meta.update(profile=family,standard_name=profile['standard_name'],implementation_algorithm=profile['implementation_algorithm'],security_level=profile['security_level'],merkle_hash=TREE_HASH,mtc_modes=['landmark','standalone'])
+    profile_modes=['landmark','standalone'] if landmark_certificates else ['standalone']
+    if family in SIGNATURE_PROFILES:meta.update(profile=family,standard_name=profile['standard_name'],implementation_algorithm=profile['implementation_algorithm'],security_level=profile['security_level'],merkle_hash=TREE_HASH,mtc_modes=profile_modes)
     if metadata:
         if authenticated is not None and set(metadata)&set(meta):
             raise ValueError('Metadata must not override authenticated generation fields')
