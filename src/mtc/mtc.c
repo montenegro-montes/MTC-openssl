@@ -13,6 +13,28 @@ typedef struct { char id[80]; unsigned char binary[80];size_t idlen; EVP_PKEY *k
 typedef struct { uint64_t start,end; unsigned char hash[32]; } Subtree;
 typedef struct { uint64_t log,start,end; unsigned char hash[32]; } TrustedSubtree;
 typedef struct { uint64_t first,last; } RevokedRange;
+typedef struct {
+    char id[256];
+    unsigned char binary[255];size_t idlen;
+    unsigned char *spki;size_t spki_len;
+} AuthoritySignerV2;
+struct mtc_authority_v2 {
+    char caid[256];
+    AuthoritySignerV2 *signers;size_t count;
+    uint64_t log,min,max;
+};
+struct mtc_checkpoint_v2 {
+    uint64_t size,timestamp;
+    unsigned char root[32];
+    unsigned char *signatures;size_t signatures_len,signature_count;
+    Subtree subs[2];
+};
+struct mtc_trust_bundle_v2 {
+    MTCAuthorityV2 *authority;
+    MTCCheckpointV2 *checkpoint;
+    int has_landmark;
+    uint64_t landmark;
+};
 #define MTC_MAX_TRUSTED_SUBTREES 64
 #define MTC_MAX_REVOKED_RANGES 64
 struct mtc_config {
@@ -59,7 +81,7 @@ int mtc_eval(const unsigned char leaf[32],uint64_t index,uint64_t start,uint64_t
     }return sn==0;
 }
 static void put(unsigned char *p,uint64_t n,unsigned size){while(size){p[--size]=(unsigned char)n;n>>=8;}}
-static int id_encode(const char *s,unsigned char *out,size_t *n){
+static int id_encode_bounded(const char *s,unsigned char *out,size_t capacity,size_t *n){
     size_t j=0;const char *p=s;*n=0;
     while(*p){char *end;unsigned long long v;unsigned char b[10];unsigned k=0;
         if(*p<'0'||*p>'9'||(*p=='0'&&p[1]&&p[1]!='.'))return 0;
@@ -67,10 +89,24 @@ static int id_encode(const char *s,unsigned char *out,size_t *n){
         v=strtoull(p,&end,10);
         if(errno==ERANGE||end==p||(*end&&*end!='.'))return 0;
         b[k++]=(unsigned char)(v&127);while((v>>=7))b[k++]=(unsigned char)((v&127)|128);
-        if(j+k>80)return 0;
+        if(j+k>capacity)return 0;
         while(k)out[j++]=b[--k];
         p=*end?end+1:end;if(*end&&! *p)return 0;
     }*n=j;return j>0;
+}
+static int id_encode(const char *s,unsigned char *out,size_t *n){return id_encode_bounded(s,out,80,n);}
+static int id_valid(Slice id){
+    uint64_t value=0;int first=1;
+    if(!id.n)return 0;
+    for(size_t i=0;i<id.n;i++){
+        unsigned char b=id.p[i];
+        if(first&&b==0x80)return 0;
+        if(value>(UINT64_MAX>>7)||
+           (value==(UINT64_MAX>>7)&&(uint64_t)(b&127)>(UINT64_MAX&127)))return 0;
+        value=(value<<7)|(b&127);first=!(b&128);
+        if(first)value=0;
+    }
+    return first;
 }
 /* Keep the exact anchor for EE/confirmation/retry separate from initial CH. */
 static int config_signals(MTCConfig *c){
@@ -132,6 +168,153 @@ static int sigcheck(MTCConfig *c,Slice sigs,uint64_t start,uint64_t end,const un
     }return valid==((1u<<c->count)-1);
 }
 void mtc_free(MTCConfig *c){if(c){for(unsigned i=0;i<2;i++)EVP_PKEY_free(c->signers[i].key);OPENSSL_free(c);}}
+void mtc_free_authority_v2(MTCAuthorityV2 *authority){
+    if(authority){
+        if(authority->signers)
+            for(size_t i=0;i<authority->count;i++)OPENSSL_free(authority->signers[i].spki);
+        OPENSSL_free(authority->signers);OPENSSL_free(authority);
+    }
+}
+void mtc_free_checkpoint_v2(MTCCheckpointV2 *checkpoint){
+    if(checkpoint){OPENSSL_free(checkpoint->signatures);OPENSSL_free(checkpoint);}
+}
+void mtc_free_trust_bundle_v2(MTCTrustBundleV2 *bundle){
+    if(bundle){mtc_free_authority_v2(bundle->authority);mtc_free_checkpoint_v2(bundle->checkpoint);OPENSSL_free(bundle);}
+}
+
+static int ascii_v2(Slice value,char out[256],unsigned char binary[255],size_t *binary_len){
+    if(!value.n||value.n>255||memchr(value.p,0,value.n))return 0;
+    memcpy(out,value.p,value.n);out[value.n]=0;
+    return id_encode_bounded(out,binary,255,binary_len);
+}
+
+static MTCAuthorityV2 *parse_authority_v2(Slice input){
+    MTCAuthorityV2 *authority=NULL;Slice s=input,x,spki;uint64_t count;
+    unsigned char ca_binary[255];size_t ca_binary_len;
+    if(!take(&s,4,&x)||memcmp(x.p,"MCA2",4)||!vector(&s,1,&x))return NULL;
+    authority=OPENSSL_zalloc(sizeof(*authority));if(!authority)goto bad;
+    if(!ascii_v2(x,authority->caid,ca_binary,&ca_binary_len)||
+       !number(&s,2,&count)||s.n<18||count>(s.n-18)/6||
+       count>SIZE_MAX/sizeof(*authority->signers))goto bad;
+    if(count){
+        authority->signers=OPENSSL_zalloc((size_t)count*sizeof(*authority->signers));
+        if(!authority->signers)goto bad;
+    }
+    authority->count=(size_t)count;
+    for(size_t i=0;i<authority->count;i++){
+        AuthoritySignerV2 *signer=&authority->signers[i];
+        if(!vector(&s,1,&x)||!ascii_v2(x,signer->id,signer->binary,&signer->idlen)||
+           !vector(&s,3,&spki)||!spki.n)goto bad;
+        for(size_t j=0;j<i;j++)if(signer->idlen==authority->signers[j].idlen&&
+            !memcmp(signer->binary,authority->signers[j].binary,signer->idlen))goto bad;
+        signer->spki=OPENSSL_memdup(spki.p,spki.n);signer->spki_len=spki.n;
+        if(!signer->spki)goto bad;
+    }
+    if(!number(&s,2,&authority->log)||!authority->log||
+       !number(&s,8,&authority->min)||!number(&s,8,&authority->max)||
+       authority->max<authority->min||s.n)goto bad;
+    return authority;
+bad:
+    mtc_free_authority_v2(authority);return NULL;
+}
+
+static int signature_block_v2(Slice signatures,size_t *count){
+    Slice previous={NULL,0},identity,signature;size_t found=0;
+    while(signatures.n){
+        if(!vector(&signatures,1,&identity)||!id_valid(identity)||
+           (previous.p&&(identity.n<previous.n||
+            (identity.n==previous.n&&memcmp(identity.p,previous.p,identity.n)<=0)))||
+           !vector(&signatures,2,&signature))return 0;
+        previous=identity;found++;
+    }
+    *count=found;return 1;
+}
+
+static void checkpoint_cover(uint64_t size,uint64_t expected[4]){
+    uint64_t mid;
+    if(size<=1){expected[0]=0;expected[1]=size;expected[2]=size;expected[3]=size;return;}
+    mid=1;while((mid<<1)<=size-1)mid<<=1;
+    expected[0]=0;expected[1]=mid;expected[2]=mid;expected[3]=size;
+}
+
+static MTCCheckpointV2 *parse_checkpoint_v2(Slice input){
+    MTCCheckpointV2 *checkpoint=NULL;Slice s=input,x,signature_block;
+    uint64_t expected[4];unsigned char actual[32],empty[32];
+    if(!take(&s,4,&x)||memcmp(x.p,"MCP2",4))return NULL;
+    checkpoint=OPENSSL_zalloc(sizeof(*checkpoint));if(!checkpoint)goto bad;
+    if(!number(&s,6,&checkpoint->size)||!checkpoint->size||
+       !number(&s,8,&checkpoint->timestamp)||!take(&s,32,&x)||
+       !vector(&s,3,&signature_block)||
+       !signature_block_v2(signature_block,&checkpoint->signature_count))goto bad;
+    memcpy(checkpoint->root,x.p,32);
+    checkpoint->signatures=OPENSSL_memdup(signature_block.p,signature_block.n);
+    checkpoint->signatures_len=signature_block.n;
+    if(signature_block.n&&!checkpoint->signatures)goto bad;
+    for(unsigned i=0;i<2;i++){
+        if(!number(&s,6,&checkpoint->subs[i].start)||
+           !number(&s,6,&checkpoint->subs[i].end)||!take(&s,32,&x))goto bad;
+        memcpy(checkpoint->subs[i].hash,x.p,32);
+    }
+    if(s.n)goto bad;
+    checkpoint_cover(checkpoint->size,expected);
+    for(unsigned i=0;i<2;i++)if(checkpoint->subs[i].start!=expected[2*i]||
+        checkpoint->subs[i].end!=expected[2*i+1])goto bad;
+    if(checkpoint->size==1){
+        if(!hash((Slice){(const unsigned char *)"",0},empty)||
+           CRYPTO_memcmp(checkpoint->subs[1].hash,empty,32)||
+           CRYPTO_memcmp(checkpoint->subs[0].hash,checkpoint->root,32))goto bad;
+    }else if(!node(checkpoint->subs[0].hash,checkpoint->subs[1].hash,actual)||
+             CRYPTO_memcmp(actual,checkpoint->root,32))goto bad;
+    return checkpoint;
+bad:
+    mtc_free_checkpoint_v2(checkpoint);return NULL;
+}
+
+static MTCTrustBundleV2 *parse_trust_bundle_v2(Slice input){
+    MTCTrustBundleV2 *bundle=NULL;Slice s=input,x,authority,checkpoint;uint64_t kind;
+    if(!take(&s,4,&x)||memcmp(x.p,"MTB2",4)||!vector(&s,4,&authority)||
+       !vector(&s,4,&checkpoint)||!number(&s,1,&kind))return NULL;
+    bundle=OPENSSL_zalloc(sizeof(*bundle));if(!bundle)return NULL;
+    bundle->authority=parse_authority_v2(authority);
+    bundle->checkpoint=parse_checkpoint_v2(checkpoint);
+    if(!bundle->authority||!bundle->checkpoint)goto bad;
+    if(kind==0){if(s.n)goto bad;}
+    else if(kind==1){
+        if(!number(&s,6,&bundle->landmark)||!bundle->landmark||s.n)goto bad;
+        bundle->has_landmark=1;
+    }else goto bad;
+    return bundle;
+bad:
+    mtc_free_trust_bundle_v2(bundle);return NULL;
+}
+
+static int read_v2_file(const char *path,unsigned char **data,size_t *length){
+    FILE *file=NULL;long size;unsigned char *buffer=NULL;int ok=0;
+    if(!path||!data||!length||(file=fopen(path,"rb"))==NULL)return 0;
+    if(fseek(file,0,SEEK_END)||(size=ftell(file))<=0||
+       (uint64_t)size>UINT32_MAX||fseek(file,0,SEEK_SET))goto end;
+    buffer=OPENSSL_malloc((size_t)size);
+    if(!buffer||fread(buffer,1,(size_t)size,file)!=(size_t)size)goto end;
+    *data=buffer;*length=(size_t)size;buffer=NULL;ok=1;
+end:
+    OPENSSL_free(buffer);fclose(file);return ok;
+}
+
+MTCAuthorityV2 *mtc_load_authority_v2(const char *path){
+    unsigned char *data=NULL;size_t length=0;MTCAuthorityV2 *result=NULL;
+    if(read_v2_file(path,&data,&length))result=parse_authority_v2((Slice){data,length});
+    OPENSSL_free(data);return result;
+}
+MTCCheckpointV2 *mtc_load_checkpoint_v2(const char *path){
+    unsigned char *data=NULL;size_t length=0;MTCCheckpointV2 *result=NULL;
+    if(read_v2_file(path,&data,&length))result=parse_checkpoint_v2((Slice){data,length});
+    OPENSSL_free(data);return result;
+}
+MTCTrustBundleV2 *mtc_load_trust_bundle_v2(const char *path){
+    unsigned char *data=NULL;size_t length=0;MTCTrustBundleV2 *result=NULL;
+    if(read_v2_file(path,&data,&length))result=parse_trust_bundle_v2((Slice){data,length});
+    OPENSSL_free(data);return result;
+}
 int mtc_add_trusted_subtree(MTCConfig *c,uint64_t log_number,
                             uint64_t start,uint64_t end,
                             const unsigned char hash_value[32]){

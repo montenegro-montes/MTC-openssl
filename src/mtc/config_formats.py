@@ -161,6 +161,8 @@ def decode_mca2(data):
     maximum = reader.number(8)
     reader.finish()
     authority = MCA2Authority(ca_id, tuple(signers), log_number, minimum, maximum)
+    if not log_number or maximum < minimum:
+        raise ValueError("MCA2 authority")
     return authority
 
 
@@ -242,6 +244,7 @@ def decode_mcp2(data):
     reader.finish()
     checkpoint = MCP2Checkpoint(size, timestamp, root_hash,
                                 signature_values, subtrees)
+    _validate_checkpoint(checkpoint)
     return checkpoint
 
 

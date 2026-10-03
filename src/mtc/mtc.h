@@ -7,8 +7,18 @@
 #define MTC_EXT 0xca34
 #define MTC_DRAFT "draft-ietf-plants-merkle-tree-certs-06"
 typedef struct mtc_config MTCConfig;
+typedef struct mtc_authority_v2 MTCAuthorityV2;
+typedef struct mtc_checkpoint_v2 MTCCheckpointV2;
+typedef struct mtc_trust_bundle_v2 MTCTrustBundleV2;
 MTCConfig *mtc_load(const char *path, int landmark);
 void mtc_free(MTCConfig *c);
+/* Typed local-format parsers. These do not replace the legacy MCF1 loader. */
+MTCAuthorityV2 *mtc_load_authority_v2(const char *path);
+MTCCheckpointV2 *mtc_load_checkpoint_v2(const char *path);
+MTCTrustBundleV2 *mtc_load_trust_bundle_v2(const char *path);
+void mtc_free_authority_v2(MTCAuthorityV2 *authority);
+void mtc_free_checkpoint_v2(MTCCheckpointV2 *checkpoint);
+void mtc_free_trust_bundle_v2(MTCTrustBundleV2 *bundle);
 /* Local relying-party policy with inclusive endpoints [first,last].
  * Draft half-open [a,b) maps to [a,b-1]; [a,2^64) maps to [a,UINT64_MAX].
  * Configure ranges before certificate verification. */
