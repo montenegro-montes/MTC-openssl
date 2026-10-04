@@ -30,7 +30,7 @@ services:
       - /run/cosigner/client-ca.pem
       - --require-client-cert
     ports:
-      - 127.0.0.1:${COSIGNER_PORT:-8443}:8443
+      - ${COSIGNER_BIND_ADDRESS:-127.0.0.1}:${COSIGNER_PORT:-8443}:8443
     volumes:
       - cosigner-secrets:/run/cosigner:ro
       - cosigner-state:/var/lib/mtc-cosigner
@@ -42,6 +42,9 @@ services:
       context: ../..
       dockerfile: campaigns/external-cosigner-docker/Dockerfile
     entrypoint: ["/bin/sh", "/app/provision.sh"]
+    environment:
+      COSIGNER_SERVER_NAME: ${COSIGNER_SERVER_NAME:-localhost}
+      COSIGNER_SERVER_SAN: ${COSIGNER_SERVER_SAN:-DNS:localhost}
     volumes:
       - cosigner-secrets:/run/cosigner
       - ./client:/client

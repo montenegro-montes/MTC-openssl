@@ -3,6 +3,9 @@ set -eu
 
 umask 077
 
+server_name=${COSIGNER_SERVER_NAME:-localhost}
+server_san=${COSIGNER_SERVER_SAN:-DNS:localhost}
+
 for path in \
     /run/cosigner/external.key \
     /run/cosigner/server.key \
@@ -30,8 +33,8 @@ openssl req -new -x509 -newkey rsa:2048 -nodes \
 
 openssl req -new -newkey rsa:2048 -nodes \
     -keyout /run/cosigner/server.key -out "$work/server.csr" \
-    -subj '/CN=localhost' \
-    -addext 'subjectAltName=DNS:localhost' \
+    -subj "/CN=$server_name" \
+    -addext "subjectAltName=$server_san" \
     -addext 'extendedKeyUsage=serverAuth'
 openssl x509 -req -in "$work/server.csr" \
     -CA "$work/ca.pem" -CAkey "$work/ca.key" -CAcreateserial \
