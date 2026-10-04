@@ -148,12 +148,12 @@ def local_log_service(host, port, log_data, snapshot, output):
                 process.wait(timeout=5)
 
 
-def require_local_http_url(value):
+def require_http_log_url(value):
     parsed = urlsplit(value)
-    bv.require(parsed.scheme == "http" and parsed.hostname in ("127.0.0.1", "localhost")
+    bv.require(parsed.scheme == "http" and parsed.hostname
                and parsed.port is not None and not parsed.username and not parsed.password
                and parsed.path in ("", "/") and not parsed.query and not parsed.fragment,
-               "log URL must be an explicit loopback http://host:port/ URL")
+               "log URL must be an explicit http://host:port/ URL")
     return value.rstrip("/") + "/"
 
 
@@ -235,7 +235,7 @@ def run(args):
     }
     bv.write(output / "configuration.json", configuration)
 
-    service = (nullcontext(require_local_http_url(args.log_url))
+    service = (nullcontext(require_http_log_url(args.log_url))
                if args.log_url else
                local_log_service(args.log_host, args.log_port,
                                  Path(args.log_data).resolve(), snapshot, output))

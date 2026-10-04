@@ -51,7 +51,7 @@ class HttpLogIntegrationTests(unittest.TestCase):
             rp_updater._get(base_url, "/snapshot", binary=True)
             rp_updater._get(base_url, "/proof/subtree?start=0&end=8&size=8")
             return RPStateStore(directory).publish(
-                {"tree_size": 8, "hash": "ab" * 32}, mts1)
+                {"log_number": 1, "tree_size": 8, "hash": "ab" * 32}, mts1)
 
         with patch.object(rp_updater, "_get", side_effect=fake_get), \
                 patch.object(rp_updater, "update_and_publish", side_effect=fake_update):
@@ -67,13 +67,28 @@ class HttpLogIntegrationTests(unittest.TestCase):
         ])
         self.assertEqual(len(list((state / "generations").iterdir())), 1)
 
-    def test_log_url_is_loopback_http_only(self):
-        self.assertEqual(bridge.require_local_http_url("http://127.0.0.1:8080"),
-                         "http://127.0.0.1:8080/")
-        for value in ("https://127.0.0.1:8080/", "http://example.com:8080/",
-                      "http://127.0.0.1:8080/path"):
+    def test_log_url_is_explicit_http_host_and_port(self):
+        accepted = {
+            "http://localhost:8080": "http://localhost:8080/",
+            "http://127.0.0.1:8080": "http://127.0.0.1:8080/",
+            "http://192.168.1.100:8080": "http://192.168.1.100:8080/",
+            "http://mtc-log.example:8080": "http://mtc-log.example:8080/",
+        }
+        for value, expected in accepted.items():
+            with self.subTest(value=value):
+                self.assertEqual(bridge.require_http_log_url(value), expected)
+
+        for value in ("https://127.0.0.1:8080/",
+                      "http://user@example.com:8080/",
+                      "http://user:password@example.com:8080/",
+                      "http://example.com:8080/path",
+                      "http://example.com:8080/?query=value",
+                      "http://example.com:8080/#fragment",
+                      "http://example.com/", "http://:8080/",
+                      "http://example.com:not-a-port/",
+                      "http://[broken:8080/"):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                bridge.require_local_http_url(value)
+                bridge.require_http_log_url(value)
 
     def test_managed_log_accepts_os_selected_or_explicit_port(self):
         ready = self.root / "ready.json"
