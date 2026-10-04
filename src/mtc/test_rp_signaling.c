@@ -41,7 +41,7 @@ int main(int argc,char **argv){
      */
 
     {
-        MTCConfig *trust=mtc_load(argv[1],1);
+        MTCConfig *trust=mtc_load_trust_config_v2(argv[1]);
         char retained[120];
         int retained_n;
 

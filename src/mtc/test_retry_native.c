@@ -18,7 +18,8 @@ static size_t id_list(unsigned char *out,const char *text){
 int main(int argc,char **argv) {
     SSL_CTX *server,*client;SSL *s,*cl;BIO *bio;X509 *cert;EVP_PKEY *key;
     const unsigned char *out;size_t out_n;int alert=0;
-    assert(argc==4);
+    const char *hostname;
+    assert(argc==4||argc==5);hostname=argc==5?argv[4]:"server";
     bio=BIO_new_file(argv[2],"r");assert(bio);cert=PEM_read_bio_X509(bio,NULL,NULL,NULL);BIO_free(bio);assert(cert);
     bio=BIO_new_file(argv[3],"r");assert(bio);key=PEM_read_bio_PrivateKey(bio,NULL,NULL,NULL);BIO_free(bio);assert(key);
     server=SSL_CTX_new(TLS_server_method());client=SSL_CTX_new(TLS_client_method());assert(server&&client);
@@ -253,7 +254,7 @@ int main(int argc,char **argv) {
     assert(X509_STORE_CTX_set_ex_data(check,SSL_get_ex_data_X509_STORE_CTX_idx(),cl));
     assert(X509_VERIFY_PARAM_set1_host(X509_STORE_CTX_get0_param(check),"wrong.invalid",0));
     assert(!verify(check,&c->base));
-    assert(X509_VERIFY_PARAM_set1_host(X509_STORE_CTX_get0_param(check),"server",0));
+    assert(X509_VERIFY_PARAM_set1_host(X509_STORE_CTX_get0_param(check),hostname,0));
     assert(verify(check,&c->base));
     X509_STORE_CTX_free(check);X509_STORE_free(store);
     /* CASE D: malformed/canonicality/duplicate handling. */

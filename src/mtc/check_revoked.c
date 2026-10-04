@@ -32,7 +32,8 @@ static X509 *read_der(const char *path){
 static int load_and_verify(const char *trust,int landmark,X509 *x,
                            int revoke,uint64_t first,uint64_t last,
                            int expected){
-    MTCConfig *c=mtc_load(trust,landmark);
+    MTCConfig *c=landmark?mtc_load_trust_config_v2(trust)
+                         :mtc_load_authority_config_v2(trust);
     int actual;
 
     if(!c)return 0;

@@ -143,9 +143,11 @@ static int retry_configure(SSL_CTX *ctx,const char *trust_path,int landmark,
     RetryConfig *r=OPENSSL_zalloc(sizeof(*r));TLSConfig *c;
     if(!r)return 0;
     c=&r->base;
-    c->trust=mtc_load(trust_path,landmark);if(!c->trust)goto bad;
+    c->trust=landmark?mtc_load_trust_config_v2(trust_path)
+                     :mtc_load_authority_config_v2(trust_path);
+    if(!c->trust)goto bad;
     c->n=c->trust->signal_len;memcpy(c->id,c->trust->signal,c->n);
-    c->has_group=landmark&&initial_group(c);
+    c->has_group=c->trust->landmark&&initial_group(c);
     c->group_n=c->has_group?c->n:0;
     c->role=credential!=NULL
         ? MTC_ROLE_SERVER_PRESENT

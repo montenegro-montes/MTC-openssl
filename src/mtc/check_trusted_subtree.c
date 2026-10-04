@@ -31,7 +31,7 @@ static X509 *read_der(const char *path){
 
 static int verify_with_mts1(const char *trust,const char *mts1,
                             X509 *x,int load,int expected){
-    MTCConfig *c=mtc_load(trust,1);
+    MTCConfig *c=mtc_load_trust_config_v2(trust);
     int actual;
 
     if(!c)return 0;
@@ -61,7 +61,7 @@ int main(int argc,char **argv){
 
     /*
      * The evolved landmark-relative certificate must not verify from the
-     * historical MCF1 checkpoint subtrees alone.
+     * historical MTB2 checkpoint subtrees alone.
      */
     if(!verify_with_mts1(argv[1],argv[3],x,0,0)){
         X509_free(x);

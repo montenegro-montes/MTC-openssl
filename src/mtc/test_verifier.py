@@ -73,10 +73,10 @@ with tempfile.TemporaryDirectory() as temp:
             for length in sorted(set([0,1,2,3,8,13,14,15,16,17,18,len(p)//2,len(p)-1])):
                 target=temp/'case.der';target.write_bytes(certificate(tbs,p[:length]));check('truncation',trust,mode,target,False)
         config=(b/'trust.bin').read_bytes()
-        offset=4;offset+=1+config[offset];number=config[offset];offset+=1
-        for _ in range(number):
-            offset+=1+config[offset];offset+=2+int.from_bytes(config[offset:offset+2],'big')
-        checkpoint_hash_offset=offset+2+8+8+4+6+8
+        assert config.startswith(b'MTB2')
+        authority_length=int.from_bytes(config[4:8],'big')
+        checkpoint_offset=8+authority_length+4
+        checkpoint_hash_offset=checkpoint_offset+4+6+8
         v=bytearray(config);v[checkpoint_hash_offset]^=1;target=temp/'checkpoint.bin';target.write_bytes(v)
         check('modified checkpoint hash',target,'landmark',b/'landmark-0000.der',False)
 

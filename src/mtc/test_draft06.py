@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import core
 import prepare
+from config_formats import decode_mtb2, encode_mca2
 
 
 def main():
@@ -66,6 +67,12 @@ def main():
             '-I'+str(prefix/'include'),str(source/'test_rp_signaling.c'),
             '-L'+str(lib),'-Wl,-rpath,'+str(lib),'-lssl','-lcrypto',
             '-o',str(temp/'test_rp_signaling'),
+        ],check=True)
+        subprocess.run([
+            args.cc,'-Wall','-Wextra','-Werror','-Wno-unused-parameter',
+            '-I'+str(prefix/'include'),str(source/'test_retry_native.c'),
+            '-L'+str(lib),'-Wl,-rpath,'+str(lib),'-lssl','-lcrypto',
+            '-o',str(temp/'test_retry_native'),
         ],check=True)
         originals={}
         for family in args.profiles:
@@ -576,7 +583,7 @@ def main():
                     assert meta['tree_size']==state16['tree_size']==16
                     assert meta['checkpoint']['hash']==state16['hash']
                     assert (out/'authority.bin').read_bytes().startswith(b'MCA2')
-                    assert (out/'trust.bin').read_bytes().startswith(b'MCF1')
+                    assert (out/'trust.bin').read_bytes().startswith(b'MTB2')
                     assert authenticate_snapshot(snapshot,trusted,checker)==state16
                     assert [(out/'log'/f'{i:06d}.entry').read_bytes() for i in range(n)]==encoded
                     assert old.read_bytes()==retained
@@ -593,14 +600,53 @@ def main():
                 assert (out/'landmarks.txt').read_text()==f'1\n{n} {expiration}\n0 0\n'
                 assert meta['subtrees']==core.cover(0,n)
                 config=(out/'trust.bin').read_bytes()
+                bundle=decode_mtb2(config)
+                assert encode_mca2(bundle.authority)==(out/'authority.bin').read_bytes()
+                assert bundle.checkpoint.tree_size==n
+                assert bundle.checkpoint.timestamp==meta['checkpoint']['timestamp']
+                assert bundle.checkpoint.root_hash.hex()==meta['checkpoint']['hash']
+                checkpoint_entries=[
+                    (out/'log'/f'{i:06d}.entry').read_bytes()
+                    for i in range(n)]
+                assert bundle.checkpoint.subtrees==tuple(
+                    (start,end,core.root(checkpoint_entries[start:end]))
+                    for start,end in core.cover(0,n))
+                assert bundle.signaling_landmark==1
+                legacy=temp/f'{family}-{n}-legacy.mcf1'
+                legacy.write_bytes(prepare.checkpoint_config(
+                    prepare.authority_config(
+                        bundle.authority.ca_id,
+                        [identity for identity,_ in bundle.authority.signers],
+                        [spki for _,spki in bundle.authority.signers],n,
+                        log_number=bundle.authority.log_number),
+                    checkpoint_entries,bundle.checkpoint.timestamp,
+                    bundle.checkpoint.signatures))
+                subprocess.run([str(temp/'test_ids'),str(legacy)],check=True)
+                if family=='ecdsa-p256':
+                    subprocess.run([
+                        str(temp/'test_retry_native'),str(out/'trust.bin'),
+                        str(out/'landmark-0000.pem'),str(temp/(family+'.key')),
+                        'offline-mtc-test',
+                    ],check=True)
                 if n==1:
                     assert meta['subtrees']==[(0,1),(1,1)]
                     leaf=core.root([(out/'log/000000.entry').read_bytes()])
                     assert meta['checkpoint']['hash']==leaf.hex()
-                    assert config[-89:]==b'\x02'+core.uint(0,6)+core.uint(1,6)+leaf+core.uint(1,6)*2+core.root([])
+                    authority_length=int.from_bytes(config[4:8],'big')
+                    checkpoint_length_at=8+authority_length
+                    checkpoint_at=checkpoint_length_at+4
+                    checkpoint_length=int.from_bytes(
+                        config[checkpoint_length_at:checkpoint_at],'big')
+                    checkpoint_end=checkpoint_at+checkpoint_length
+                    checkpoint=config[checkpoint_at:checkpoint_end]
+                    assert checkpoint[-88:]==core.uint(0,6)+core.uint(1,6)+leaf+core.uint(1,6)*2+core.root([])
                     # Reject a missing empty descriptor and a false empty hash.
-                    for bad in [config[:-89]+b'\x01'+config[-88:-44],
-                                config[:-32]+bytes(32)]:
+                    missing=(config[:checkpoint_length_at]
+                             +core.uint(checkpoint_length-44,4)
+                             +checkpoint[:-44]+config[checkpoint_end:])
+                    false_empty=bytearray(config)
+                    false_empty[checkpoint_end-32:checkpoint_end]=bytes(32)
+                    for bad in [missing,bytes(false_empty)]:
                         invalid=temp/'invalid-trust.bin';invalid.write_bytes(bad)
                         result=subprocess.run([str(temp/'check'),str(invalid),'1',
                                                str(out/'landmark-0000.der')],capture_output=True)

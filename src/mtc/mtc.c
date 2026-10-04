@@ -312,6 +312,8 @@ MTCAuthorityV2 *mtc_load_authority_v2(const char *path){
 }
 MTCConfig *mtc_load_authority_config_v2(const char *path){
     MTCAuthorityV2 *authority=mtc_load_authority_v2(path);MTCConfig *config=NULL;
+    if(!authority)goto end;
+    config=OPENSSL_zalloc(sizeof(*config));if(!config)goto end;
     if(!authority||authority->count!=2||strcmp(authority->caid,authority->signers[0].id)||
        !strcmp(authority->signers[0].id,authority->signers[1].id)||
        strlen(authority->caid)>=sizeof(((MTCConfig *)0)->caid)||
@@ -320,8 +322,7 @@ MTCConfig *mtc_load_authority_config_v2(const char *path){
        authority->signers[0].idlen>sizeof(((Signer *)0)->binary)||
        authority->signers[1].idlen>sizeof(((Signer *)0)->binary)||
        authority->min!=(authority->log<<48)||authority->max<authority->min||
-       authority->max-authority->min>=1024)goto end;
-    config=OPENSSL_zalloc(sizeof(*config));if(!config)goto end;
+       authority->max-authority->min>=1024)goto invalid;
     memcpy(config->caid,authority->caid,strlen(authority->caid)+1);
     config->count=2;config->log=authority->log;config->min=authority->min;config->max=authority->max;
     for(unsigned i=0;i<2;i++){
@@ -332,10 +333,13 @@ MTCConfig *mtc_load_authority_config_v2(const char *path){
         config->signers[i].key=d2i_PUBKEY(NULL,&p,(long)source->spki_len);
         if(!config->signers[i].key||p!=source->spki+source->spki_len||
            !supported_signer_key(config->signers[i].key)){
-            mtc_free(config);config=NULL;goto end;
+            goto invalid;
         }
     }
-    if(!config_signals(config)){mtc_free(config);config=NULL;}
+    if(!config_signals(config))goto invalid;
+    goto end;
+invalid:
+    mtc_free(config);config=NULL;
 end:
     mtc_free_authority_v2(authority);return config;
 }
@@ -377,6 +381,62 @@ signer_end:
         if(!found||!valid)return 0;
     }
     return 1;
+}
+MTCConfig *mtc_load_trust_config_v2(const char *path){
+    double begin=tick(),validation=0;MTCTrustBundleV2 *bundle=NULL;
+    MTCConfig *config=NULL;FILE *file=NULL;long file_size=0;
+    bundle=mtc_load_trust_bundle_v2(path);
+    if(!bundle||!bundle->authority||!bundle->checkpoint)goto end;
+    config=OPENSSL_zalloc(sizeof(*config));if(!config)goto end;
+    {
+        const MTCAuthorityV2 *authority=bundle->authority;
+        const MTCCheckpointV2 *checkpoint=bundle->checkpoint;
+        if(authority->count!=2||strcmp(authority->caid,authority->signers[0].id)||
+           !strcmp(authority->signers[0].id,authority->signers[1].id)||
+           strlen(authority->caid)>=sizeof(config->caid)||
+           authority->min!=(authority->log<<48)||authority->max<authority->min||
+           authority->max-authority->min>=1024||!checkpoint->size||
+           checkpoint->size>1024||authority->max!=authority->min+checkpoint->size-1||
+           !checkpoint->timestamp||checkpoint->timestamp>(uint64_t)time(NULL))goto invalid;
+        memcpy(config->caid,authority->caid,strlen(authority->caid)+1);
+        config->count=2;config->log=authority->log;
+        config->min=authority->min;config->max=authority->max;
+        for(unsigned i=0;i<2;i++){
+            const AuthoritySignerV2 *source=&authority->signers[i];
+            const unsigned char *key_data=source->spki;
+            if(strlen(source->id)>=sizeof(config->signers[i].id)||
+               source->idlen>sizeof(config->signers[i].binary))goto invalid;
+            memcpy(config->signers[i].id,source->id,strlen(source->id)+1);
+            memcpy(config->signers[i].binary,source->binary,source->idlen);
+            config->signers[i].idlen=source->idlen;
+            config->signers[i].key=d2i_PUBKEY(NULL,&key_data,(long)source->spki_len);
+            if(!config->signers[i].key||key_data!=source->spki+source->spki_len||
+               !supported_signer_key(config->signers[i].key))goto invalid;
+        }
+        {
+            double verify_begin=tick();
+            if(!mtc_authenticate_checkpoint_v2(authority,checkpoint))goto invalid;
+            validation=tick()-verify_begin;
+        }
+        config->size=checkpoint->size;config->timestamp=checkpoint->timestamp;
+        memcpy(config->root,checkpoint->root,32);
+        config->nsubs=2;
+        for(unsigned i=0;i<2;i++)config->subs[i]=checkpoint->subs[i];
+        config->landmark=bundle->has_landmark;
+        config->number=bundle->has_landmark?bundle->landmark:0;
+        if(!config_signals(config))goto invalid;
+    }
+    file=fopen(path,"rb");
+    if(!file||fseek(file,0,SEEK_END)||(file_size=ftell(file))<=0)goto invalid;
+    config->file_bytes=(size_t)file_size;
+    fclose(file);file=NULL;
+    fprintf(stderr,"MTC_SETUP {\"mtc_setup_ms\":%.6f,\"mtc_trust_validation_ms\":%.6f,\"mtc_predistributed_bytes\":%zu,\"mtc_trust_file_bytes\":%zu}\n",tick()-begin,validation,config->landmark?config->file_bytes:0,config->file_bytes);
+    goto end;
+invalid:
+    if(file)fclose(file);
+    mtc_free(config);config=NULL;
+end:
+    mtc_free_trust_bundle_v2(bundle);return config;
 }
 int mtc_add_trusted_subtree(MTCConfig *c,uint64_t log_number,
                             uint64_t start,uint64_t end,

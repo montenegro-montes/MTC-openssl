@@ -59,7 +59,7 @@ int main(void){
     assert(!mtc_add_trusted_subtree(c,1,0,4,h2));
     assert(c->ntrusted==3);
 
-    /* Section 7.4 storage is separate from MCF1 checkpoint subtrees. */
+    /* Section 7.4 storage is separate from MTB2 checkpoint subtrees. */
     assert(c->nsubs==0);
 
     mtc_free(c);

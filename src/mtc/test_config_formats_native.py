@@ -4,12 +4,14 @@ import argparse
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 
+import prepare
 from config_formats import (
     MAX_UINT48, MCA2Authority, MCP2Checkpoint, MTB2Bundle,
-    decode_mcp2, encode_mca2, encode_mcp2, encode_mtb2,
+    decode_mcp2, decode_mtb2, encode_mca2, encode_mcp2, encode_mtb2,
 )
-from core import H, cover, encode_subtree_signature_block, uint, vec
+from core import H, cover, encode_subtree_signature_block, root, uint, vec
 
 
 SOURCE=Path(__file__).resolve().parent
@@ -57,6 +59,7 @@ def main():
     parser.add_argument("--cc",default="cc")
     parser.add_argument("--openssl-prefix",type=Path,default=Path("/opt/homebrew"))
     args=parser.parse_args()
+    prepare.OPENSSL=str(args.openssl_prefix/"bin/openssl")
     lib=args.openssl_prefix/"lib"
     if not lib.is_dir():lib=args.openssl_prefix/"lib64"
     with tempfile.TemporaryDirectory(prefix="mtc-config-native-") as temporary:
@@ -151,6 +154,72 @@ def main():
         nested=uint(authority_length+1,4)+bundle[8:8+authority_length]+b"\0"
         reject("bundle","bundle-nested-trailing.mtb2",b"MTB2"+nested+bundle[checkpoint_length_at:])
         reject("bundle","bundle-trailing.mtb2",bundle+b"\0")
+
+        # The deployment adapter authenticates the embedded checkpoint and
+        # derives signaling only from the explicit MTB2 signaling kind.
+        profile=prepare.crypto_profile("ecdsa-p256")
+        keys=[directory/f"adapter-{i}.key" for i in range(2)]
+        for key in keys:prepare.keygen(key,"ecdsa-p256")
+        public=[prepare.command("pkey","-in",key,"-pubout","-outform","DER")
+                for key in keys]
+        entries=[b"adapter-entry"]
+        timestamp=int(time.time());root_hash=root(entries)
+        signature_values=tuple(prepare.checkpoint_signature(
+            identity,key,profile["ca_id"],1,root_hash,timestamp,
+            "ecdsa-p256") for identity,key in zip(profile["cosigner_ids"],keys))
+        adapter_authority=prepare.authority_value_v2(
+            profile["ca_id"],profile["cosigner_ids"],public,1)
+        adapter_checkpoint=prepare.checkpoint_value_v2(
+            entries,timestamp,signature_values)
+        for landmark in (None,1,2,1<<32,MAX_UINT48):
+            adapter_data=encode_mtb2(MTB2Bundle(
+                adapter_authority,adapter_checkpoint,landmark))
+            path=write(directory,f"adapter-{landmark}.mtb2",adapter_data)
+            if landmark is None:
+                signal=request=profile["ca_id"];number=0
+            else:
+                number=landmark
+                signal=f'{profile["ca_id"]}.1.1.{landmark}'
+                request=f'{profile["ca_id"]}.2.1.{landmark}'
+            accept("trust-config",path,number,signal,request)
+        corrupted=list(adapter_checkpoint.signatures)
+        identity,signature=corrupted[0]
+        corrupted[0]=(identity,signature[:-1]+bytes([signature[-1]^1]))
+        corrupt_checkpoint=MCP2Checkpoint(
+            adapter_checkpoint.tree_size,adapter_checkpoint.timestamp,
+            adapter_checkpoint.root_hash,tuple(corrupted),
+            adapter_checkpoint.subtrees)
+        corrupt_data=encode_mtb2(MTB2Bundle(
+            adapter_authority,corrupt_checkpoint,1))
+        assert decode_mtb2(corrupt_data).checkpoint.signatures==tuple(corrupted)
+        accept("reject-trust-config",write(
+            directory,"adapter-corrupt-signature.mtb2",corrupt_data))
+
+        replacement_key=directory/"adapter-replacement.key"
+        prepare.keygen(replacement_key,"ecdsa-p256")
+        replacement_public=prepare.command(
+            "pkey","-in",replacement_key,"-pubout","-outform","DER")
+        mismatched_authority=prepare.authority_value_v2(
+            profile["ca_id"],profile["cosigner_ids"],
+            [replacement_public,public[1]],1)
+        mismatch_data=encode_mtb2(MTB2Bundle(
+            mismatched_authority,adapter_checkpoint,1))
+        assert decode_mtb2(mismatch_data).authority==mismatched_authority
+        accept("reject-trust-config",write(
+            directory,"adapter-key-mismatch.mtb2",mismatch_data))
+        adapter=encode_mtb2(MTB2Bundle(
+            adapter_authority,adapter_checkpoint,1))
+        adapter_authority_length=int.from_bytes(adapter[4:8],"big")
+        adapter_checkpoint_length_at=8+adapter_authority_length
+        adapter_checkpoint_at=adapter_checkpoint_length_at+4
+        for label,data in (
+                ("authority",adapter[:8]+b"BAD2"+adapter[12:]),
+                ("checkpoint",adapter[:adapter_checkpoint_at]+b"BAD2"
+                 +adapter[adapter_checkpoint_at+4:]),
+                ("landmark-zero",adapter[:-6]+b"\0"*6),
+                ("kind",adapter[:-7]+b"\x02")):
+            path=write(directory,f"adapter-reject-{label}.mtb2",data)
+            accept("reject-trust-config",path)
 
         # File type is determined exclusively by magic and grammar.
         authority_path=write(directory,"wrong-type-authority.mca2",normal)

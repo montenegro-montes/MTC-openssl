@@ -7,30 +7,13 @@ from unittest.mock import patch
 
 import core
 from cosigner import ExternalCosigner
-from config_formats import decode_mca2
+from config_formats import decode_mca2, decode_mtb2
 import prepare
 
 
 def certificate_serial(path):
     _,fields=core.certificate_parts(path.read_bytes())
     return int.from_bytes(fields[1][1],"big")
-
-
-def legacy_authority(data):
-    assert data.startswith(b"MCF1")
-    offset=4
-    offset+=1+data[offset]
-    count=data[offset];offset+=1
-    signers=[]
-    for _ in range(count):
-        length=data[offset];offset+=1
-        identity=data[offset:offset+length].decode();offset+=length
-        length=int.from_bytes(data[offset:offset+2],"big")
-        offset+=2;spki=data[offset:offset+length];offset+=length
-        signers.append((identity,spki))
-    return (tuple(signers),int.from_bytes(data[offset:offset+2],"big"),
-            int.from_bytes(data[offset+2:offset+10],"big"),
-            int.from_bytes(data[offset+10:offset+18],"big"))
 
 
 def proof_signatures(encoded):
@@ -71,7 +54,7 @@ with tempfile.TemporaryDirectory(prefix="mtc-prepare-log-number-") as temporary:
         key=Path(args[args.index("-in")+1])
         return b"public-"+key.read_bytes()
 
-    clock=iter([100.0]*20)
+    clock=iter([100.0]*100)
     common=dict(originals=[original],signer_keys=signer_keys)
     with patch.object(prepare,"sign",side_effect=fake_sign), \
          patch.object(prepare,"command",side_effect=fake_command), \
@@ -82,6 +65,14 @@ with tempfile.TemporaryDirectory(prefix="mtc-prepare-log-number-") as temporary:
         prepare.prepare(default_out,temporary,"ecdsa-p256",1,**common)
         prepare.prepare(
             explicit_out,temporary,"ecdsa-p256",1,log_number=1,**common)
+
+        signaling_outputs={}
+        for value in (None,2,1<<32,(1<<48)-1):
+            output=temporary/("signaling-"+str(value))
+            prepare.prepare(
+                output,temporary,"ecdsa-p256",1,
+                signaling_landmark=value,**common)
+            signaling_outputs[value]=output
 
         assert sorted(p.relative_to(default_out) for p in default_out.rglob("*"))==sorted(
             p.relative_to(explicit_out) for p in explicit_out.rglob("*"))
@@ -110,11 +101,21 @@ with tempfile.TemporaryDirectory(prefix="mtc-prepare-log-number-") as temporary:
             authority.max_serial)==(profile["ca_id"],2,2<<48,2<<48)
     assert (log_2_out/"authority.bin").read_bytes().startswith(b"MCA2")
     trust=(log_2_out/"trust.bin").read_bytes()
-    legacy_signers,legacy_log,legacy_min,legacy_max=legacy_authority(trust)
-    assert trust.startswith(b"MCF1")
+    bundle=decode_mtb2(trust)
+    assert trust.startswith(b"MTB2")
     assert (authority.signers,authority.log_number,authority.min_serial,
             authority.max_serial)==(
-                legacy_signers,legacy_log,legacy_min,legacy_max)
+                bundle.authority.signers,bundle.authority.log_number,
+                bundle.authority.min_serial,bundle.authority.max_serial)
+    assert bundle.checkpoint.tree_size==1
+    assert bundle.signaling_landmark==1
+    assert decode_mtb2(
+        (default_out/"trust.bin").read_bytes()).signaling_landmark==1
+    for value,output in signaling_outputs.items():
+        assert (output/"authority.bin").read_bytes().startswith(b"MCA2")
+        generated=(output/"trust.bin").read_bytes()
+        assert generated.startswith(b"MTB2")
+        assert decode_mtb2(generated).signaling_landmark==value
     assert meta["log_number"]==2
     assert json.loads((log_2_out/"manifest.json").read_text())["log_number"]==2
     assert external.accepted.tree_size==1
@@ -163,5 +164,17 @@ with tempfile.TemporaryDirectory(prefix="mtc-prepare-log-number-") as temporary:
             assert str(error)=="Invalid issuance log number"
         else:
             raise AssertionError("prepare accepted invalid log_number")
+
+    for invalid in [False,True,0,-1,1<<48,"1",1.0]:
+        output=temporary/("invalid-signal-"+str(invalid))
+        try:
+            prepare.prepare(
+                output,temporary,"ecdsa-p256",1,
+                signaling_landmark=invalid,**common)
+        except ValueError as error:
+            assert str(error)=="Invalid MTB2 signaling landmark"
+        else:
+            raise AssertionError("prepare accepted invalid signaling_landmark")
+        assert not output.exists()
 
 print("PASS: prepare issuance-log number propagation")

@@ -745,7 +745,8 @@ int mtc_client(SSL_CTX *ctx,const char *path,int landmark,
     uint64_t retained_landmark=0;struct stat st;
     if(!c)return 0;
 
-    c->trust=mtc_load(path,landmark);
+    c->trust=landmark?mtc_load_trust_config_v2(path)
+                     :mtc_load_authority_config_v2(path);
     if(!c->trust){
         OPENSSL_free(c);
         return 0;
@@ -757,7 +758,7 @@ int mtc_client(SSL_CTX *ctx,const char *path,int landmark,
      */
     if(trusted_subtrees){
         canonical=realpath(trusted_subtrees,NULL);
-        if(!landmark||!canonical
+        if(!c->trust->landmark||!canonical
            ||!mtc_load_trusted_subtrees(c->trust,canonical))goto error;
         recognized=rp_landmark_path(canonical,&metadata);
         if(recognized<0)goto error;
@@ -776,7 +777,7 @@ int mtc_client(SSL_CTX *ctx,const char *path,int landmark,
     c->n=c->trust->signal_len;
     memcpy(c->id,c->trust->signal,c->n);
 
-    if(landmark){
+    if(c->trust->landmark){
         if(retained_landmark){
             request_n=snprintf(request,sizeof(request),"%s.2.%llu.%llu",
                 c->trust->caid,(unsigned long long)c->trust->log,
@@ -807,11 +808,13 @@ int mtc_server(SSL_CTX *ctx,const char *id){
 }
 int mtc_server_verify_client(SSL_CTX *ctx,const char *path,int landmark){
     TLSConfig *c=OPENSSL_zalloc(sizeof(*c));if(!c)return 0;
-    c->trust=mtc_load(path,landmark);if(!c->trust){OPENSSL_free(c);return 0;}
+    c->trust=landmark?mtc_load_trust_config_v2(path)
+                     :mtc_load_authority_config_v2(path);
+    if(!c->trust){OPENSSL_free(c);return 0;}
     c->role=MTC_ROLE_SERVER_VERIFY_CLIENT;c->purpose=X509_PURPOSE_SSL_CLIENT;
     SSL_CTX_set_verify(ctx,SSL_VERIFY_PEER|SSL_VERIFY_FAIL_IF_NO_PEER_CERT,NULL);
     c->n=c->trust->signal_len;memcpy(c->id,c->trust->signal,c->n);
-    if(landmark){
+    if(c->trust->landmark){
         c->has_group=initial_group(c);
         if(!c->has_group){mtc_free(c->trust);OPENSSL_free(c);return 0;}
         c->group_n=c->n;

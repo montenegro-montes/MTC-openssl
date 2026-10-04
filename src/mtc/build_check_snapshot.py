@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the native MCF1 snapshot checker against an OpenSSL prefix."""
+"""Build the native MCA2/MCP2 snapshot checker against an OpenSSL prefix."""
 
 import argparse
 from pathlib import Path

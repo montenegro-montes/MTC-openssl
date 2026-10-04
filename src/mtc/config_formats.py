@@ -1,7 +1,6 @@
 """Strict codecs for the experimental MCA2, MCP2, and MTB2 local formats.
 
-These are local storage formats, not draft-06 wire structures.  Artifact
-writers continue to use MCF1 until their migration is performed separately.
+These are local storage formats, not draft-06 wire structures.
 """
 
 from dataclasses import dataclass

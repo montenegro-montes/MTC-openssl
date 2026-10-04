@@ -69,7 +69,9 @@ int main(int argc,char **argv) {
     if(argc==4&&!strcmp(argv[1],"inspect")){
         MTCConfig *trust;
         if(strcmp(argv[3],"landmark")&&strcmp(argv[3],"standalone"))return 2;
-        trust=mtc_load(argv[2],!strcmp(argv[3],"landmark"));if(!trust)return 1;
+        trust=!strcmp(argv[3],"landmark")?mtc_load_trust_config_v2(argv[2])
+                                         :mtc_load_authority_config_v2(argv[2]);
+        if(!trust)return 1;
         fputs("MTC_RETRY_TRUST {\"trusted_id_hex\":\"",stdout);retry_hex(stdout,trust->signal,trust->signal_len);
         puts("\"}");mtc_free(trust);return 0;
     }

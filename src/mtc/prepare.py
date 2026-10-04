@@ -3,8 +3,8 @@ import json,shutil,subprocess,tempfile,time
 from datetime import datetime, timezone
 from pathlib import Path
 from core import *
-from config_formats import (MCA2Authority, MCP2Checkpoint,
-                            encode_mca2, encode_mcp2)
+from config_formats import (MCA2Authority, MCP2Checkpoint, MTB2Bundle,
+                            encode_mca2, encode_mcp2, encode_mtb2)
 from crypto_profiles import crypto_profile, SIGNATURE_PROFILES, TREE_HASH
 OPENSSL='/opt/openssl/bin/openssl'
 def command(*args,data=None):return subprocess.run([OPENSSL,*map(str,args)],input=data,capture_output=True,check=True).stdout
@@ -33,12 +33,16 @@ def authority_config(caid,ids,public,n,*,log_number=1):
 
 def authority_config_v2(caid,ids,public,n,*,log_number=1):
     """Canonical MCA2 authority.bin from the same authority source data."""
+    return encode_mca2(authority_value_v2(
+        caid,ids,public,n,log_number=log_number))
+
+def authority_value_v2(caid,ids,public,n,*,log_number=1):
     if (type(n) is not int or not 1<=n<1<<48 or len(ids)!=len(public)
             or type(log_number) is not int or not 1<=log_number<=65535):
         raise ValueError('MCA2 configuration')
     first=log_number<<48
-    return encode_mca2(MCA2Authority(
-        caid,tuple(zip(ids,public)),log_number,first,first+n-1))
+    return MCA2Authority(
+        caid,tuple(zip(ids,public)),log_number,first,first+n-1)
 
 def write_trusted_subtrees(path, subtrees):
     """Write authenticated trusted-subtree cache in MTS1 format."""
@@ -58,9 +62,9 @@ def write_trusted_subtrees(path, subtrees):
     return target
 
 def checkpoint_config(authority,entries,timestamp,cp_sigs):
-    """Existing trust.bin layout, including its local landmark-slot field.
+    """Legacy MCF1 checkpoint layout, including its local landmark slot.
 
-    Offline snapshots reuse this container, not a mutable landmark allocation.
+    Retained only for focused compatibility tests of the legacy parser.
     """
     n=len(entries);subtrees=cover(0,n)
     config=authority+uint(1,4)+uint(n,6)+uint(timestamp,8)+root(entries)+signatures(cp_sigs)+bytes([len(subtrees)])
@@ -69,10 +73,13 @@ def checkpoint_config(authority,entries,timestamp,cp_sigs):
 
 def checkpoint_config_v2(entries,timestamp,cp_sigs):
     """Canonical authority-independent MCP2 authenticated checkpoint."""
+    return encode_mcp2(checkpoint_value_v2(entries,timestamp,cp_sigs))
+
+def checkpoint_value_v2(entries,timestamp,cp_sigs):
     n=len(entries);subtrees=cover(0,n)
-    return encode_mcp2(MCP2Checkpoint(
+    return MCP2Checkpoint(
         n,timestamp,root(entries),tuple(cp_sigs),
-        tuple((start,end,root(entries[start:end])) for start,end in subtrees)))
+        tuple((start,end,root(entries[start:end])) for start,end in subtrees))
 def not_after(tbs):
     validity=items(content(tbs,0x30))[4]
     times=items(content(validity[2],0x30))
@@ -86,7 +93,7 @@ def not_after(tbs):
 def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
             persistent_log=None,authenticated_snapshot=None,trusted_authority=None,snapshot_checker=None,
             external_cosigner=None,external_consistency_proof=None,
-            log_number=1,landmark_reference=None):
+            log_number=1,landmark_reference=None,signaling_landmark=1):
     """Generate the usual material, optionally bound to an authenticated log view.
 
     Originals supply certificate fields absent from MTCLogEntry. Their derived
@@ -94,11 +101,17 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
     Without landmark_reference this retains the legacy initial-landmark output.
     A supplied reference is selected and persisted by IssuanceLifecycle; this
     function only consumes its log-bound immutable sequence.
+    signaling_landmark independently selects explicit MTB2 trust signaling;
+    None encodes no landmark identity and no lifecycle value is inferred.
     """
     profile=crypto_profile(family)
     if not 1<=n<=1024:raise ValueError('Unsupported MTC population')
     if type(log_number) is not int or not 1<=log_number<=65535:
         raise ValueError('Invalid issuance log number')
+    if (signaling_landmark is not None and
+            (type(signaling_landmark) is not int
+             or not 1<=signaling_landmark<1<<48)):
+        raise ValueError('Invalid MTB2 signaling landmark')
     landmark_sequence=None
     if landmark_reference is not None:
         from landmarks import validate_sequence
@@ -209,10 +222,12 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
         landmark_certificates.append(i)
     # OOB configuration: keys, serial limits, signed checkpoint and its two covering subtrees.
     # This file is a lab storage format, never sent as an MTC certificate.
-    legacy_authority=authority_config(caid,ids,public,n,log_number=log_number)
-    (out/'authority.bin').write_bytes(
-        authority_config_v2(caid,ids,public,n,log_number=log_number))
-    config=checkpoint_config(legacy_authority,entries,timestamp,cp_sigs)
+    authority_v2=authority_value_v2(
+        caid,ids,public,n,log_number=log_number)
+    checkpoint_v2=checkpoint_value_v2(entries,timestamp,cp_sigs)
+    (out/'authority.bin').write_bytes(encode_mca2(authority_v2))
+    config=encode_mtb2(MTB2Bundle(
+        authority_v2,checkpoint_v2,signaling_landmark))
     (out/'trust.bin').write_bytes(config)
     if authenticated is not None:
         # Do not accept output signed with keys different from independently pinned trust.
