@@ -13,6 +13,7 @@ from semantics import timestamp_checks
 REPO=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(REPO/'src/mtc'))
 import core
+from config_formats import decode_mca2, decode_mtb2
 from crypto_profiles import crypto_profile, SIGNATURE_PROFILES, LEGACY_PROFILES
 
 
@@ -46,26 +47,32 @@ def signatures(data):
 
 def trust(data,p):
     require(len(data)<=65536,'trust exceeds local MTC_MAX')
-    r=Reader(data);require(r.take(4)==b'MCF1','unknown trust storage format')
-    ca=r.vector(1).decode('ascii');require(ca==p['ca_id'],'wrong issuer/profile')
-    require(r.number(1)==2,'local policy requires two signers');keys={}
-    for expected in p['cosigner_ids']:
-        ident=r.vector(1).decode('ascii');require(ident==expected,'wrong cosigner identity')
-        keys[core.relid(ident)]=(ident,r.vector())
-    log=r.number(2);lo=r.number(8);hi=r.number(8);n=hi-lo+1
+    if data.startswith(b'MCA2'):
+        authority=decode_mca2(data);checkpoint=None;landmark=None
+    elif data.startswith(b'MTB2'):
+        bundle=decode_mtb2(data)
+        authority=bundle.authority;checkpoint=bundle.checkpoint
+        landmark=bundle.signaling_landmark
+    else:raise ValueError('unknown trust storage format')
+    ca=authority.ca_id;require(ca==p['ca_id'],'wrong issuer/profile')
+    require(len(authority.signers)==2,'local policy requires two signers');keys={}
+    for expected,(ident,spki) in zip(p['cosigner_ids'],authority.signers):
+        require(ident==expected,'wrong cosigner identity')
+        keys[core.relid(ident)]=(ident,spki)
+    log=authority.log_number;lo=authority.min_serial;hi=authority.max_serial;n=hi-lo+1
     require(log==1 and lo==1<<48 and 1<=n<=1024,'invalid log/serial limits')
     state=dict(ca=ca,keys=keys,log=log,n=n,subs=[],checkpoint=None)
-    if r.pos<len(data):
-        number=r.number(4);size=r.number(6);timestamp=r.number(8);root=r.take(32)
-        require(number==1 and size==n and timestamp>0,'invalid landmark state')
-        sigs=signatures(r.vector());count=r.number(1)
-        require(count in (1,2),'invalid subtree count')
-        subs=[(r.number(6),r.number(6),r.take(32)) for _ in range(count)]
+    if checkpoint is not None:
+        require(checkpoint.tree_size==n and checkpoint.timestamp>0,
+                'invalid checkpoint state')
+        sigs=[(core.relid(ident),signature)
+              for ident,signature in checkpoint.signatures]
+        require(all(signature for _,signature in sigs),'empty checkpoint signature')
+        subs=list(checkpoint.subtrees)
         require([(a,b) for a,b,_ in subs]==core.cover(0,n),'wrong landmark cover')
-        combined=subs[0][2] if count==1 else core.H(b'\1'+subs[0][2]+subs[1][2])
-        require(combined==root,'checkpoint/subtree root mismatch')
-        state.update(subs=subs,checkpoint=(timestamp,root,sigs),landmark=number)
-    r.end();return state
+        state.update(subs=subs,checkpoint=(checkpoint.timestamp,
+                     checkpoint.root_hash,sigs),landmark=landmark)
+    return state
 
 def openssl(executable,*args,data=None):
     r=subprocess.run([executable,*map(str,args)],input=data,capture_output=True)
@@ -133,7 +140,9 @@ def validate(args):
     state=trust(args.trust.read_bytes(),p);index=serial&((1<<48)-1)
     require(serial>>48==state['log'] and index<state['n'],'leaf outside configured log')
     require((start,end) in core.cover(0,state['n']),'outside initial-issuance subset cover')
-    if args.mode=='landmark':require(not sigs and state['checkpoint'] is not None,'landmark requires trust checkpoint and no wire signatures')
+    if args.mode=='landmark':require(not sigs and state['checkpoint'] is not None
+            and state.get('landmark') is not None,
+            'landmark requires signaled trust checkpoint and no wire signatures')
     else:require(bool(sigs),'standalone lacks subtree signatures')
     entry=core.entry(outer[0][2],extensions)
     if args.entry:require(args.entry.read_bytes()==entry,'log entry differs from certificate/SPKI')
@@ -192,7 +201,8 @@ def validate(args):
         expected_proof_hash_count=expected_count,leaf_hash=values[0],intermediate_hashes=values[1:],computed_root=computed.hex(),
         expected_root=expected.hex() if expected else None,root_match=computed==expected if expected else None,
         proof_valid=True,merkle_proof_valid=True,signature_valid=True,spki_valid=True,
-        landmark_id=p['ca_id']+'.1.1.1' if args.mode=='landmark' else None,
+        landmark_id=(f"{p['ca_id']}.1.{state['log']}.{state['landmark']}"
+                     if args.mode=='landmark' else None),
         landmark_id_location='TLS signal and local trust configuration; absent from MTCProof' if args.mode=='landmark' else None,
         mtc_wire_sha256=sha(raw),trust_sha256=sha(args.trust.read_bytes()),sender_wire_match=sender_match,
         receiver_sha256=None,receiver_limitation='native verifier does not retain original DER bytes',

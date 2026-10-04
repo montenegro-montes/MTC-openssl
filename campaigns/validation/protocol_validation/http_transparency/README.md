@@ -1,6 +1,6 @@
 # HTTP transparency subvalidation
 
-This optional validation covers the chain from an authenticated MCF1 snapshot
+This optional validation covers the chain from an authenticated MCP2 snapshot
 and HTTP subtree proofs through the RP updater and MTS1 publication. The
 `http-positive` case then passes that MTS1 file to Chromium and requires a TLS
 1.3 `VerifyMTC` success.

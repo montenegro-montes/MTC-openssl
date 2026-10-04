@@ -101,8 +101,9 @@ Check these fields against `src/mtc/core.py`, `mtc.c` and `tls.c`:
   lengths and 32-byte hashes. Reconstruct the entry and SHA-256 path with the
   existing leaf/node domain separation; validate the range and index.
 - Landmark: no on-wire subtree signatures; match the root to the separately
-  authenticated checkpoint/trust material. `MCF1` is a local file format and
-  must not appear as a transmitted certificate or be counted as TLS bytes.
+  authenticated checkpoint/trust material. Fresh fixtures use the local typed
+  `MCA2`, `MCP2`, and `MTB2` formats; they must not appear as transmitted
+  certificate bytes or be counted as TLS bytes.
 - Standalone: two actual signatures, canonical ordered signer IDs and uint16
   signature lengths; verify the existing `subtree/v1` domain, signer/log IDs,
   timestamp, range and root encoding. Require both signatures.

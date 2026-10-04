@@ -291,7 +291,8 @@ image or the host environment.
 - Endpoint acceptance and independent verification are separate layers.
   `verify_tls_transcript.py` provides optional offline verification; absent
   supplemental evidence remains NOT_EXECUTED in old reports.
-- MCF1 is local out-of-band storage. The provisional 0xca34 CH/EE/CertificateEntry
+- MCA2/MCP2/MTB2 are local out-of-band storage. The provisional 0xca34
+  CH/EE/CertificateEntry
   negotiation is checked against source behavior, not claimed to implement the
   complete recommended trust_anchors extension. Draft OIDs/UTF8String are expressly
   experimental encodings in sections5.1/6.2, not unresolved guesses.
@@ -533,8 +534,9 @@ the matching historical tools, not relabeling or regeneration in place.
 
 Initial landmark CH now supports `.2.<log>.<landmark>` in both laboratory clients;
 EE and retry continue to identify `.1.<log>.<landmark>`. Standalone uses the CA ID.
-The native constructor uses the MCF1 coordinates; the loader still enforces the
-initial single-log, single-landmark subset. No codepoint change accompanies this.
+The native constructor uses typed MCA2/MTB2 coordinates; campaign policy still
+enforces the initial single-log, single-landmark subset. No codepoint change
+accompanies this.
 
 Retained `.1.1.1` in capture/server commands, mutual-auth fixture preflights and
 object-report `landmark_id` names the selected individual for fixed log-1/landmark-1

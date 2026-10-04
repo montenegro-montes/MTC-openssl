@@ -15,16 +15,16 @@ from trusted_subtrees import encode_trusted_subtrees
 
 class HttpTransparencyRunnerTests(unittest.TestCase):
     def test_positive_show_reuses_browser_harness(self):
-        command = run.command("http-positive", ["--snapshot", "snapshot.mcf1"])
+        command = run.command("http-positive", ["--snapshot", "snapshot.mcp2"])
         self.assertEqual(command[:2], ["python3", "campaigns/browser_client/chromium_mtc/http_log_integration.py"])
 
     def test_negative_show_selects_validation_runner(self):
-        command = run.command("invalid-snapshot", ["--snapshot", "snapshot.mcf1"])
+        command = run.command("invalid-snapshot", ["--snapshot", "snapshot.mcp2"])
         self.assertEqual(command[2:4], ["_negative", "invalid-snapshot"])
 
     def test_managed_negative_defaults_to_os_selected_port(self):
         args = run.negative_parser("invalid-snapshot", [
-            "--log-data", "log", "--snapshot", "snapshot.mcf1",
+            "--log-data", "log", "--snapshot", "snapshot.mcp2",
             "--trusted-authority", "authority.bin",
         ])
         self.assertEqual(args.log_port, 0)
@@ -52,7 +52,7 @@ class HttpTransparencyRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             state = Path(temporary) / "rp-state"
             RPStateStore(state).publish(
-                {"tree_size": 16, "hash": "11" * 32},
+                {"log_number": 1, "tree_size": 16, "hash": "11" * 32},
                 encode_trusted_subtrees([]),
             )
             outcome = run.validate_negative_outcome(

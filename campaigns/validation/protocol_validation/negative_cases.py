@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Invalid-input stress checks: deterministic cases, not a load test or fuzzing campaign."""
 import argparse
+from dataclasses import replace
 import json
 import subprocess
 import sys
 from pathlib import Path
 from validate_mtc import core,save,sha
+from config_formats import decode_mtb2, encode_mtb2
 
 def classify_validator(returncode, report):
     if returncode == 0 and report.get('overall') == 'PASS':
@@ -29,20 +31,32 @@ def main():
     if len(proof_hash)<=16:raise ValueError('N=16 proof required')
     proof_hash[16]^=1
     sig=bytearray(proof);sig[-1]^=1
-    landmark=bytearray(trust)
-    # Locate local landmark number after dynamic CA/signers and fixed log/limits.
-    from validate_mtc import Reader
-    r=Reader(trust);r.take(4);r.vector(1);count=r.number(1)
-    for _ in range(count):r.vector(1);r.vector()
-    r.take(18);number_at=r.pos;landmark[number_at+3]^=2
-    root=bytearray(trust);root[number_at+4+6+8]^=1
+    bundle=decode_mtb2(trust)
+    # Structurally valid authority/checkpoint disagreement.
+    serial_range=encode_mtb2(replace(
+        bundle,authority=replace(
+            bundle.authority,max_serial=bundle.authority.max_serial+1)))
+    # Structurally valid checkpoint/root change with the original signatures:
+    # decoding succeeds, but independent checkpoint authentication must fail.
+    subtrees=list(bundle.checkpoint.subtrees)
+    start,end,digest=subtrees[0]
+    changed=bytes([digest[0]^1])+digest[1:]
+    subtrees[0]=(start,end,changed)
+    changed_root=(changed if bundle.checkpoint.tree_size==1 else
+                  core.H(b'\1'+changed+subtrees[1][2]))
+    checkpoint_root=encode_mtb2(replace(
+        bundle,checkpoint=replace(bundle.checkpoint,
+            root_hash=changed_root,subtrees=tuple(subtrees))))
+    malformed_kind=trust[:-7]+b'\x02'
     length=bytearray(proof);length[14:16]=b'\xff\xff'
     cases={'truncated':(raw[:-1],trust),'trailing':(raw+b'\0',trust),
            'length':(core.certificate(outer[0][2],bytes(length)),trust),
            'leaf-index':(envelope(wrong_index),trust),'issuer':(envelope(wrong_issuer),trust),
            'proof-hash':(core.certificate(outer[0][2],bytes(proof_hash)),trust),
            'signature':(core.certificate(outer[0][2],bytes(sig)),trust),
-           'landmark-id':(raw,bytes(landmark)),'checkpoint-root':(raw,bytes(root))}
+           'trust-kind':(raw,malformed_kind),
+           'serial-range':(raw,serial_range),
+           'checkpoint-root':(raw,checkpoint_root)}
     rows=[]
     # Positive control prevents a missing provider/OpenSSL executable from making every mutation look successful.
     command=[sys.executable,str(Path(__file__).with_name('validate_mtc.py'))]

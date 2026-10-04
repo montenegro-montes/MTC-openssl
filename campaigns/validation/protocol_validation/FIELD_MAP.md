@@ -33,8 +33,9 @@ separate blocks for derived and out-of-band data; it is not one concatenated obj
 | leaf / internal hash | core.py:root/evaluate | Derived H(00||entry); H(01||left||right) | 4.3.2, 7.2 (RFC9162) | domain-separated Merkle hash | Report every fold and compare core.evaluate | yes | No primitive cryptography reimplementation |
 | CosignedMessage | core.py:message | Derived label[12], V8 signer name, U64 timestamp, V8 log origin, U64 start/end, hash[32] | 5.3.1 | signature input | Exact domain `subtree/v1\n\0`; IDs prefixed `oid/1.3.6.1.4.1.`; log CA.0.1 | yes | Signature range widths are 64 bits, unlike proof range's48 |
 | subtree signature timestamp | core.py:message | Derived U64 zero (not sent in MTCProof) | 6.2, 7.2 | certificate cosignature timestamp | Verify over zero | yes | Checkpoint uses its nonzero issuance timestamp |
-| authority.bin | prepare.py / mtc.c:mtc_load | OOB `MCF1`, V8 ASCII CA, U8 count=2, twice(V8 ASCII signer,V16 SPKI DER), U16 log, U64 min,max | UNRESOLVED_MAPPING | local trust serialization | Exact EOF, identities and serial interval | local only | Draft7.1 configuration concept; **not** a draft wire structure |
-| trust.bin suffix | prepare.py / mtc.c:mtc_load | OOB authority prefix + U32 landmark=1,U48 N,U64 timestamp,hash[32],V16 signatures,U8 subtree_count, repeated(U48 start,end,hash[32]) | UNRESOLVED_MAPPING | local checkpoint/landmark storage | cover(0,N), combine hashes to checkpoint, verify both signatures | local only | Concepts5.3.1/6.4/7.4; bytes are local MCF1, not a draft checkpoint format |
+| authority.bin | prepare.py:authority_config_v2 / mtc.c:mtc_load_authority_config_v2 | OOB `MCA2`: V8 CA, U16 signer count, repeated(V8 signer,V24 SPKI), U16 log, U64 min,max | UNRESOLVED_MAPPING | local authority serialization | Exact EOF, canonical identities and serial interval | local only | Draft7.1 configuration concept; **not** a draft wire structure |
+| trust.bin | prepare.py:trust_config_v2 / mtc.c:mtc_load_trust_config_v2 | OOB `MTB2`: V32 canonical MCA2, V32 canonical MCP2, U8 signaling kind and optional U48 landmark | UNRESOLVED_MAPPING | atomic local authority/checkpoint/signaling storage | Strict nested codecs; checkpoint authentication; explicit signaling identity | local only | Concepts5.3.1/6.4/7.4; bytes are local formats, not a draft checkpoint format |
+| snapshot.mcp2 | snapshots.py / check_snapshot.c | OOB `MCP2`: U48 N,U64 timestamp,hash[32],V24 signatures, exactly two covering subtree records | UNRESOLVED_MAPPING | authenticated checkpoint storage | cover(0,N), reconstruct root, verify configured signatures | local only | Checkpoint concepts5.3.1/6.4/7.4; no landmark signaling identity |
 | landmark identifier | mtc.c:mtc_load / tls.c | TLS selection CA.1.log.landmark, normal advertisement CA.2.1.1, base128 IDs | 8.2 | individual landmark trust anchor | For local log1/landmark1 require CA.1.1.1 | yes | **Absent from MTCProof**; only configuration/transport names it |
 | tree size / root / signer keys | prepare.py / mtc.c | OOB only; root also derived from proof | 6.3, 6.4, 7.1–7.4 | trusted state | Trust supplied explicitly; bind via signatures | yes | No N, root or issuer SPKI embedded as separate MTCProof fields |
 | TLS Certificate | src/mtc/patch.py, tls.c | Standard TLS1.3 type11,U24 body,V8 context,V24 list; entry V24 DER,V16 extensions | 8 (RFC8446 framing) | certificate transport | Extract exact DER from decrypted/reassembled packet bytes | yes | Payload MTC is experimental; TLS framing remains native |
@@ -50,8 +51,9 @@ general landmark groups, consistency monitoring, revocation database, public cos
 operations, general MTC PKIX path building. These are not failures of this scoped
 prototype. `NOT_APPLICABLE`: TLS checks in an offline-only object report.
 `UNRESOLVED`: independent evidence
-for the checkpoint signer's actual signing time/largest observed tree. MCF1 remains
-a local storage format, not a claim about a draft wire encoding. Current-clock
+for the checkpoint signer's actual signing time/largest observed tree. MCA2,
+MCP2, and MTB2 remain local storage formats, not a claim about a draft wire
+encoding. Current-clock
 checkpoint policy is LOCAL_POLICY, not an unresolved maximum-age draft rule. Operational CA identity persistence across
 independent fixture roots is outside a one-object check; preserve each trust root.
 
@@ -79,7 +81,7 @@ MTC/trust-anchor requirements. No newer draft was substituted.
 | MTC-05 §6.2, §7.2 | MTCProof cosignature input timestamp must be uint64 zero, already cryptographically verified this way. Landmark proof has no such signatures. |
 | MTC-05 §5.3.1, §5.3.2 | Nonzero timestamp states POSIX signing time, start=0, and end=largest tree observed by the signer. Encoding and signed range are checked; actual signing time and signer history are not independently observable from a single certificate/checkpoint. |
 
-The local MCF1 checkpoint records uint64 timestamp, size and root. Offline validation
+The local MCP2 checkpoint records uint64 timestamp, uint48 size and root. Offline validation
 verifies its signatures over start=0/end=configured size. The native loader enforces
 `timestamp > 0 && timestamp <= time(NULL)`. There is **no maximum-age threshold**.
 Neither this source inspection nor an offline signature check proves that the native

@@ -25,7 +25,7 @@ from trusted_subtrees import decode_trusted_subtrees
 CASES = {
     "http-positive": "authenticated HTTP snapshot and subtree proofs produce MTS1 consumed by Chromium",
     "invalid-subtree-proof": "a corrupted first-landmark proof produces the validated empty-prefix MTS1 fallback",
-    "invalid-snapshot": "a corrupted MCF1 snapshot is rejected before trusted state publication",
+    "invalid-snapshot": "a corrupted MCP2 snapshot is rejected before trusted state publication",
 }
 
 
@@ -170,7 +170,7 @@ def run_negative(case, args):
         if not data:
             raise ValueError("snapshot is empty")
         data[-1] ^= 1
-        served_snapshot = output / "invalid-snapshot.mcf1"
+        served_snapshot = output / "invalid-snapshot.mcp2"
         served_snapshot.write_bytes(data)
 
     service = (nullcontext(bridge.require_local_http_url(args.log_url))

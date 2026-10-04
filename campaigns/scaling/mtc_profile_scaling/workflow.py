@@ -135,7 +135,7 @@ def generate(args):
                 public=[prepare.command('pkey','-in',key,'-pubout','-outform','DER')
                         for key in keys]
                 trusted=transparency/'trusted-authority.bin'
-                trusted.write_bytes(prepare.authority_config(
+                trusted.write_bytes(prepare.authority_config_v2(
                     profile['ca_id'],profile['cosigner_ids'],public,n))
 
                 persistent=LocalLog(transparency/'persistent-log')
@@ -150,7 +150,7 @@ def generate(args):
                     persistent.append(value)
 
                 old=export_snapshot(
-                    persistent,transparency/'snapshot-n8.mcf1',name,keys)
+                    persistent,transparency/'snapshot-n8.mcp2',name,keys)
                 state8=authenticate_snapshot(
                     old,trusted,Path('/opt/mtc/check-snapshot'))
 
@@ -158,7 +158,7 @@ def generate(args):
                     persistent.append(value)
 
                 snapshot=export_snapshot(
-                    persistent,transparency/'snapshot-n16.mcf1',name,keys)
+                    persistent,transparency/'snapshot-n16.mcp2',name,keys)
                 state16=authenticate_snapshot(
                     snapshot,trusted,Path('/opt/mtc/check-snapshot'))
 

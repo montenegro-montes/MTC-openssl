@@ -11,11 +11,42 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from semantics import decode_id, encode_id, decode_list, encode_list, trust_mapping, timestamp_checks
 from negative_cases import classify_validator
 from report import layers
+from validate_mtc import trust
 from verify_tls_transcript import (exact_messages, signed_input, hkdf_expand_label,
                                    finished, keylog_secrets, certificate_verify, core)
+from config_formats import (MCA2Authority, MCP2Checkpoint, MTB2Bundle,
+                            encode_mca2, encode_mtb2)
+from crypto_profiles import crypto_profile
 
 
 class SemanticsTests(unittest.TestCase):
+    @staticmethod
+    def typed_authority():
+        profile = crypto_profile('pq')
+        first = 1 << 48
+        return profile, MCA2Authority(
+            profile['ca_id'],
+            tuple((identity, b'opaque-spki') for identity in profile['cosigner_ids']),
+            1, first, first + 15)
+
+    def test_validator_loads_mca2_for_standalone(self):
+        profile, authority = self.typed_authority()
+        state = trust(encode_mca2(authority), profile)
+        self.assertEqual((state['log'], state['n']), (1, 16))
+        self.assertIsNone(state['checkpoint'])
+
+    def test_validator_loads_mtb2_for_landmark(self):
+        profile, authority = self.typed_authority()
+        left, right = b'\x11' * 32, b'\x22' * 32
+        checkpoint = MCP2Checkpoint(
+            16, 1, core.H(b'\x01' + left + right),
+            tuple((identity, b'signature') for identity in profile['cosigner_ids']),
+            ((0, 8, left), (8, 16, right)))
+        state = trust(encode_mtb2(MTB2Bundle(authority, checkpoint, 3)), profile)
+        self.assertEqual(state['landmark'], 3)
+        self.assertEqual(state['checkpoint'][:2], (1, checkpoint.root_hash))
+        self.assertEqual(state['subs'], list(checkpoint.subtrees))
+
     def test_primary_fixture_group_selects_individual(self):
         ca = (32473, 101)
         result = trust_mapping(encode_list([ca + (2, 1, 1)]),
