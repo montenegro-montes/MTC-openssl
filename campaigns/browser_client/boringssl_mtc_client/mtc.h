@@ -7,7 +7,7 @@
 #define MTC_EXT TLSEXT_TYPE_trust_anchors
 #define MTC_DRAFT "draft-ietf-plants-merkle-tree-certs-05"
 typedef struct mtc_config MTCConfig;
-MTCConfig *mtc_load(const char *path, int landmark);
+MTCConfig *mtc_load_config_v2(const char *path, int landmark);
 void mtc_free(MTCConfig *c);
 int mtc_verify(X509 *x, MTCConfig *c);
 int mtc_client(SSL_CTX *ctx,const char *path,int landmark);

@@ -1,6 +1,6 @@
 902629636bac8ae994cfc1f5e3c6b4d5893904a0e185eafaf2943a0d81f81505  patches/chromium/0001-Add-Plants-05-MTC-interoperability-test.patch
 8c11a99d8e615793ab1362b39304ef53b4d040dba798ce82cc987d50a63d9bc3  patches/chromium/0002-Point-Chromium-at-Plants-05-BoringSSL.patch
-0690189d2f51c8a6d8a40f34aebd93042fd4bed1ee5ae2cb49ede1c40f9a4bd0  patches/chromium/0003-Add-dynamic-Plants-05-browser-trust-configuration.patch
+78e5973f37010a48b1915642db896e495190ffd619c3513fadf4100145dd4b6e  patches/chromium/0003-Add-dynamic-Plants-05-browser-trust-configuration.patch
 2c4026c02596277a2bad8230a3d8eb435254b953a549f57e0b4e8a3b1395e3fd  patches/chromium/0004-Add-trusted-subtree-loading-for-MTC-browser-tests.patch
 33165e8897b2e01aefbdf2875e6dafb7579ae5479d743a61989cb385e8dbbd67  patches/chromium/0005-Update-BoringSSL-MTC-verification-for-draft-06.patch
 a6ee2dc1eac2575f3bf775a38474eed1fb752d35dda7255e16455fb8d015b516  patches/boringssl/0001-Add-experimental-Plants-05-landmark-verification.patch

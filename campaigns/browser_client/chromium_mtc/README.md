@@ -97,7 +97,9 @@ python3 campaigns/browser_client/chromium_mtc/export_chromium_anchor.py \
   --output "$CHROMIUM_JSON"
 ```
 
-The Chromium JSON must come from the same newly generated fixture.
+The Chromium JSON is exported from the fixture's typed MTB2 trust bundle and
+records `"source_format": "MTB2"`. It must come from the same newly generated
+fixture.
 
 ## Local hostname resolution
 

@@ -81,7 +81,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: tls-client TRUST_BIN DNS_NAME [standalone|landmark]\n"); return 2;
     }
     signal(SIGPIPE, SIG_IGN); alarm(20);
-    client.hostname = argv[2]; client.trust = mtc_load(argv[1], landmark);
+    client.hostname = argv[2]; client.trust = mtc_load_config_v2(argv[1], landmark);
     if (!client.trust || client.trust->request_signal_len > 255) goto end;
     requested[0] = (unsigned char)client.trust->request_signal_len;
     memcpy(requested + 1, client.trust->request_signal, client.trust->request_signal_len);

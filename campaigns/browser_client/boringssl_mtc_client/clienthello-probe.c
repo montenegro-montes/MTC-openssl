@@ -53,7 +53,7 @@ int main(int argc, char **argv) {
     if ((argc != 2 && argc != 3) || (argc == 3 && !landmark && strcmp(argv[2], "standalone"))) {
         fprintf(stderr, "Usage: clienthello-probe TRUST_BIN [standalone|landmark]\n"); return 2;
     }
-    trust = mtc_load(argv[1], landmark);
+    trust = mtc_load_config_v2(argv[1], landmark);
     if (!trust || !trust->request_signal_len || trust->request_signal_len > 255) goto end;
     requested[0] = (unsigned char)trust->request_signal_len;
     memcpy(requested + 1, trust->request_signal, trust->request_signal_len);

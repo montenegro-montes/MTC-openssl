@@ -1,4 +1,4 @@
-/* Isolated BoringSSL port of src/mtc/mtc.c; see README.md. */
+/* Isolated BoringSSL MTC verifier and typed local-config loader; see README.md. */
 #include "mtc.h"
 #include <openssl/pem.h>
 #include <openssl/ec.h>
@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <time.h>
 typedef struct { const unsigned char *p; size_t n; } Slice;
 typedef struct { Slice raw,body; unsigned tag; } TLV;
@@ -49,24 +50,38 @@ int mtc_eval(const unsigned char leaf[32],uint64_t index,uint64_t start,uint64_t
 static void put(unsigned char *p,uint64_t n,unsigned size){while(size){p[--size]=(unsigned char)n;n>>=8;}}
 static int id_encode(const char *s,unsigned char *out,size_t *n){
     size_t j=0;const char *p=s;*n=0;
-    while(*p){char *end;unsigned long v;unsigned char b[10];unsigned k=0;
+    while(*p){char *end;unsigned long long v;unsigned char b[10];unsigned k=0;
         if(*p<'0'||*p>'9'||(*p=='0'&&p[1]&&p[1]!='.'))return 0;
-        v=strtoul(p,&end,10);if(end==p||(*end&&*end!='.')||v>0xffffffffUL)return 0;
+        errno=0;v=strtoull(p,&end,10);
+        if(errno==ERANGE||end==p||(*end&&*end!='.'))return 0;
         b[k++]=(unsigned char)(v&127);while((v>>=7))b[k++]=(unsigned char)((v&127)|128);
         if(j+k>80)return 0;
         while(k)out[j++]=b[--k];
         p=*end?end+1:end;if(*end&&! *p)return 0;
     }*n=j;return j>0;
 }
+static int id_valid(Slice id){
+    uint64_t value=0;int first=1;
+    if(!id.n)return 0;
+    for(size_t i=0;i<id.n;i++){
+        unsigned char b=id.p[i];
+        if(first&&b==0x80)return 0;
+        if(value>(UINT64_MAX>>7)||
+           (value==(UINT64_MAX>>7)&&(uint64_t)(b&127)>(UINT64_MAX&127)))return 0;
+        value=(value<<7)|(b&127);first=!(b&128);
+        if(first)value=0;
+    }
+    return first;
+}
 /* Keep the exact anchor for EE/confirmation/retry separate from initial CH. */
 static int config_signals(MTCConfig *c){
     char id[80];int n;
-    if(!c->landmark){
+    if(!c->number){
         if(!id_encode(c->caid,c->signal,&c->signal_len))return 0;
         memcpy(c->request_signal,c->signal,c->signal_len);
         c->request_signal_len=c->signal_len;return 1;
     }
-    if(!c->log||!c->number||c->log>0xffffffffULL||c->number>0xffffffffULL)return 0;
+    if(!c->log||!c->number||c->log>65535||c->number>=((uint64_t)1<<48))return 0;
     n=snprintf(id,sizeof(id),"%s.1.%llu.%llu",c->caid,
                (unsigned long long)c->log,(unsigned long long)c->number);
     if(n<=0||n>=(int)sizeof(id)||!id_encode(id,c->signal,&c->signal_len))return 0;
@@ -111,8 +126,7 @@ static int sigcheck(MTCConfig *c,Slice sigs,uint64_t start,uint64_t end,const un
     while(sigs.n){
         if(!vector(&sigs,1,&id)||!id.n||!vector(&sigs,2,&sig))return 0;
         if(prev.p&&(id.n<prev.n||(id.n==prev.n&&memcmp(id.p,prev.p,id.n)<=0)))return 0;
-        /* A trust-anchor ID is a canonical series of base-128 integers. */
-        for(size_t i=0;i<id.n;){if(id.p[i]==128)return 0;do{if(i==id.n)return 0;}while(id.p[i++]&128);}
+        if(!id_valid(id))return 0;
         prev=id;
         for(unsigned i=0;i<c->count;i++)if(id.n==c->signers[i].idlen&&!memcmp(id.p,c->signers[i].binary,id.n)){
             EVP_MD_CTX *md=EVP_MD_CTX_new();Signer *s=&c->signers[i];int ok=0;
@@ -123,44 +137,77 @@ static int sigcheck(MTCConfig *c,Slice sigs,uint64_t start,uint64_t end,const un
     }return valid==((1u<<c->count)-1);
 }
 void mtc_free(MTCConfig *c){if(c){for(unsigned i=0;i<2;i++)EVP_PKEY_free(c->signers[i].key);OPENSSL_free(c);}}
-MTCConfig *mtc_load(const char *path,int landmark){
+static int parse_authority_v2(Slice s,MTCConfig *c){
+    Slice x;uint64_t v;
+    if(!take(&s,4,&x)||memcmp(x.p,"MCA2",4)||!vector(&s,1,&x)||!ascii(x,c->caid)||
+       !number(&s,2,&v)||v!=2)return 0;
+    c->count=(unsigned)v;
+    for(unsigned i=0;i<c->count;i++){
+        const unsigned char *p;
+        if(!vector(&s,1,&x)||!ascii(x,c->signers[i].id)||
+           !id_encode(c->signers[i].id,c->signers[i].binary,&c->signers[i].idlen)||
+           !vector(&s,3,&x)||!x.n)return 0;
+        p=x.p;c->signers[i].key=d2i_PUBKEY(NULL,&p,(long)x.n);
+        if(!c->signers[i].key||p!=x.p+x.n||!supported_signer_key(c->signers[i].key))return 0;
+    }
+    if(strcmp(c->caid,c->signers[0].id)||!strcmp(c->signers[0].id,c->signers[1].id)||
+       !number(&s,2,&c->log)||!c->log||!number(&s,8,&c->min)||
+       !number(&s,8,&c->max)||s.n||c->min!=(c->log<<48)||
+       c->max<c->min||c->max-c->min>=1024)return 0;
+    return 1;
+}
+static void checkpoint_cover(uint64_t size,uint64_t expected[4]){
+    uint64_t split=1;
+    if(size==1){expected[0]=0;expected[1]=1;expected[2]=1;expected[3]=1;return;}
+    while((split<<1)<size)split<<=1;
+    expected[0]=0;expected[1]=split;expected[2]=split;expected[3]=size;
+}
+static int parse_checkpoint_v2(Slice s,MTCConfig *c,Slice *sigs){
+    Slice x;uint64_t expected[4];unsigned char actual[32],empty[32];
+    if(!take(&s,4,&x)||memcmp(x.p,"MCP2",4)||
+       !number(&s,6,&c->size)||!c->size||c->size>1024||
+       !number(&s,8,&c->timestamp)||!c->timestamp||
+       c->timestamp>(uint64_t)time(NULL)||!take(&s,32,&x)||
+       !vector(&s,3,sigs))return 0;
+    memcpy(c->root,x.p,32);c->nsubs=2;
+    for(unsigned i=0;i<2;i++){
+        if(!number(&s,6,&c->subs[i].start)||!number(&s,6,&c->subs[i].end)||
+           !take(&s,32,&x))return 0;
+        memcpy(c->subs[i].hash,x.p,32);
+    }
+    if(s.n)return 0;
+    checkpoint_cover(c->size,expected);
+    for(unsigned i=0;i<2;i++)if(c->subs[i].start!=expected[2*i]||
+        c->subs[i].end!=expected[2*i+1])return 0;
+    if(c->size==1){
+        if(!hash((Slice){(const unsigned char *)"",0},empty)||
+           CRYPTO_memcmp(c->subs[0].hash,c->root,32)||
+           CRYPTO_memcmp(c->subs[1].hash,empty,32))return 0;
+    }else if(!node(c->subs[0].hash,c->subs[1].hash,actual)||
+             CRYPTO_memcmp(actual,c->root,32))return 0;
+    return 1;
+}
+MTCConfig *mtc_load_config_v2(const char *path,int landmark){
     double begin=tick(),validation=0;FILE *f=fopen(path,"rb");unsigned char *buf=NULL;long size;MTCConfig *c=NULL;
-    Slice s,x,sigs;uint64_t v;unsigned char actual[32];int ok=0;
+    Slice s,x,authority,checkpoint,sigs={NULL,0};uint64_t kind;int ok=0;
     if(!f)return NULL;
     if(fseek(f,0,SEEK_END)||(size=ftell(f))<=0||size>MTC_MAX||fseek(f,0,SEEK_SET))goto end;
     buf=OPENSSL_malloc(size);c=OPENSSL_zalloc(sizeof(*c));if(!buf||!c||fread(buf,1,size,f)!=(size_t)size)goto end;
     c->landmark=landmark;c->file_bytes=(size_t)size;s=(Slice){buf,(size_t)size};
-    if(!take(&s,4,&x)||memcmp(x.p,"MCF1",4)||!vector(&s,1,&x)||!ascii(x,c->caid)||!number(&s,1,&v)||v!=2)goto end;
-    c->count=(unsigned)v;
-    for(unsigned i=0;i<c->count;i++){
-        const unsigned char *p;
-        if(!vector(&s,1,&x)||!ascii(x,c->signers[i].id)||!id_encode(c->signers[i].id,c->signers[i].binary,&c->signers[i].idlen)||!vector(&s,2,&x))goto end;
-        p=x.p;c->signers[i].key=d2i_PUBKEY(NULL,&p,(long)x.n);
-        if(!c->signers[i].key||p!=x.p+x.n||!supported_signer_key(c->signers[i].key))goto end;
-    }
-    if(strcmp(c->caid,c->signers[0].id)||!strcmp(c->signers[0].id,c->signers[1].id))goto end;
-    if(!number(&s,2,&c->log)||c->log!=1||!number(&s,8,&c->min)||!number(&s,8,&c->max)||c->min!=(1ULL<<48)||c->max<c->min||c->max-c->min>=1024)goto end;
     if(!landmark){
-        if(s.n||!config_signals(c))goto end;
+        if(!parse_authority_v2(s,c)||!config_signals(c))goto end;
         ok=1;goto end;
     }
-    if(!number(&s,4,&c->number)||c->number!=1||!number(&s,6,&c->size)||!c->size||c->size>1024||!number(&s,8,&c->timestamp)||!c->timestamp||c->timestamp>(uint64_t)time(NULL)||!take(&s,32,&x))goto end;
-    memcpy(c->root,x.p,32);
-    if(c->min!=(1ULL<<48)||c->max!=c->min+c->size-1||!vector(&s,2,&sigs)||!number(&s,1,&v)||v<1||v>2)goto end;
-    c->nsubs=(unsigned)v;
-    for(unsigned i=0;i<c->nsubs;i++){
-        Subtree *sub=&c->subs[i];
-        if(!number(&s,6,&sub->start)||!number(&s,6,&sub->end)||!valid_subtree(sub->start,sub->end)||!take(&s,32,&x))goto end;
-        memcpy(sub->hash,x.p,32);
-    }
-    if(s.n||c->subs[0].start||c->subs[c->nsubs-1].end!=c->size)goto end;
-    if(c->nsubs==1){if(c->size!=1)goto end;memcpy(actual,c->subs[0].hash,32);}
-    else {uint64_t split=1;while((split<<1)<c->size)split<<=1;
-        if(c->subs[0].end!=split||c->subs[1].start!=split||!node(c->subs[0].hash,c->subs[1].hash,actual))goto end;}
-    if(CRYPTO_memcmp(actual,c->root,32))goto end;
+    if(!take(&s,4,&x)||memcmp(x.p,"MTB2",4)||!vector(&s,4,&authority)||
+       !vector(&s,4,&checkpoint)||!number(&s,1,&kind)||
+       !parse_authority_v2(authority,c)||!parse_checkpoint_v2(checkpoint,c,&sigs)||
+       c->max!=c->min+c->size-1)goto end;
+    if(kind==0){if(s.n)goto end;c->number=0;}
+    else if(kind==1){if(!number(&s,6,&c->number)||!c->number||s.n)goto end;}
+    else goto end;
     /* Trust config is supplied by the operator. Authenticate checkpoint before
        installing its covered landmark subtrees. Standalone ignores cached subtrees. */
-    if(landmark){double t=tick();if(!sigcheck(c,sigs,0,c->size,c->root,c->timestamp))goto end;validation=tick()-t;}
+    {double t=tick();if(!sigcheck(c,sigs,0,c->size,c->root,c->timestamp))goto end;validation=tick()-t;}
     if(!config_signals(c))goto end;
     ok=1;
 end:
@@ -171,10 +218,22 @@ end:
 }
 static int algorithm(const X509_ALGOR *a){const ASN1_OBJECT *o;int type;char text[80];X509_ALGOR_get0(&o,&type,NULL,a);return type==V_ASN1_UNDEF&&OBJ_obj2txt(text,sizeof(text),o,1)>0&&!strcmp(text,"1.3.6.1.4.1.44363.47.0");}
 static int issuer(X509 *x,const char *id){
-    X509_NAME *name=X509_get_issuer_name(x);X509_NAME_ENTRY *e;char oid[80];ASN1_STRING *v;
-    if(X509_NAME_entry_count(name)!=1)return 0;
-    e=X509_NAME_get_entry(name,0);v=X509_NAME_ENTRY_get_data(e);
-    return OBJ_obj2txt(oid,sizeof(oid),X509_NAME_ENTRY_get_object(e),1)>0&&!strcmp(oid,"1.3.6.1.4.1.44363.47.1")&&ASN1_STRING_type(v)==V_ASN1_UTF8STRING&&ASN1_STRING_length(v)==(int)strlen(id)&&!memcmp(ASN1_STRING_get0_data(v),id,strlen(id));
+    /* Check the DER tag directly: providers may expose RELATIVE-OID as OTHER. */
+    static const unsigned char oid[]={0x2b,0x06,0x01,0x04,0x01,0x82,0xda,0x4b,0x2f,0x03};
+    unsigned char expected[80],*der=NULL;size_t length;int ok=0;
+    int n=i2d_X509_NAME(X509_get_issuer_name(x),&der);Slice s;TLV t;
+    if(n<=0||!id_encode(id,expected,&length))goto end;
+    s=(Slice){der,(size_t)n};
+    if(!tlv(&s,&t)||s.n||t.tag!=0x30)goto end;
+    s=t.body;
+    if(!tlv(&s,&t)||s.n||t.tag!=0x31)goto end;
+    s=t.body;
+    if(!tlv(&s,&t)||s.n||t.tag!=0x30)goto end;
+    s=t.body;
+    if(!tlv(&s,&t)||t.tag!=6||t.body.n!=sizeof(oid)||memcmp(t.body.p,oid,sizeof(oid)))goto end;
+    if(!tlv(&s,&t)||s.n||t.tag!=0x0d||t.body.n!=length||memcmp(t.body.p,expected,length))goto end;
+    ok=1;
+end:OPENSSL_free(der);return ok;
 }
 static int leaf_hash(X509 *x,Slice extensions,unsigned char out[32]){
     unsigned char *der=NULL,keyhash[32],header[3],octet[2]={4,32};int n=i2d_re_X509_tbs(x,&der),ok=0;unsigned count=0,size;
@@ -200,7 +259,7 @@ int mtc_verify(X509 *x,MTCConfig *c){
     X509_get0_signature(&signature,&alg,x);
     if(!algorithm(alg)||(signature->flags&7)||signature->length<0||!ASN1_INTEGER_get_uint64(&serial,X509_get_serialNumber(x))||serial<c->min||serial>c->max||(serial>>48)!=c->log)return 0;
     index=serial&0xffffffffffffULL;p=(Slice){signature->data,(size_t)signature->length};
-    if(!vector(&p,2,&extensions)||extensions.n||!number(&p,6,&start)||!number(&p,6,&end)||!vector(&p,2,&proof)||!vector(&p,2,&sigs)||p.n)return 0;
+    if(!vector(&p,2,&extensions)||extensions.n||!number(&p,6,&start)||!number(&p,6,&end)||!vector(&p,2,&proof)||!vector(&p,3,&sigs)||p.n)return 0;
     if(!leaf_hash(x,extensions,leaf)||!mtc_eval(leaf,index,start,end,proof.p,proof.n,root))return 0;
     if(c->landmark){
         if(sigs.n)return 0;

@@ -25,7 +25,8 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 sys.path.insert(0, str(HERE))
-from export_chromium_anchor import Reader, parse_landmark, core
+from export_chromium_anchor import parse_landmark, core
+from config_formats import decode_mtb2
 
 HOST = 'server.mtc.example.com'
 PROFILE = 'ecdsa-p256'
@@ -80,6 +81,21 @@ def browser_page(case, run_root, credentials, browser_mode):
 def require(ok, reason):
     if not ok:
         raise ValueError(reason)
+
+
+def take_number(data, pos, size):
+    end = pos + size
+    if end > len(data):
+        raise ValueError('truncated binary field')
+    return int.from_bytes(data[pos:end], 'big'), end
+
+
+def take_vector(data, pos, size=2):
+    length, pos = take_number(data, pos, size)
+    end = pos + length
+    if end > len(data):
+        raise ValueError('truncated binary vector')
+    return data[pos:end], end
 
 
 def sha(path):
@@ -230,29 +246,32 @@ def validate_mtc(fixture, profile=PROFILE, image='mt-tls-mtc:local'):
     meta = read(directory / 'manifest.json')
     ca_id = meta['ca_id']
     require(isinstance(ca_id, str) and bool(ca_id), 'Missing MTC ca_id identity')
-    selected_tai = f'{ca_id}.1.1.1'
-    requested_tai = f'{ca_id}.2.1.1'
     require(meta.get('profile') == profile and meta.get('tree_size') == 16 and
             meta.get('draft') == core.DRAFT and meta.get('merkle_hash') == 'SHA-256', 'MTC metadata mismatch')
     check_saved_hashes(directory, read(directory / 'fixture-sha256.json'))
     cert_path, key_path = directory / 'landmark-0000.pem', fixture / 'population' / profile / '0.key'
     cert, leaf = web_leaf(cert_path, key_path, profile=profile, image=image)
-    require(cert['serial'] == 1 << 48, 'MTC credential is not log 1 leaf 0')
     raw = (directory / 'trust.bin').read_bytes()
     anchor = parse_landmark(raw)
+    selected_tai = anchor['landmark']['selected_trust_anchor_id']
+    requested_tai = anchor['landmark']['requested_trust_anchor_id']
+    require(cert['serial'] == anchor['log_number'] << 48,
+            'MTC credential is not configured-log leaf 0')
     require(anchor['ca_id'] == ca_id and anchor['landmark']['tree_size'] == 16 and
-            anchor['min_serial'] == 1 << 48 and anchor['max_serial'] == (1 << 48) + 15 and
+            anchor['min_serial'] == anchor['log_number'] << 48 and
+            anchor['max_serial'] == (anchor['log_number'] << 48) + 15 and
             anchor['landmark']['requested_trust_anchor_id'] == requested_tai and
             anchor['landmark']['selected_trust_anchor_id'] == selected_tai, 'MTC trust identity mismatch')
-    # Authenticate the checkpoint, not just its file hash or JSON syntax.
-    r = Reader(raw); r.take(4); r.vector(1)
-    signers = [(r.vector(1).decode(), r.vector(2)) for _ in range(r.number(1))]
-    r.number(2); r.number(8); r.number(8); r.number(4)
-    size, timestamp, root_hash = r.number(6), r.number(8), r.take(32)
+    # Authenticate the checkpoint, not just its typed structure or JSON syntax.
+    bundle = decode_mtb2(raw)
+    signers = bundle.authority.signers
+    size = bundle.checkpoint.tree_size
+    timestamp = bundle.checkpoint.timestamp
+    root_hash = bundle.checkpoint.root_hash
     require(timestamp <= int(time.time()), 'Future checkpoint timestamp')
-    sr = Reader(r.vector()); verified = set()
-    while sr.pos < len(sr.data):
-        ident, signature = sr.vector(1), sr.vector()
+    verified = set()
+    for name, signature in bundle.checkpoint.signatures:
+        ident = core.relid(name)
         require(ident not in verified, 'Duplicate checkpoint signer')
         matched = [(name, spki) for name, spki in signers if core.relid(name) == ident]
         require(len(matched) == 1, 'Unknown checkpoint signer')
@@ -273,8 +292,13 @@ def validate_mtc(fixture, profile=PROFILE, image='mt-tls-mtc:local'):
     outer, tbs = core.certificate_parts(der)
     require(outer[1][2] == core.ALG and tbs[2][2] == core.ALG and tbs[3][2] == core.name(ca_id), 'MTC algorithm/issuer mismatch')
     require(outer[2][1][0] == 0, 'Invalid MTC bit string')
-    pr = Reader(outer[2][1][1:]); extensions = pr.vector(); start, end = pr.number(6), pr.number(6)
-    path = pr.vector(); signatures = pr.vector(3); pr.finish()
+    proof = outer[2][1][1:]
+    extensions, pos = take_vector(proof, 0)
+    start, pos = take_number(proof, pos, 6)
+    end, pos = take_number(proof, pos, 6)
+    path, pos = take_vector(proof, pos)
+    signatures, pos = take_vector(proof, pos, 3)
+    require(pos == len(proof), 'Trailing MTC proof data')
     require(not extensions and not signatures and len(path) % 32 == 0, 'Invalid landmark proof/signatures')
     calculated = core.evaluate(core.entry(outer[0][2]), 0, start, end,
                                 [path[i:i+32] for i in range(0, len(path), 32)])
@@ -343,13 +367,16 @@ def prevalidated_mtc(fixture, validation, profile=PROFILE):
     cert_path, key_path, trust = directory/'landmark-0000.pem', fixture/'population'/profile/'0.key', directory/'trust.bin'
     require(all(p.is_file() for p in (cert_path, key_path, trust)), 'Missing selected MTC credential/trust')
     anchor = parse_landmark(trust.read_bytes())
-    requested, selected = f'{ca_id}.2.1.1', f'{ca_id}.1.1.1'
+    requested = anchor['landmark']['requested_trust_anchor_id']
+    selected = anchor['landmark']['selected_trust_anchor_id']
     require(anchor['ca_id'] == ca_id and anchor['landmark']['tree_size'] == 16
-            and anchor['min_serial'] == 1 << 48 and anchor['max_serial'] == (1 << 48)+15
+            and anchor['min_serial'] == anchor['log_number'] << 48
+            and anchor['max_serial'] == (anchor['log_number'] << 48)+15
             and anchor['landmark']['requested_trust_anchor_id'] == requested
             and anchor['landmark']['selected_trust_anchor_id'] == selected, 'MTC trust identity mismatch')
     outer, tbs = core.certificate_parts(certificate_der(cert_path.read_bytes()))
-    require(int.from_bytes(tbs[1][1], 'big') == 1 << 48 and outer[1][2] == core.ALG
+    require(int.from_bytes(tbs[1][1], 'big') == anchor['log_number'] << 48
+            and outer[1][2] == core.ALG
             and tbs[2][2] == core.ALG and tbs[3][2] == core.name(ca_id), 'MTC leaf 0 algorithm/issuer mismatch')
     dates = core.items(tbs[4][1])
     require(len(dates) == 2 and all(t[0] in (23, 24) for t in dates), 'Invalid certificate validity')
@@ -884,13 +911,20 @@ def encrypted_extensions_selected(events, selected_tai=None):
         try:
             raw = base64.b64decode(params['bytes'], validate=True)
             require(raw[0] == 8 and int.from_bytes(raw[1:4], 'big') == len(raw)-4, 'Malformed handshake')
-            r = Reader(raw[4:]); extensions = Reader(r.vector()); r.finish()
-            while extensions.pos < len(extensions.data):
-                kind, value = extensions.number(2), extensions.vector()
+            body = raw[4:]
+            extension_data, pos = take_vector(body, 0)
+            require(pos == len(body), 'Trailing EncryptedExtensions data')
+            pos = 0
+            while pos < len(extension_data):
+                kind, pos = take_number(extension_data, pos, 2)
+                value, pos = take_vector(extension_data, pos)
                 if kind == 0xca34:
-                    ids = Reader(value); entries = Reader(ids.vector()); ids.finish()
-                    while entries.pos < len(entries.data):
-                        if entries.vector(1) == core.relid(selected_tai):
+                    entries, ids_pos = take_vector(value, 0)
+                    require(ids_pos == len(value), 'Trailing trust-anchor extension data')
+                    entry_pos = 0
+                    while entry_pos < len(entries):
+                        identifier, entry_pos = take_vector(entries, entry_pos, 1)
+                        if identifier == core.relid(selected_tai):
                             return True
         except (ValueError, KeyError, IndexError):
             continue

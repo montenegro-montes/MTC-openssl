@@ -332,7 +332,7 @@ index 0000000000000000000000000000000000000000..1365d242126f9a0f4c7d50733404c31d
 +
 +  if (!format || *format != "chromium-mtc-plants05-lab" || !version ||
 +      *version != 1 || !spec || *spec != "plants-05" || !source_format ||
-+      *source_format != "MCF1") {
++      *source_format != "MTB2") {
 +    LOG(ERROR) << "Unsupported MTC Plants-05 lab config format";
 +    return std::nullopt;
 +  }
@@ -577,4 +577,3 @@ index 0000000000000000000000000000000000000000..04e30f33acd7b5c372fbed31ca4969ec
 +#endif  // NET_CERT_MTC_PLANTS05_LAB_CONFIG_H_
 -- 
 2.50.1 (Apple Git-155)
-

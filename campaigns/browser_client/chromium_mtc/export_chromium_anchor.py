@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Export an existing local MCF1 landmark trust configuration for Chromium.
+"""Export an existing local MTB2 landmark trust configuration for Chromium.
 
-MCF1 remains a local laboratory storage format. This exporter does not turn
-MCF1 into a protocol format; it only creates an explicit interoperability
+MTB2 remains a local laboratory storage format. This exporter does not turn
+MTB2 into a protocol format; it only creates an explicit interoperability
 configuration for the controlled Chromium Plants-05 experiment.
 """
 
@@ -18,49 +18,17 @@ REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "src/mtc"))
 
 import core
-sys.path.insert(0, str(HERE.parent / "boringssl_mtc_client"))
-from trust_ids import configured_ids
-
-
-class Reader:
-    def __init__(self, data):
-        self.data = data
-        self.pos = 0
-
-    def take(self, n):
-        if n < 0 or self.pos + n > len(self.data):
-            raise ValueError("truncated MCF1 field")
-        out = self.data[self.pos:self.pos + n]
-        self.pos += n
-        return out
-
-    def number(self, n):
-        return int.from_bytes(self.take(n), "big")
-
-    def vector(self, n=2):
-        return self.take(self.number(n))
-
-    def finish(self):
-        if self.pos != len(self.data):
-            raise ValueError("trailing bytes in MCF1")
+from config_formats import decode_mtb2
 
 
 def parse_landmark(raw):
-    r = Reader(raw)
-
-    if r.take(4) != b"MCF1":
-        raise ValueError("not an MCF1 configuration")
-
-    ca_id = r.vector(1).decode("ascii")
-
-    signer_count = r.number(1)
-    if signer_count != 2:
+    bundle = decode_mtb2(raw)
+    authority, checkpoint = bundle.authority, bundle.checkpoint
+    ca_id = authority.ca_id
+    if len(authority.signers) != 2:
         raise ValueError("expected exactly two configured signers")
-
     signers = []
-    for _ in range(signer_count):
-        signer_id = r.vector(1).decode("ascii")
-        spki = r.vector(2)
+    for signer_id, spki in authority.signers:
         signers.append({
             "id": signer_id,
             "id_hex": core.relid(signer_id).hex(),
@@ -71,38 +39,22 @@ def parse_landmark(raw):
     if signers[0]["id"] != ca_id:
         raise ValueError("first signer is not the configured CA")
 
-    log_number = r.number(2)
-    min_serial = r.number(8)
-    max_serial = r.number(8)
-
-    if not log_number:
-        raise ValueError("invalid log number")
-    if min_serial > max_serial:
-        raise ValueError("invalid serial interval")
-
-    landmark_number = r.number(4)
-    tree_size = r.number(6)
-    timestamp = r.number(8)
-    checkpoint_root = r.take(32)
-
-    # Checkpoint signatures are retained in MCF1 but Chromium only needs the
+    log_number = authority.log_number
+    min_serial, max_serial = authority.min_serial, authority.max_serial
+    landmark_number = bundle.signaling_landmark
+    tree_size, timestamp = checkpoint.tree_size, checkpoint.timestamp
+    checkpoint_root = checkpoint.root_hash
+    # Checkpoint signatures are retained in MTB2 but Chromium only needs the
     # resulting trusted landmark subtrees after out-of-band trust validation.
-    checkpoint_signatures = r.vector(2)
-
-    subtree_count = r.number(1)
-    subtrees = []
-    for _ in range(subtree_count):
-        start = r.number(6)
-        end = r.number(6)
-        digest = r.take(32)
-        subtrees.append({
+    checkpoint_signatures = core.encode_subtree_signature_block(
+        checkpoint.signatures)
+    subtrees = [{
             "start": start,
             "end": end,
             "hash": digest.hex(),
-        })
-
-    r.finish()
-
+        } for start, end, digest in checkpoint.subtrees]
+    if landmark_number is None:
+        raise ValueError("MTB2 has no signaling landmark")
     if landmark_number == 0:
         raise ValueError("invalid landmark number")
     if tree_size == 0:
@@ -130,13 +82,14 @@ def parse_landmark(raw):
     if reconstructed_root != checkpoint_root:
         raise ValueError("trusted subtrees do not reconstruct checkpoint root")
 
-    ids = configured_ids(raw, "landmark")
+    individual = f"{ca_id}.1.{log_number}.{landmark_number}"
+    group = f"{ca_id}.2.{log_number}.{landmark_number}"
 
     return {
         "format": "chromium-mtc-plants05-lab",
         "version": 1,
         "spec": "plants-05",
-        "source_format": "MCF1",
+        "source_format": "MTB2",
         "ca_id": ca_id,
         "ca_id_hex": core.relid(ca_id).hex(),
         "signers": signers,
@@ -151,12 +104,12 @@ def parse_landmark(raw):
             "timestamp": timestamp,
             "checkpoint_root": checkpoint_root.hex(),
             "checkpoint_signatures_bytes": len(checkpoint_signatures),
-            "requested_trust_anchor_id": ids["requested_id"],
+            "requested_trust_anchor_id": group,
             "requested_trust_anchor_id_hex":
-                core.relid(ids["requested_id"]).hex(),
-            "selected_trust_anchor_id": ids["selected_id"],
+                core.relid(group).hex(),
+            "selected_trust_anchor_id": individual,
             "selected_trust_anchor_id_hex":
-                core.relid(ids["selected_id"]).hex(),
+                core.relid(individual).hex(),
             "trusted_subtrees": subtrees,
         },
     }

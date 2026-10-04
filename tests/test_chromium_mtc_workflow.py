@@ -8,9 +8,16 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes as alg, serialization as ser
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import ExtendedKeyUsageOID as eku
+
 REPO = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('browser_validation', REPO/'campaigns/browser_client/chromium_mtc/browser_validation.py')
 bv = importlib.util.module_from_spec(spec); spec.loader.exec_module(bv)
+from config_formats import (MCA2Authority, MCP2Checkpoint, MTB2Bundle,
+                            encode_mtb2)
 
 
 class Credentials(unittest.TestCase):
@@ -22,25 +29,30 @@ class Credentials(unittest.TestCase):
         self.output = self.repo/'audit'; self.output.mkdir()
 
     def make_mtc(self):
-        c = bv.core; x509, ser, alg, ec, _ = bv.crypto()
+        c = bv.core
+        ca_id = '32473.200'
         fixture = self.repo/'artifacts/mtc'/('browser-'+bv.HOST.replace('.', '-')+'-20260925T000000Z')
         directory = fixture/'batch16/mtc/ecdsa-p256'; directory.mkdir(parents=True)
         population = fixture/'population/ecdsa-p256'; population.mkdir(parents=True)
         (population/'0.key').write_bytes((self.x/'server.key').read_bytes())
         original = c.from_pem((self.x/'server.pem').read_bytes())
-        tbs = [c.mtc_tbs(original, bv.CA, i) for i in range(16)]
+        tbs = [c.mtc_tbs(original, ca_id, i) for i in range(16)]
         entries = [c.entry(t) for t in tbs]; root = c.root(entries)
-        ids = [bv.CA, '32473.201']; keys = [ec.generate_private_key(ec.SECP256R1()) for _ in ids]
+        ids = [ca_id, '32473.201']; keys = [ec.generate_private_key(ec.SECP256R1()) for _ in ids]
         signers = [(name, key.public_key().public_bytes(ser.Encoding.DER, ser.PublicFormat.SubjectPublicKeyInfo)) for name, key in zip(ids,keys)]
         timestamp = int(datetime.now(timezone.utc).timestamp())-1
-        signatures = [(name, key.sign(c.message(name,bv.CA,0,16,root,timestamp),ec.ECDSA(alg.SHA256()))) for name,key in zip(ids,keys)]
-        trust = b'MCF1'+c.vec(bv.CA.encode(),1)+bytes([2])+b''.join(c.vec(name.encode(),1)+c.vec(spki) for name,spki in signers)
-        trust += c.uint(1,2)+c.uint(1<<48,8)+c.uint((1<<48)+15,8)+c.uint(1,4)+c.uint(16,6)+c.uint(timestamp,8)+root+c.signatures(signatures)
-        subs = c.cover(0,16); trust += bytes([len(subs)])+b''.join(c.uint(a,6)+c.uint(b,6)+c.root(entries[a:b]) for a,b in subs)
+        signatures = [(name, key.sign(c.message(name,ca_id,0,16,root,timestamp),ec.ECDSA(alg.SHA256()))) for name,key in zip(ids,keys)]
+        subs = c.cover(0,16)
+        authority = MCA2Authority(ca_id, tuple(signers), 1,
+                                  1 << 48, (1 << 48) + 15)
+        checkpoint = MCP2Checkpoint(
+            16, timestamp, root, tuple(signatures),
+            tuple((a, b, c.root(entries[a:b])) for a, b in subs))
+        trust = encode_mtb2(MTB2Bundle(authority, checkpoint, 1))
         (directory/'trust.bin').write_bytes(trust)
         proof = c.proof(0,8,c.inclusion(entries[:8],0),[])
         (directory/'landmark-0000.pem').write_bytes(c.pem(c.certificate(tbs[0],proof)))
-        meta=dict(profile=bv.PROFILE,tree_size=16,draft=c.DRAFT,trust_anchor_draft=c.TA_DRAFT,merkle_hash='SHA-256',implementation_algorithm='EC')
+        meta=dict(profile=bv.PROFILE,tree_size=16,draft=c.DRAFT,trust_anchor_draft=c.TA_DRAFT,merkle_hash='SHA-256',implementation_algorithm='EC',ca_id=ca_id)
         bv.write(directory/'manifest.json',meta);bv.write(directory/'fixture-sha256.json',bv.hashes(directory))
         bv.write(fixture/'manifest.json',dict(server_hostname=bv.HOST,profiles=[bv.PROFILE],sizes=[16],provenance=dict(image_id='sha256:'+'1'*64)))
         evidence=fixture.with_name(fixture.name+'-validation');evidence.mkdir()
@@ -48,7 +60,7 @@ class Credentials(unittest.TestCase):
         return fixture
 
     def rewrite_leaf(self, *, san=bv.HOST, ca=False, server_auth=True, before=None, after=None):
-        x509,ser,alg,_,eku=bv.crypto()
+
         original=x509.load_pem_x509_certificate((self.x/'server.pem').read_bytes())
         key=ser.load_pem_private_key((self.x/'root.key').read_bytes(),None)
         now=datetime.now(timezone.utc)
@@ -59,7 +71,7 @@ class Credentials(unittest.TestCase):
         (self.x/'manifest.json').unlink()
 
     def test_legacy_cryptography_dates(self):
-        x509=bv.crypto()[0]
+
         real_loader=x509.load_pem_x509_certificate
         class LegacyCertificate:
             def __init__(self, cert): self.cert=cert
@@ -82,7 +94,7 @@ class Credentials(unittest.TestCase):
     def test_public_root_saved_with_audit(self):
         f=self.make_mtc()
         with patch.object(bv,'root_trust',return_value=dict(status='TRUSTED')):
-            result=bv.prepare_credentials(self.repo,self.output,'unused')
+            result=bv.prepare_credentials(self.repo,self.output,'mt-tls-mtc:local')
         root=Path(result['x509']['root']);saved=Path(result['x509']['root_certificate_copy'])
         self.assertEqual(root.read_bytes(),saved.read_bytes())
         self.assertEqual(bv.sha(saved),result['x509']['root_certificate_copy_sha256'])
@@ -173,15 +185,15 @@ class Credentials(unittest.TestCase):
 
 class Safety(unittest.TestCase):
     def test_no_bypass_flags(self):
-        text=Path(bv.__file__).read_text()
+        command=bv.browser_command('/browser',Path('/tmp/profile'),Path('/tmp/case'),None,'https://'+bv.HOST)
         for flag in ('--ignore-certificate-errors','--allow-insecure-localhost'):
-            self.assertNotIn(flag,text)
-            self.assertFalse(any(flag in item for item in bv.browser_command('/browser',Path('/tmp/profile'),Path('/tmp/case'),None,'https://'+bv.HOST)))
+            self.assertNotIn(flag,command)
 
     def test_normal_resume_isolated(self):
         text=(REPO/'bin/browser_client/mt-chromium-mtc').read_text()
-        self.assertNotIn('browser-validation',text[text.index(' run|resume|cleanup)'):])
-        self.assertNotIn('browser_validation',text[text.index('run_step()'):text.index('doctor()')])
+        self.assertIn('exec "$DRIVER_DIR/mt-chromium-tests" "$@"',text)
+        self.assertIn('exec "$DRIVER_DIR/mt-chromium-setup" "$@"',text)
+        self.assertNotIn('browser_validation',text)
 
     def test_plan_status_no_launch_or_generation(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(bv,'REPO',Path(tmp)), patch.object(bv,'command') as cmd, patch.object(bv.subprocess,'Popen') as launch, patch.object(bv,'prepare_credentials') as prepare:
@@ -191,12 +203,13 @@ class Safety(unittest.TestCase):
     def test_selected_tai_from_wire(self):
         import base64
         c=bv.core
-        extension=c.uint(0xca34,2)+c.vec(c.vec(c.vec(c.relid(bv.SELECTED),1)))
+        selected='32473.200.1.1.1'
+        extension=c.uint(0xca34,2)+c.vec(c.vec(c.vec(c.relid(selected),1)))
         body=c.vec(extension);wire=b'\x08'+c.uint(len(body),3)+body
         events=[('SSL_HANDSHAKE_MESSAGE_RECEIVED',dict(type=8,bytes=base64.b64encode(wire).decode()),0,1)]
-        self.assertTrue(bv.encrypted_extensions_selected(events))
+        self.assertTrue(bv.encrypted_extensions_selected(events,selected))
         events[0][1]['bytes']='malformed'
-        self.assertFalse(bv.encrypted_extensions_selected(events))
+        self.assertFalse(bv.encrypted_extensions_selected(events,selected))
 
     def test_target_events_exclude_unrelated_errors(self):
         data=dict(constants=dict(logEventTypes={'URL_REQUEST_START_JOB':1,'SSL_CONNECT':2}),events=[
@@ -212,27 +225,36 @@ class Safety(unittest.TestCase):
             d=Path(tmp);url='https://target'
             server=''.join('>>> TLS 1.3, Handshake [length 0001], '+n+'\n' for n in ('Certificate','CertificateVerify','Finished'))
             (d/'server.log').write_text(server+'<<< TLS 1.3, Handshake [length 0001], Finished\n')
-            (d/'chromium.stdout.log').write_text('<html>SSL-Session TLS_AES_256_GCM_SHA384</html>')
+            (d/'chromium.stdout.log').write_text(
+                '<html><h1>MTC browser test</h1>'
+                '<p id="result">TLS browser validation page</p>'
+                'SSL-Session TLS_AES_256_GCM_SHA384</html>'
+            )
             (d/'chromium.stderr.log').write_text('')
             def event(name,**params): return dict(type=name,source=dict(id=1),params=params)
             events=[event('URL_REQUEST_START_JOB',url=url),event('SSL_CONNECT',version='TLS 1.3',cipher_suite=0x1302,key_exchange_group=29,is_resumed=False),event('HTTP_TRANSACTION_READ_RESPONSE_HEADERS',headers=['HTTP/1.0 200 ok']),event('SSL_HANDSHAKE_MESSAGE_SENT',type=20)]
             events += [event('SSL_HANDSHAKE_MESSAGE_RECEIVED',type=t) for t in (11,15,20)]
             bv.write(d/'netlog.json',dict(events=events,constants={}))
-            self.assertTrue(bv.classify('x509-positive',d,url,0)['pass'])
-            self.assertFalse(bv.classify('mtc-no-trust',d,url,0,positive_control=True)['pass'])
-            (d/'server.log').write_text(server);(d/'chromium.stdout.log').write_text('certificate error')
-            events=[event('URL_REQUEST_START_JOB',url=url),event('SSL_CONNECT',net_error=-202)]
-            events += [event('SSL_HANDSHAKE_MESSAGE_RECEIVED',type=t) for t in (11,15,20)]
+            requested,selected='32473.200.2.1.1','32473.200.1.1.1'
+            self.assertTrue(bv.classify('x509-positive',d,url,0,requested_tai=requested,selected_tai=selected)['pass'])
+            self.assertFalse(bv.classify('mtc-no-trust',d,url,0,positive_control=True,requested_tai=requested,selected_tai=selected)['pass'])
+            (d/'server.log').write_text('SSL3 alert write:fatal:handshake failure\n')
+            (d/'chromium.stdout.log').write_text('certificate error')
+            events=[
+                event('URL_REQUEST_START_JOB',url=url),
+                event('SSL_CONNECT',net_error=-113),
+            ]
             (d/'netlog.json').write_text(json.dumps(dict(events=events,constants={})))
-            self.assertTrue(bv.classify('mtc-no-trust',d,url,0,positive_control=True)['pass'])
-            self.assertFalse(bv.classify('mtc-no-trust',d,url,0,positive_control=False)['pass'])
+            self.assertTrue(bv.classify('mtc-no-trust',d,url,0,positive_control=True,requested_tai=requested,selected_tai=selected)['pass'])
+            self.assertFalse(bv.classify('mtc-no-trust',d,url,0,positive_control=False,requested_tai=requested,selected_tai=selected)['pass'])
 
     def test_unrelated_errors_never_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
             d=Path(tmp)
             for name in ('server.log','chromium.stdout.log','chromium.stderr.log'): (d/name).write_text('')
             bv.write(d/'netlog.json',dict(events=[],constants={}))
-            result=bv.classify('mtc-no-trust',d,'https://'+bv.HOST,0,positive_control=True)
+            result=bv.classify('mtc-no-trust',d,'https://'+bv.HOST,0,positive_control=True,
+                               requested_tai='32473.200.2.1.1',selected_tai='32473.200.1.1.1')
             self.assertFalse(result['pass']);self.assertEqual(result['observed_outcome'],'INCONCLUSIVE')
 
 

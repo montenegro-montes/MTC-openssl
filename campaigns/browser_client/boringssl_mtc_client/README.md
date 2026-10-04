@@ -48,11 +48,13 @@ Both verifier copies construct `signal` (CA or individual) and `request_signal`
 `request_signal`, then requires the server's available-anchor list to match
 `signal` and the leaf to carry the empty confirmation extension. The OpenSSL
 server maps the group to its corresponding individual. The smoke runner reads
-coordinates from existing MCF1 configuration; its reader is not authentication.
+coordinates from MCA2/MTB2 configuration; its reader is not authentication.
 The native loader still authenticates the checkpoint and proof.
 
-Real configurations remain restricted to log 1 / landmark 1. Generic ID formatting
-does not implement evolving landmarks, general group ranges or multiple logs.
+Current recorded campaign fixtures remain log 1 / landmark 1. The typed loader
+derives log and explicit uint48 landmark coordinates from MCA2/MTB2; it does not
+infer either coordinate from checkpoint size. Generic ID formatting does not
+implement evolving landmark policy or general group-range selection.
 Individual IDs remain meaningful for exact selection and explicit OpenSSL retry;
 this BoringSSL client does not implement retry itself.
 
