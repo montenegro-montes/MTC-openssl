@@ -498,7 +498,7 @@ def decode_subtree_signatures(encoded,outer_width=2):
     return decode_subtree_signature_block(encoded[outer_width:])
 
 def signatures(values,outer_width=2):
-    # Compatibility wrapper. MCF1 uses uint16; MTCProof uses uint24.
+    # Compatibility wrapper for callers selecting the enclosing vector width.
     return encode_subtree_signatures(values,outer_width)
 def proof(start,end,path,sigs=(),extensions=b''):
     """Encode MTCProof; extensions are canonical MTC vector contents."""

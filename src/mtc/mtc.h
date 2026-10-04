@@ -10,11 +10,10 @@ typedef struct mtc_config MTCConfig;
 typedef struct mtc_authority_v2 MTCAuthorityV2;
 typedef struct mtc_checkpoint_v2 MTCCheckpointV2;
 typedef struct mtc_trust_bundle_v2 MTCTrustBundleV2;
-MTCConfig *mtc_load(const char *path, int landmark);
 MTCConfig *mtc_load_authority_config_v2(const char *path);
 MTCConfig *mtc_load_trust_config_v2(const char *path);
 void mtc_free(MTCConfig *c);
-/* Typed local-format parsers. These do not replace the legacy MCF1 loader. */
+/* Typed local-format parsers. */
 MTCAuthorityV2 *mtc_load_authority_v2(const char *path);
 MTCCheckpointV2 *mtc_load_checkpoint_v2(const char *path);
 MTCTrustBundleV2 *mtc_load_trust_bundle_v2(const char *path);

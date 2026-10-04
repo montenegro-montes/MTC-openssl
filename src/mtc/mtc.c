@@ -125,7 +125,6 @@ static int config_signals(MTCConfig *c){
                (unsigned long long)c->log,(unsigned long long)c->number);
     return n>0&&n<(int)sizeof(id)&&id_encode(id,c->request_signal,&c->request_signal_len);
 }
-static int ascii(Slice x,char *s){if(!x.n||x.n>=80||memchr(x.p,0,x.n))return 0;memcpy(s,x.p,x.n);s[x.n]=0;unsigned char b[80];size_t n;return id_encode(s,b,&n);}
 static int message_fields(const char *caid,uint64_t log_number,const char *signer_id,
                           uint64_t start,uint64_t end,const unsigned char root[32],
                           uint64_t timestamp,unsigned char *out,size_t *n){
@@ -561,56 +560,6 @@ static int serial_revoked(const MTCConfig *c,uint64_t serial){
     for(unsigned i=0;i<c->nrevoked;i++)
         if(serial>=c->revoked[i].first&&serial<=c->revoked[i].last)return 1;
     return 0;
-}
-MTCConfig *mtc_load(const char *path,int landmark){
-    double begin=tick(),validation=0;FILE *f=fopen(path,"rb");unsigned char *buf=NULL;long size;MTCConfig *c=NULL;
-    Slice s,x,sigs;uint64_t v;unsigned char actual[32];int ok=0;
-    if(!f)return NULL;
-    if(fseek(f,0,SEEK_END)||(size=ftell(f))<=0||size>MTC_MAX||fseek(f,0,SEEK_SET))goto end;
-    buf=OPENSSL_malloc(size);c=OPENSSL_zalloc(sizeof(*c));if(!buf||!c||fread(buf,1,size,f)!=(size_t)size)goto end;
-    c->landmark=landmark;c->file_bytes=(size_t)size;s=(Slice){buf,(size_t)size};
-    if(!take(&s,4,&x)||memcmp(x.p,"MCF1",4)||!vector(&s,1,&x)||!ascii(x,c->caid)||!number(&s,1,&v)||v!=2)goto end;
-    c->count=(unsigned)v;
-    for(unsigned i=0;i<c->count;i++){
-        const unsigned char *p;
-        if(!vector(&s,1,&x)||!ascii(x,c->signers[i].id)||!id_encode(c->signers[i].id,c->signers[i].binary,&c->signers[i].idlen)||!vector(&s,2,&x))goto end;
-        p=x.p;c->signers[i].key=d2i_PUBKEY(NULL,&p,(long)x.n);
-        if(!c->signers[i].key||p!=x.p+x.n||!supported_signer_key(c->signers[i].key))goto end;
-    }
-    if(strcmp(c->caid,c->signers[0].id)||!strcmp(c->signers[0].id,c->signers[1].id))goto end;
-    if(!number(&s,2,&c->log)||!c->log||c->log>0xffff||!number(&s,8,&c->min)||!number(&s,8,&c->max)||c->min!=(c->log<<48)||c->max<c->min||c->max-c->min>=1024)goto end;
-    if(!landmark){
-        if(s.n||!config_signals(c))goto end;
-        ok=1;goto end;
-    }
-    if(!number(&s,4,&c->number)||!c->number||!number(&s,6,&c->size)||!c->size||c->size>1024||!number(&s,8,&c->timestamp)||!c->timestamp||c->timestamp>(uint64_t)time(NULL)||!take(&s,32,&x))goto end;
-    memcpy(c->root,x.p,32);
-    if(c->min!=(c->log<<48)||c->max!=c->min+c->size-1||!vector(&s,2,&sigs)||!number(&s,1,&v)||v!=2)goto end;
-    c->nsubs=(unsigned)v;
-    for(unsigned i=0;i<c->nsubs;i++){
-        Subtree *sub=&c->subs[i];
-        if(!number(&s,6,&sub->start)||!number(&s,6,&sub->end)||!valid_subtree(sub->start,sub->end)||!take(&s,32,&x))goto end;
-        memcpy(sub->hash,x.p,32);
-    }
-    if(s.n||c->subs[0].start||c->subs[c->nsubs-1].end!=c->size)goto end;
-    if(c->size==1){
-        unsigned char empty[32];
-        if(c->subs[0].end!=1||c->subs[1].start!=1||!hash((Slice){(const unsigned char *)"",0},empty)||CRYPTO_memcmp(empty,c->subs[1].hash,32))goto end;
-        memcpy(actual,c->subs[0].hash,32);
-    }
-    else {uint64_t split=1;while((split<<1)<c->size)split<<=1;
-        if(c->subs[0].end!=split||c->subs[1].start!=split||!node(c->subs[0].hash,c->subs[1].hash,actual))goto end;}
-    if(CRYPTO_memcmp(actual,c->root,32))goto end;
-    /* Trust config is supplied by the operator. Authenticate checkpoint before
-       installing its covered landmark subtrees. Standalone ignores cached subtrees. */
-    if(landmark){double t=tick();if(!sigcheck(c,sigs,0,c->size,c->root,c->timestamp))goto end;validation=tick()-t;}
-    if(!config_signals(c))goto end;
-    ok=1;
-end:
-    fclose(f);OPENSSL_free(buf);
-    if(!ok){mtc_free(c);return NULL;}
-    fprintf(stderr,"MTC_SETUP {\"mtc_setup_ms\":%.6f,\"mtc_trust_validation_ms\":%.6f,\"mtc_predistributed_bytes\":%zu,\"mtc_trust_file_bytes\":%zu}\n",tick()-begin,validation,landmark?c->file_bytes:0,c->file_bytes);
-    return c;
 }
 static int algorithm(const X509_ALGOR *a){const ASN1_OBJECT *o;int type;char text[80];X509_ALGOR_get0(&o,&type,NULL,a);return type==V_ASN1_UNDEF&&OBJ_obj2txt(text,sizeof(text),o,1)>0&&!strcmp(text,"1.3.6.1.4.1.44363.47.0");}
 static int issuer(X509 *x,const char *id){

@@ -40,11 +40,12 @@ el algoritmo general de consistencia entre snapshots sucesivos ni pruning.
 
 ## Confianza y sus archivos
 
-`authority.bin` almacena CA ID, dos cosigner IDs/SPKI, log y límites de serial.
+`authority.bin` usa MCA2 y almacena CA ID, cosigner IDs/SPKI, log y límites de serial.
 Standalone carga exclusivamente ese archivo: no requiere un checkpoint previo.
-`trust.bin` añade landmark, checkpoint firmado y subárboles. Landmark autentica
-este material antes de iniciar el handshake. El formato MCF1 de estos archivos
-es almacenamiento OOB del laboratorio, **no un formato de certificado IETF**.
+`trust.bin` usa MTB2 para combinar la autoridad MCA2, un checkpoint MCP2 y la
+identidad de landmark explícita. Landmark autentica este material antes de iniciar
+el handshake. Estos formatos son almacenamiento OOB del laboratorio, **no formatos
+de certificado IETF**.
 La distribución inicial de claves y política se considera configuración confiable
 del operador. No se demuestra seguridad de un servicio de distribución remoto.
 
@@ -90,7 +91,8 @@ credencial compacta mínima, pero no equivale a implementar todas las funciones 
 
 Para CA `32473.101`, standalone conserva `32473.101`. El grupo inicial es
 `32473.101.2.1.1`; el landmark seleccionado y el retry explícito conservan
-`32473.101.1.1.1`. Los constructores usan caid, log y número de landmark de MCF1,
+`32473.101.1.1.1`. Los constructores usan caid y log de MCA2 y el número de
+landmark explícito de MTB2,
 sin sustituir globalmente `.1` por `.2`. El servidor reconoce el grupo del
 landmark configurado; el cliente verifica el individual seleccionado.
 La restricción de carga a log 1 / landmark 1 sigue vigente. El codepoint sigue

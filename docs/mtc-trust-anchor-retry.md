@@ -14,7 +14,7 @@ retry, not TLS HelloRetryRequest.
 The active codepoint is provisional `0xca34`, aligned with Chromium/BoringSSL, not a final IANA assignment. Historical runs used private `0xffa7` and remain unchanged. Local restrictions:
 one candidate credential, one requested ID or initial log-1/landmark-1 group,
 binary IDs up to 80 bytes with components up to UINT32_MAX; empty and duplicate
-lists are rejected. `MCF1` remains local out-of-band storage. No complete draft
+lists are rejected. MCA2/MTB2 remain local out-of-band storage. No complete draft
 conformance or interoperability claim is made.
 
 The retry server receives trust, credential and private-key paths, **no independent

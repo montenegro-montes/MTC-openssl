@@ -5,7 +5,7 @@ static void expect(const unsigned char *actual,size_t n,const char *text){
     unsigned char expected[80];size_t size;
     assert(id_encode(text,expected,&size));assert(n==size&&!memcmp(actual,expected,n));
 }
-int main(int argc,char **argv){
+int main(void){
     unsigned char leaf[32]={0},out[32];
     assert(valid_subtree(0,0)&&valid_subtree(1,1));
     assert(valid_subtree((1ULL<<48)-1,(1ULL<<48)-1));
@@ -27,11 +27,5 @@ int main(int argc,char **argv){
     expect(c.signal,c.signal_len,"32473.101.1.7.129");
     expect(c.request_signal,c.request_signal_len,"32473.101.2.7.129");
     c.number=0;assert(!config_signals(&c));
-    assert(argc==1||argc==2);
-    if(argc==2){
-        MTCConfig *legacy=mtc_load(argv[1],1);
-        assert(legacy&&legacy->landmark&&legacy->number==1);
-        mtc_free(legacy);
-    }
     puts("PASS: CA, individual landmark and group ID construction");return 0;
 }

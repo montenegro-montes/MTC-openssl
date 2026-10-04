@@ -612,16 +612,6 @@ def main():
                     (start,end,core.root(checkpoint_entries[start:end]))
                     for start,end in core.cover(0,n))
                 assert bundle.signaling_landmark==1
-                legacy=temp/f'{family}-{n}-legacy.mcf1'
-                legacy.write_bytes(prepare.checkpoint_config(
-                    prepare.authority_config(
-                        bundle.authority.ca_id,
-                        [identity for identity,_ in bundle.authority.signers],
-                        [spki for _,spki in bundle.authority.signers],n,
-                        log_number=bundle.authority.log_number),
-                    checkpoint_entries,bundle.checkpoint.timestamp,
-                    bundle.checkpoint.signatures))
-                subprocess.run([str(temp/'test_ids'),str(legacy)],check=True)
                 if family=='ecdsa-p256':
                     subprocess.run([
                         str(temp/'test_retry_native'),str(out/'trust.bin'),

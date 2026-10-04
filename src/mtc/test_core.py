@@ -49,7 +49,7 @@ assert leaf!=H(b'\1'+leaf+root([]))
 assert core.proof(0,1,[])[16:]==b'\0\0\0'
 sigs=[('32473.101',b'abc')]
 block=bytes.fromhex('0481fd59650003')+b'abc'
-assert signatures(sigs)==uint(len(block),2)+block  # MCF1 remains uint16
+assert signatures(sigs)==uint(len(block),2)+block  # Default wrapper width remains uint16.
 assert core.proof(0,1,[],sigs)[16:]==uint(len(block),3)+block
 large=core.proof(0,1,[],[('1',b'x'*40000),('2',b'y'*40000)])[16:]
 assert int.from_bytes(large[:3],'big')==len(large)-3>65535

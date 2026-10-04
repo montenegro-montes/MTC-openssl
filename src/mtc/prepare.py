@@ -21,16 +21,6 @@ def cosign(ident,key,caid,start,end,subtree_hash,family,timestamp=0,log=1):
     return ident,sign(key,message(ident,caid,start,end,subtree_hash,timestamp,log),family)
 def checkpoint_signature(ident,key,caid,n,checkpoint,timestamp,family,log=1):
     return cosign(ident,key,caid,0,n,checkpoint,family,timestamp,log)
-def authority_config(caid,ids,public,n,*,log_number=1):
-    """Existing local MCF1 authority encoding; not a certificate wire format."""
-    if (not 1<=n<=1024 or len(ids)!=2 or len(public)!=2
-            or type(log_number) is not int or not 1<=log_number<=65535):
-        raise ValueError('MCF1 configuration')
-    config=b'MCF1'+vec(caid.encode(),1)+bytes([len(ids)])
-    for ident,spki in zip(ids,public):config+=vec(ident.encode(),1)+vec(spki)
-    first=log_number<<48
-    return config+uint(log_number,2)+uint(first,8)+uint(first+n-1,8)
-
 def authority_config_v2(caid,ids,public,n,*,log_number=1):
     """Canonical MCA2 authority.bin from the same authority source data."""
     return encode_mca2(authority_value_v2(
@@ -60,16 +50,6 @@ def write_trusted_subtrees(path, subtrees):
 
     target.write_bytes(data)
     return target
-
-def checkpoint_config(authority,entries,timestamp,cp_sigs):
-    """Legacy MCF1 checkpoint layout, including its local landmark slot.
-
-    Retained only for focused compatibility tests of the legacy parser.
-    """
-    n=len(entries);subtrees=cover(0,n)
-    config=authority+uint(1,4)+uint(n,6)+uint(timestamp,8)+root(entries)+signatures(cp_sigs)+bytes([len(subtrees)])
-    for start,end in subtrees:config+=uint(start,6)+uint(end,6)+root(entries[start:end])
-    return config
 
 def checkpoint_config_v2(entries,timestamp,cp_sigs):
     """Canonical authority-independent MCP2 authenticated checkpoint."""

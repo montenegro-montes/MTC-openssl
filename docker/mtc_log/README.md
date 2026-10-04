@@ -7,7 +7,7 @@ compatibility, signing, gossip, TLS or certificate generation is provided.
 
 All JSON state/proof responses explicitly include `unsigned: true`. `/checkpoint`
 returns unsigned `tree_size` and `hash`, not an authenticated checkpoint.
-Existing independently authenticated MCF1 snapshots remain the trust boundary.
+Existing independently authenticated MCP2 snapshots remain the trust boundary.
 Serving roots and proofs does not authenticate either root to a client.
 
 ## Docker (from repository root)
