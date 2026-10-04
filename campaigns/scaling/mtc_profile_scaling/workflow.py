@@ -162,8 +162,16 @@ def generate(args):
                 state16=authenticate_snapshot(
                     snapshot,trusted,Path('/opt/mtc/check-snapshot'))
 
-                current,path=persistent.prove_consistency(state8)
-                if current!=state16 or not verify_snapshot_consistency(
+                local_state8={
+                    'tree_size':state8['tree_size'],
+                    'hash':state8['hash'],
+                }
+                current,path=persistent.prove_consistency(local_state8)
+                local_state16={
+                    'tree_size':state16['tree_size'],
+                    'hash':state16['hash'],
+                }
+                if current!=local_state16 or not verify_snapshot_consistency(
                         old,snapshot,trusted,Path('/opt/mtc/check-snapshot'),path):
                     raise ValueError('Authenticated N=8 -> N=16 consistency failed')
 
