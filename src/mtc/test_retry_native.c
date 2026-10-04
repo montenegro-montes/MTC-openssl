@@ -203,6 +203,29 @@ int main(int argc,char **argv) {
                       SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,
                       available,available_n,NULL,0,&alert,&group_client));
 
+    /* Without retained-landmark metadata the exact request sent is bare
+       caID.  It may select only this configuration's individual landmark. */
+    TLSConfig bare_client={0};TLSEndpointConfig bare_endpoint={0};
+    bare_client.role=MTC_ROLE_CLIENT_VERIFY_SERVER;
+    assert(id_encode("32473.101.1.2.2",bare_client.id,&bare_client.n));
+    assert(id_encode("32473.101",bare_client.group,&bare_client.group_n));
+    bare_client.has_group=1;bare_endpoint.verify=&bare_client;
+    SSL *bare_client_ssl=SSL_new(client);assert(bare_client_ssl);
+    assert(endpoint_add(bare_client_ssl,MTC_EXT,SSL_EXT_CLIENT_HELLO,
+                        &out,&out_n,NULL,0,&alert,&bare_endpoint)==1);
+    assert(out_n==bare_client.group_n+3
+           &&!memcmp(out+3,bare_client.group,bare_client.group_n));
+    available_n=id_list(available,"32473.101.1.2.2");
+    assert(parse_one(bare_client_ssl,MTC_EXT,
+                     SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,
+                     available,available_n,NULL,0,&alert,&bare_client));
+    state(bare_client_ssl,MTC_ROLE_CLIENT_VERIFY_SERVER)->available=0;
+    available_n=id_list(available,"32473.102.1.2.2");
+    assert(!parse_one(bare_client_ssl,MTC_EXT,
+                      SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,
+                      available,available_n,NULL,0,&alert,&bare_client));
+    SSL_free(bare_client_ssl);
+
     group_client_state->requested_group=0;
     group_client_state->requested_n=group_client.n;
     memcpy(group_client_state->requested,group_client.id,group_client.n);

@@ -163,6 +163,23 @@ static int requested_landmark_group_contains(
            &&individual_l<=group_l;
 }
 
+/* A client without retained-landmark metadata advertises the bare CA ID.
+   In that case accept only this configuration's exact individual landmark;
+   explicit caID.2.N.L requests retain the Section 8.2.1 range semantics. */
+static int requested_mtc_group_contains(
+        const TLSConfig *c,const unsigned char *requested,size_t requested_n,
+        const unsigned char *individual,size_t individual_n){
+    size_t configured_base;uint64_t kind,log,landmark;
+    if(!c||!requested||!individual)return 0;
+    if(landmark_id_parts(c->id,c->n,&configured_base,&kind,&log,&landmark)
+       &&kind==1&&log&&landmark
+       &&requested_n==configured_base
+       &&!memcmp(requested,c->id,configured_base))
+        return individual_n==c->n&&!memcmp(individual,c->id,c->n);
+    return requested_landmark_group_contains(
+        requested,requested_n,individual,individual_n);
+}
+
 static void tls_config_free(TLSConfig *c){
     if(!c)return;
     mtc_free(c->trust);
@@ -290,8 +307,8 @@ static int parse_one(SSL *ssl,unsigned type,unsigned context,const unsigned char
                  && id.n==s->requested_n
                  && !memcmp(id.p,s->requested,id.n))
                 || (s->requested_group
-                    && requested_landmark_group_contains(
-                        s->requested,s->requested_n,id.p,id.n))))
+                    && requested_mtc_group_contains(
+                        c,s->requested,s->requested_n,id.p,id.n))))
            || (context!=SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS
                && id.n==c->n&&!memcmp(id.p,c->id,id.n))
             || (context==SSL_EXT_CLIENT_HELLO
