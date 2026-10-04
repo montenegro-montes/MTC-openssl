@@ -1,8 +1,8 @@
-"""Offline authenticated MCF1 snapshots, not an operational landmark sequence.
+"""Offline authenticated MCP2 snapshots, not an operational landmark sequence.
 
 The caller supplies an independently trusted authority.bin and checker binary.
 state.json is never a trust anchor. Preserve old snapshots outside the log.
-The container's legacy landmark slot is not used as a snapshot identity.
+MCP2 contains checkpoint material only and has no landmark signaling identity.
 """
 import json
 import os
@@ -18,6 +18,7 @@ from local_log import LocalLog
 
 def export_snapshot(log, destination, family, keys, *, log_number=1):
     destination=Path(destination)
+    if destination.suffix!='.mcp2':raise ValueError('Snapshot destination must use .mcp2')
     location=destination.resolve()
     if location==log.directory.resolve() or log.directory.resolve() in location.parents:
         raise ValueError('Retain snapshots outside the mutable log directory')
@@ -29,25 +30,18 @@ def export_snapshot(log, destination, family, keys, *, log_number=1):
     import tempfile
     with log._locked(), tempfile.TemporaryDirectory(prefix='mtc-snapshot-sign-') as temp:
         entries,_=log._read();n=len(entries)
-        if not 1<=n<=1024:raise ValueError('MCF1 supports snapshots of 1..1024 entries')
-        copied=[];public=[]
+        if not 1<=n<=1024:raise ValueError('Snapshot policy supports 1..1024 entries')
+        copied=[]
         for i,key in enumerate(keys):
             target=Path(temp)/f'{i}.key';shutil.copyfile(key,target);target.chmod(0o600)
             copied.append(target)
-            public.append(prepare.command('pkey','-in',target,'-pubout','-outform','DER'))
         timestamp=int(time.time());r=root(entries)
         signatures=[
             prepare.checkpoint_signature(
                 i, k, caid, n, r, timestamp, family, log=log_number)
             for i, k in zip(ids, copied)
         ]
-        data=prepare.checkpoint_config(
-            prepare.authority_config(
-                caid, ids, public, n, log_number=log_number),
-            entries,
-            timestamp,
-            signatures,
-        )
+        data=prepare.checkpoint_config_v2(entries,timestamp,signatures)
         # Exclusive creation: never replaces a retained snapshot, including on failure.
         with destination.open('xb') as out:
             out.write(data);out.flush();os.fsync(out.fileno())

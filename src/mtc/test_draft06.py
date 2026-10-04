@@ -93,14 +93,14 @@ def main():
                     for key in keys:prepare.keygen(key,family)
                     public=[prepare.command('pkey','-in',key,'-pubout','-outform','DER') for key in keys]
                     trusted=temp/f'{family}-trusted.bin'
-                    trusted.write_bytes(prepare.authority_config(profile['ca_id'],profile['cosigner_ids'],public,n))
+                    trusted.write_bytes(prepare.authority_config_v2(profile['ca_id'],profile['cosigner_ids'],public,n))
                     persistent=LocalLog(temp/f'{family}-persistent')
                     encoded=[core.entry(core.mtc_tbs(core.from_pem(before),profile['ca_id'],i)) for i in range(n)]
                     for value in encoded[:8]:persistent.append(value)
-                    old=export_snapshot(persistent,temp/f'{family}-8.mcf1',family,keys)
+                    old=export_snapshot(persistent,temp/f'{family}-8.mcp2',family,keys)
                     retained=old.read_bytes()
                     for value in encoded[8:]:persistent.append(value)
-                    snapshot=export_snapshot(persistent,temp/f'{family}-16.mcf1',family,keys)
+                    snapshot=export_snapshot(persistent,temp/f'{family}-16.mcp2',family,keys)
                     checker=temp/'check_snapshot'
                     state8=authenticate_snapshot(old,trusted,checker)
                     state16=authenticate_snapshot(snapshot,trusted,checker)
@@ -140,11 +140,11 @@ def main():
                     first.write_bytes(encoded[0])  # Restore only this temporary negative fixture.
                     different=LocalLog(temp/f'{family}-different')
                     for value in [b'different']+encoded[1:]:different.append(value)
-                    incompatible=export_snapshot(different,temp/f'{family}-different.mcf1',family,keys)
+                    incompatible=export_snapshot(different,temp/f'{family}-different.mcp2',family,keys)
                     assert authenticate_snapshot(incompatible,trusted,checker)['tree_size']==n
                     reject_generation('incompatible-root',authenticated_snapshot=incompatible)
-                    damaged=bytearray(snapshot.read_bytes());damaged[len(trusted.read_bytes())+4+6+8]^=1
-                    bad=temp/f'{family}-bad-root.mcf1';bad.write_bytes(damaged)
+                    damaged=bytearray(snapshot.read_bytes());damaged[4+6+8]^=1
+                    bad=temp/f'{family}-bad-root.mcp2';bad.write_bytes(damaged)
                     reject_generation('corrupted-checkpoint',authenticated_snapshot=bad)
                 if args.http_cosigner_only:
                     from threading import Thread
@@ -575,7 +575,9 @@ def main():
                 if options:
                     assert meta['tree_size']==state16['tree_size']==16
                     assert meta['checkpoint']['hash']==state16['hash']
-                    assert authenticate_snapshot(out/'trust.bin',trusted,checker)==state16
+                    assert (out/'authority.bin').read_bytes().startswith(b'MCA2')
+                    assert (out/'trust.bin').read_bytes().startswith(b'MCF1')
+                    assert authenticate_snapshot(snapshot,trusted,checker)==state16
                     assert [(out/'log'/f'{i:06d}.entry').read_bytes() for i in range(n)]==encoded
                     assert old.read_bytes()==retained
                     for i in range(n):

@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import core
 from cosigner import ExternalCosigner
+from config_formats import decode_mca2
 import prepare
 
 
@@ -15,15 +16,19 @@ def certificate_serial(path):
     return int.from_bytes(fields[1][1],"big")
 
 
-def authority_numbers(data):
+def legacy_authority(data):
+    assert data.startswith(b"MCF1")
     offset=4
     offset+=1+data[offset]
     count=data[offset];offset+=1
+    signers=[]
     for _ in range(count):
-        offset+=1+data[offset]
+        length=data[offset];offset+=1
+        identity=data[offset:offset+length].decode();offset+=length
         length=int.from_bytes(data[offset:offset+2],"big")
-        offset+=2+length
-    return (int.from_bytes(data[offset:offset+2],"big"),
+        offset+=2;spki=data[offset:offset+length];offset+=length
+        signers.append((identity,spki))
+    return (tuple(signers),int.from_bytes(data[offset:offset+2],"big"),
             int.from_bytes(data[offset+2:offset+10],"big"),
             int.from_bytes(data[offset+10:offset+18],"big"))
 
@@ -100,8 +105,16 @@ with tempfile.TemporaryDirectory(prefix="mtc-prepare-log-number-") as temporary:
 
     assert certificate_serial(log_2_out/"standalone-0000.der")==2<<48
     assert certificate_serial(log_2_out/"landmark-0000.der")==2<<48
-    assert authority_numbers((log_2_out/"authority.bin").read_bytes())==(
-        2,2<<48,2<<48)
+    authority=decode_mca2((log_2_out/"authority.bin").read_bytes())
+    assert (authority.ca_id,authority.log_number,authority.min_serial,
+            authority.max_serial)==(profile["ca_id"],2,2<<48,2<<48)
+    assert (log_2_out/"authority.bin").read_bytes().startswith(b"MCA2")
+    trust=(log_2_out/"trust.bin").read_bytes()
+    legacy_signers,legacy_log,legacy_min,legacy_max=legacy_authority(trust)
+    assert trust.startswith(b"MCF1")
+    assert (authority.signers,authority.log_number,authority.min_serial,
+            authority.max_serial)==(
+                legacy_signers,legacy_log,legacy_min,legacy_max)
     assert meta["log_number"]==2
     assert json.loads((log_2_out/"manifest.json").read_text())["log_number"]==2
     assert external.accepted.tree_size==1

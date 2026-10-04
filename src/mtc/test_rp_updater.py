@@ -20,7 +20,7 @@ from trusted_subtrees import decode_trusted_subtrees
 with tempfile.TemporaryDirectory(prefix="mtc-rp-update-test-") as temporary:
     temp = Path(temporary)
     log_directory = temp / "log"
-    published = temp / "published.mcf1"
+    published = temp / "published.mcp2"
 
     log = LocalLog(log_directory)
     entries = [bytes([i]) for i in range(16)]

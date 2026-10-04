@@ -1,4 +1,4 @@
-"""Real MCF1/HTTP integration test for the relying-party updater."""
+"""Real MCP2/HTTP integration test for the relying-party updater."""
 
 import argparse
 from pathlib import Path
@@ -59,7 +59,7 @@ def main():
                     "pkey", "-in", key, "-pubout", "-outform", "DER")
                 for key in keys
             ]
-            data = prepare.authority_config(
+            data = prepare.authority_config_v2(
                 profile["ca_id"],
                 profile["cosigner_ids"],
                 public,
@@ -78,10 +78,10 @@ def main():
         for entry in entries[:8]:
             log.append(entry)
 
-        snapshot8 = temp / "snapshot-8.mcf1"
+        snapshot8 = temp / "snapshot-8.mcp2"
         export_snapshot(log, snapshot8, args.profile, keys)
 
-        published = temp / "published.mcf1"
+        published = temp / "published.mcp2"
         published.write_bytes(snapshot8.read_bytes())
 
         server = LogServer(
@@ -98,7 +98,7 @@ def main():
         base_url = "http://127.0.0.1:%d/" % server.server_address[1]
 
         try:
-            # Bootstrap is authenticated by the real native MCF1 checker.
+            # Bootstrap is authenticated by the real native MCA2/MCP2 checker.
             state8 = fetch_and_advance_checkpoint(
                 base_url,
                 authority,
@@ -145,7 +145,7 @@ def main():
             for entry in entries[8:]:
                 log.append(entry)
 
-            snapshot16 = temp / "snapshot-16.mcf1"
+            snapshot16 = temp / "snapshot-16.mcp2"
             export_snapshot(log, snapshot16, args.profile, keys)
             published.write_bytes(snapshot16.read_bytes())
 
@@ -232,7 +232,7 @@ def main():
             ]
             authority_log2 = temp / "trusted-log2-authority.bin"
             authority_log2.write_bytes(
-                prepare.authority_config(
+                prepare.authority_config_v2(
                     profile["ca_id"],
                     profile["cosigner_ids"],
                     public,
@@ -241,7 +241,7 @@ def main():
                 )
             )
 
-            snapshot_log2 = temp / "snapshot-log2-16.mcf1"
+            snapshot_log2 = temp / "snapshot-log2-16.mcp2"
             export_snapshot(
                 log,
                 snapshot_log2,
@@ -279,7 +279,7 @@ def main():
             # An independently valid snapshot signed by substituted keys must
             # not authenticate against the relying party's provisioned trust.
             attacker_keys, attacker_authority = provision("attacker")
-            substituted = temp / "substituted.mcf1"
+            substituted = temp / "substituted.mcp2"
             export_snapshot(log, substituted, args.profile, attacker_keys)
 
             published.write_bytes(substituted.read_bytes())
@@ -309,7 +309,7 @@ def main():
             server.server_close()
 
     print(
-        "PASS: real MCF1 HTTP checkpoint authentication and "
+        "PASS: real MCP2 HTTP checkpoint authentication and "
         "RFC9162 RP evolution"
     )
 

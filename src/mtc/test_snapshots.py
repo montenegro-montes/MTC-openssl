@@ -6,6 +6,7 @@ import tempfile
 
 import prepare
 from build_check_snapshot import build_check_snapshot
+from config_formats import decode_mca2, decode_mcp2
 from core import root
 from crypto_profiles import crypto_profile
 from local_log import LocalLog
@@ -37,13 +38,17 @@ def main():
             keys=[temp/f'{label}-{i}.key' for i in range(2)]
             for key in keys:prepare.keygen(key,args.profile)
             public=[prepare.command('pkey','-in',key,'-pubout','-outform','DER') for key in keys]
-            data=prepare.authority_config(profile['ca_id'],profile['cosigner_ids'],public,16)
+            data=prepare.authority_config_v2(profile['ca_id'],profile['cosigner_ids'],public,16)
             authority=temp/f'{label}-authority.bin';authority.write_bytes(data)
+            assert data.startswith(b'MCA2')
+            assert decode_mca2(data).log_number==1
             return keys,authority
         keys,trusted=provision('trusted')
         log=LocalLog(temp/'log-directory');entries=[bytes([i]) for i in range(16)]
         for entry in entries[:8]:log.append(entry)
-        old=export_snapshot(log,temp/'snapshot-8.mcf1',args.profile,keys)
+        old=export_snapshot(log,temp/'snapshot-8.mcp2',args.profile,keys)
+        assert old.suffix=='.mcp2' and old.read_bytes().startswith(b'MCP2')
+        assert decode_mcp2(old.read_bytes()).tree_size==8
         retained=old.read_bytes()
         state8=authenticate_snapshot(old,trusted,checker)
         assert state8=={
@@ -53,7 +58,8 @@ def main():
         }
         log=LocalLog(log.directory)
         for entry in entries[8:]:log.append(entry)
-        new=export_snapshot(log,temp/'snapshot-16.mcf1',args.profile,keys)
+        new=export_snapshot(log,temp/'snapshot-16.mcp2',args.profile,keys)
+        assert decode_mcp2(new.read_bytes()).tree_size==16
         state16=authenticate_snapshot(new,trusted,checker)
         assert state16=={
             'log_number':1,
@@ -109,7 +115,7 @@ def main():
         assert [(x.log_number,x.start,x.end) for x in trusted_subtrees]==[
             (1,0,4),(1,4,8),(1,8,12),(1,12,16)
         ]
-        print('PASS: authenticated MCF1 checkpoint -> Section 7.4 trusted subtrees')
+        print('PASS: authenticated MCP2 checkpoint -> Section 7.4 trusted subtrees')
 
         from prepare import write_trusted_subtrees
         from trusted_subtrees import decode_trusted_subtrees
@@ -150,7 +156,7 @@ def main():
         ]
         trusted_log2=temp/'trusted-log2-authority.bin'
         trusted_log2.write_bytes(
-            prepare.authority_config(
+            prepare.authority_config_v2(
                 profile['ca_id'],
                 profile['cosigner_ids'],
                 public,
@@ -160,7 +166,7 @@ def main():
         )
         snapshot_log2=export_snapshot(
             log,
-            temp/'snapshot-log2-16.mcf1',
+            temp/'snapshot-log2-16.mcp2',
             args.profile,
             keys,
             log_number=2,
@@ -175,26 +181,32 @@ def main():
         assert state_log2['tree_size']==state16['tree_size']
         assert state_log2['hash']==state16['hash']
         assert state_log2['log_number']!=state16['log_number']
+        rejected(lambda:authenticate_snapshot(new,trusted_log2,checker))
+        rejected(lambda:authenticate_snapshot(snapshot_log2,trusted,checker))
         print('PASS: independently authenticated log 1/log 2 checkpoints remain distinct')
 
         rejected(lambda:export_snapshot(log,old,args.profile,keys))
         assert old.read_bytes()==retained
         print('PASS: independently authenticated N=8 -> N=16; consistency; overwrite refused')
 
-        # authority.bin has fixed-width serial bounds, so its length is size-independent.
-        root_offset=len(trusted.read_bytes())+4+6+8
+        root_offset=4+6+8
         for label,snapshot,offset in [('old-root',old,root_offset),('new-root',new,root_offset)]:
             data=bytearray(snapshot.read_bytes());data[offset]^=1
-            bad=temp/(label+'.mcf1');bad.write_bytes(data)
+            bad=temp/(label+'.mcp2');bad.write_bytes(data)
             rejected(lambda:authenticate_snapshot(bad,trusted,checker))
         data=bytearray(new.read_bytes())
-        sig_offset=root_offset+32+2  # MCF1 outer signatures length remains uint16.
+        sig_offset=root_offset+32+3
         sig_offset+=1+data[sig_offset]+2  # ID vector, individual signature uint16.
         data[sig_offset]^=1
-        bad=temp/'bad-signature.mcf1';bad.write_bytes(data)
+        bad=temp/'bad-signature.mcp2';bad.write_bytes(data)
+        rejected(lambda:authenticate_snapshot(bad,trusted,checker))
+        data=bytearray(new.read_bytes())
+        subtree_offset=53+int.from_bytes(data[50:53],'big')
+        data[subtree_offset+5]^=1
+        bad=temp/'bad-cover.mcp2';bad.write_bytes(data)
         rejected(lambda:authenticate_snapshot(bad,trusted,checker))
         attacker_keys,attacker_authority=provision('attacker')
-        substituted=export_snapshot(log,temp/'substituted.mcf1',args.profile,attacker_keys)
+        substituted=export_snapshot(log,temp/'substituted.mcp2',args.profile,attacker_keys)
         assert authenticate_snapshot(substituted,attacker_authority,checker)==state16
         rejected(lambda:authenticate_snapshot(substituted,trusted,checker))
         modified=[bytes([path[0][0]^1])+path[0][1:]]+path[1:]
@@ -203,13 +215,13 @@ def main():
 
         (log.directory/'log/000003.entry').write_bytes(b'rewritten')
         rejected(lambda:LocalLog(log.directory))
-        rejected(lambda:export_snapshot(log,temp/'must-not-export.mcf1',args.profile,keys))
+        rejected(lambda:export_snapshot(log,temp/'must-not-export.mcp2',args.profile,keys))
         # Model coordinated replacement of unsigned metadata plus history, then
         # even obtain legitimate signatures. Only retained authenticated N=8 is trusted.
         changed=list(entries);changed[3]=b'rewritten'
         (log.directory/'state.json').write_text(json.dumps({'tree_size':16,'hash':root(changed).hex()}))
         rewritten_log=LocalLog(log.directory)
-        rewritten=export_snapshot(rewritten_log,temp/'rewritten-16.mcf1',args.profile,keys)
+        rewritten=export_snapshot(rewritten_log,temp/'rewritten-16.mcp2',args.profile,keys)
         changed_state=authenticate_snapshot(rewritten,trusted,checker)
         assert changed_state['hash']==root(changed).hex()
         from core import consistency
@@ -217,7 +229,7 @@ def main():
         rejected(lambda:rewritten_log.prove_consistency(local_state8))
         assert old.read_bytes()==retained
         print('PASS: disk tampering detected; validly signed rewritten history fails consistency')
-    print('Authenticated MCF1 snapshot tests PASS; temporary data removed')
+    print('Authenticated MCP2 snapshot tests PASS; temporary data removed')
 
 
 if __name__=='__main__':main()

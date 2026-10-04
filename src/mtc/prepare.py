@@ -3,6 +3,8 @@ import json,shutil,subprocess,tempfile,time
 from datetime import datetime, timezone
 from pathlib import Path
 from core import *
+from config_formats import (MCA2Authority, MCP2Checkpoint,
+                            encode_mca2, encode_mcp2)
 from crypto_profiles import crypto_profile, SIGNATURE_PROFILES, TREE_HASH
 OPENSSL='/opt/openssl/bin/openssl'
 def command(*args,data=None):return subprocess.run([OPENSSL,*map(str,args)],input=data,capture_output=True,check=True).stdout
@@ -28,6 +30,15 @@ def authority_config(caid,ids,public,n,*,log_number=1):
     for ident,spki in zip(ids,public):config+=vec(ident.encode(),1)+vec(spki)
     first=log_number<<48
     return config+uint(log_number,2)+uint(first,8)+uint(first+n-1,8)
+
+def authority_config_v2(caid,ids,public,n,*,log_number=1):
+    """Canonical MCA2 authority.bin from the same authority source data."""
+    if (type(n) is not int or not 1<=n<1<<48 or len(ids)!=len(public)
+            or type(log_number) is not int or not 1<=log_number<=65535):
+        raise ValueError('MCA2 configuration')
+    first=log_number<<48
+    return encode_mca2(MCA2Authority(
+        caid,tuple(zip(ids,public)),log_number,first,first+n-1))
 
 def write_trusted_subtrees(path, subtrees):
     """Write authenticated trusted-subtree cache in MTS1 format."""
@@ -55,6 +66,13 @@ def checkpoint_config(authority,entries,timestamp,cp_sigs):
     config=authority+uint(1,4)+uint(n,6)+uint(timestamp,8)+root(entries)+signatures(cp_sigs)+bytes([len(subtrees)])
     for start,end in subtrees:config+=uint(start,6)+uint(end,6)+root(entries[start:end])
     return config
+
+def checkpoint_config_v2(entries,timestamp,cp_sigs):
+    """Canonical authority-independent MCP2 authenticated checkpoint."""
+    n=len(entries);subtrees=cover(0,n)
+    return encode_mcp2(MCP2Checkpoint(
+        n,timestamp,root(entries),tuple(cp_sigs),
+        tuple((start,end,root(entries[start:end])) for start,end in subtrees)))
 def not_after(tbs):
     validity=items(content(tbs,0x30))[4]
     times=items(content(validity[2],0x30))
@@ -191,13 +209,18 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
         landmark_certificates.append(i)
     # OOB configuration: keys, serial limits, signed checkpoint and its two covering subtrees.
     # This file is a lab storage format, never sent as an MTC certificate.
-    config=authority_config(caid,ids,public,n,log_number=log_number)
-    (out/'authority.bin').write_bytes(config)
-    config=checkpoint_config(config,entries,timestamp,cp_sigs)
+    legacy_authority=authority_config(caid,ids,public,n,log_number=log_number)
+    (out/'authority.bin').write_bytes(
+        authority_config_v2(caid,ids,public,n,log_number=log_number))
+    config=checkpoint_config(legacy_authority,entries,timestamp,cp_sigs)
     (out/'trust.bin').write_bytes(config)
     if authenticated is not None:
         # Do not accept output signed with keys different from independently pinned trust.
-        generated=authenticate_snapshot(out/'trust.bin',trusted_authority,snapshot_checker)
+        with tempfile.NamedTemporaryFile(suffix='.mcp2') as generated_snapshot:
+            generated_snapshot.write(checkpoint_config_v2(entries,timestamp,cp_sigs))
+            generated_snapshot.flush()
+            generated=authenticate_snapshot(
+                generated_snapshot.name,trusted_authority,snapshot_checker)
         if generated!=authenticated:raise ValueError('Generated checkpoint differs from authenticated state')
     if landmark_sequence is None:
         published_landmarks=(0,n);latest_landmark=1

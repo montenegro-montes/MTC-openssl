@@ -1,6 +1,6 @@
 #include "mtc.c"
 int main(int argc,char **argv){
-    if(argc!=3)return 2;MTCConfig *c=mtc_load(argv[1],0);FILE *f=fopen(argv[2],"rb");
+    if(argc!=3)return 2;MTCConfig *c=mtc_load_authority_config_v2(argv[1]);FILE *f=fopen(argv[2],"rb");
     if(!c||!f)return 2;unsigned char der[MTC_MAX],random[8192];size_t len=fread(der,1,sizeof(der),f);fclose(f);
     const unsigned char *p=der;X509 *x=d2i_X509(NULL,&p,(long)len);if(!x||!mtc_verify(x,c))return 2;
     const ASN1_BIT_STRING *value;X509_get0_signature(&value,NULL,x);ASN1_BIT_STRING *mut=(ASN1_BIT_STRING *)value;

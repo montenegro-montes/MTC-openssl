@@ -126,12 +126,17 @@ static int config_signals(MTCConfig *c){
     return n>0&&n<(int)sizeof(id)&&id_encode(id,c->request_signal,&c->request_signal_len);
 }
 static int ascii(Slice x,char *s){if(!x.n||x.n>=80||memchr(x.p,0,x.n))return 0;memcpy(s,x.p,x.n);s[x.n]=0;unsigned char b[80];size_t n;return id_encode(s,b,&n);}
-static int message(const MTCConfig *c,const Signer *signer,uint64_t start,uint64_t end,const unsigned char root[32],uint64_t timestamp,unsigned char *out,size_t *n){
-    char cos[120],log[140];int a=snprintf(cos,sizeof(cos),"oid/1.3.6.1.4.1.%s",signer->id),b=snprintf(log,sizeof(log),"oid/1.3.6.1.4.1.%s.0.%llu",c->caid,(unsigned long long)c->log);size_t pos=0;
-    if(a<=0||a>=120||b<=0||b>=140)return 0;
+static int message_fields(const char *caid,uint64_t log_number,const char *signer_id,
+                          uint64_t start,uint64_t end,const unsigned char root[32],
+                          uint64_t timestamp,unsigned char *out,size_t *n){
+    char cos[300],log[320];int a=snprintf(cos,sizeof(cos),"oid/1.3.6.1.4.1.%s",signer_id),b=snprintf(log,sizeof(log),"oid/1.3.6.1.4.1.%s.0.%llu",caid,(unsigned long long)log_number);size_t pos=0;
+    if(a<=0||a>255||b<=0||b>255)return 0;
     memcpy(out,"subtree/v1\n\0",12);pos=12;out[pos++]=(unsigned char)a;memcpy(out+pos,cos,a);pos+=a;
     put(out+pos,timestamp,8);pos+=8;out[pos++]=(unsigned char)b;memcpy(out+pos,log,b);pos+=b;
     put(out+pos,start,8);pos+=8;put(out+pos,end,8);pos+=8;memcpy(out+pos,root,32);*n=pos+32;return 1;
+}
+static int message(const MTCConfig *c,const Signer *signer,uint64_t start,uint64_t end,const unsigned char root[32],uint64_t timestamp,unsigned char *out,size_t *n){
+    return message_fields(c->caid,c->log,signer->id,start,end,root,timestamp,out,n);
 }
 /* Signer policy only. The Merkle tree and leaf hashes remain SHA-256. */
 static const char *ec_signer_digest(EVP_PKEY *key){
@@ -305,6 +310,35 @@ MTCAuthorityV2 *mtc_load_authority_v2(const char *path){
     if(read_v2_file(path,&data,&length))result=parse_authority_v2((Slice){data,length});
     OPENSSL_free(data);return result;
 }
+MTCConfig *mtc_load_authority_config_v2(const char *path){
+    MTCAuthorityV2 *authority=mtc_load_authority_v2(path);MTCConfig *config=NULL;
+    if(!authority||authority->count!=2||strcmp(authority->caid,authority->signers[0].id)||
+       !strcmp(authority->signers[0].id,authority->signers[1].id)||
+       strlen(authority->caid)>=sizeof(((MTCConfig *)0)->caid)||
+       strlen(authority->signers[0].id)>=sizeof(((Signer *)0)->id)||
+       strlen(authority->signers[1].id)>=sizeof(((Signer *)0)->id)||
+       authority->signers[0].idlen>sizeof(((Signer *)0)->binary)||
+       authority->signers[1].idlen>sizeof(((Signer *)0)->binary)||
+       authority->min!=(authority->log<<48)||authority->max<authority->min||
+       authority->max-authority->min>=1024)goto end;
+    config=OPENSSL_zalloc(sizeof(*config));if(!config)goto end;
+    memcpy(config->caid,authority->caid,strlen(authority->caid)+1);
+    config->count=2;config->log=authority->log;config->min=authority->min;config->max=authority->max;
+    for(unsigned i=0;i<2;i++){
+        const AuthoritySignerV2 *source=&authority->signers[i];const unsigned char *p=source->spki;
+        memcpy(config->signers[i].id,source->id,strlen(source->id)+1);
+        memcpy(config->signers[i].binary,source->binary,source->idlen);
+        config->signers[i].idlen=source->idlen;
+        config->signers[i].key=d2i_PUBKEY(NULL,&p,(long)source->spki_len);
+        if(!config->signers[i].key||p!=source->spki+source->spki_len||
+           !supported_signer_key(config->signers[i].key)){
+            mtc_free(config);config=NULL;goto end;
+        }
+    }
+    if(!config_signals(config)){mtc_free(config);config=NULL;}
+end:
+    mtc_free_authority_v2(authority);return config;
+}
 MTCCheckpointV2 *mtc_load_checkpoint_v2(const char *path){
     unsigned char *data=NULL;size_t length=0;MTCCheckpointV2 *result=NULL;
     if(read_v2_file(path,&data,&length))result=parse_checkpoint_v2((Slice){data,length});
@@ -314,6 +348,35 @@ MTCTrustBundleV2 *mtc_load_trust_bundle_v2(const char *path){
     unsigned char *data=NULL;size_t length=0;MTCTrustBundleV2 *result=NULL;
     if(read_v2_file(path,&data,&length))result=parse_trust_bundle_v2((Slice){data,length});
     OPENSSL_free(data);return result;
+}
+int mtc_authenticate_checkpoint_v2(const MTCAuthorityV2 *authority,
+                                   const MTCCheckpointV2 *checkpoint){
+    unsigned char message_data[700];size_t message_len;
+    if(!authority||!checkpoint||!authority->count)return 0;
+    for(size_t i=0;i<authority->count;i++){
+        const AuthoritySignerV2 *signer=&authority->signers[i];
+        const unsigned char *key_data=signer->spki;EVP_PKEY *key=NULL;
+        Slice records={checkpoint->signatures,checkpoint->signatures_len},identity,signature;
+        int found=0,valid=0;
+        key=d2i_PUBKEY(NULL,&key_data,(long)signer->spki_len);
+        if(!key||key_data!=signer->spki+signer->spki_len||!supported_signer_key(key))goto signer_end;
+        while(records.n){
+            if(!vector(&records,1,&identity)||!vector(&records,2,&signature))goto signer_end;
+            if(identity.n==signer->idlen&&!memcmp(identity.p,signer->binary,identity.n)){
+                EVP_MD_CTX *md=EVP_MD_CTX_new();found=1;
+                if(md&&message_fields(authority->caid,authority->log,signer->id,
+                        0,checkpoint->size,checkpoint->root,checkpoint->timestamp,
+                        message_data,&message_len)&&
+                   EVP_DigestVerifyInit_ex(md,NULL,ec_signer_digest(key),NULL,NULL,key,NULL))
+                    valid=EVP_DigestVerify(md,signature.p,signature.n,message_data,message_len)==1;
+                EVP_MD_CTX_free(md);break;
+            }
+        }
+signer_end:
+        EVP_PKEY_free(key);
+        if(!found||!valid)return 0;
+    }
+    return 1;
 }
 int mtc_add_trusted_subtree(MTCConfig *c,uint64_t log_number,
                             uint64_t start,uint64_t end,

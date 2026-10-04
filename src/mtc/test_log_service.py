@@ -168,28 +168,28 @@ class ServiceTests(unittest.TestCase):
                          (404, {'error': 'Snapshot not configured'}))
 
         self.stop()
-        snapshot = self.published/'snapshot.mcf1'
-        snapshot.write_bytes(b'MCF1\x00published')
+        snapshot = self.published/'snapshot.mcp2'
+        snapshot.write_bytes(b'MCP2\x00published')
         self.start(snapshot)
 
         self.assertEqual(self.request('GET', '/snapshot'),
-                         (200, b'MCF1\x00published'))
+                         (200, b'MCP2\x00published'))
 
         replacement = snapshot.with_suffix('.tmp')
-        replacement.write_bytes(b'MCF1\x00replacement')
+        replacement.write_bytes(b'MCP2\x00replacement')
         replacement.replace(snapshot)
 
         self.assertEqual(self.request('GET', '/snapshot'),
-                         (200, b'MCF1\x00replacement'))
+                         (200, b'MCP2\x00replacement'))
 
         snapshot.unlink()
         self.assertEqual(self.request('GET', '/snapshot'),
                          (500, {'error': 'Snapshot unavailable'}))
 
     def test_snapshot_configuration_rejects_symlink(self):
-        target = self.published/'snapshot-target.mcf1'
-        link = self.published/'snapshot-link.mcf1'
-        target.write_bytes(b'MCF1')
+        target = self.published/'snapshot-target.mcp2'
+        link = self.published/'snapshot-link.mcp2'
+        target.write_bytes(b'MCP2')
         link.symlink_to(target)
         with self.assertRaises(ValueError):
             LogServer(('127.0.0.1', 0), self.directory, link)

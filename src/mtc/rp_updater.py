@@ -70,7 +70,7 @@ def fetch_authenticated_checkpoint(
     data = _get(base_url, "/snapshot", binary=True)
 
     with tempfile.TemporaryDirectory(prefix="mtc-rp-snapshot-") as temporary:
-        snapshot = Path(temporary) / "snapshot.mcf1"
+        snapshot = Path(temporary) / "snapshot.mcp2"
         snapshot.write_bytes(data)
         state = authenticate(snapshot, trusted_authority, checker)
 
