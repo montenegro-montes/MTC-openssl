@@ -11,7 +11,7 @@ services:
       - mtc-log-data:/data
     restart: "no"
 
-  monitor:
+  monitor-a:
     build:
       context: ..
       dockerfile: docker/monitor/Dockerfile
@@ -30,7 +30,50 @@ services:
       - mtc-log
     volumes:
       - ${MTC_MONITOR_TRUSTED_AUTHORITY:-./monitor/authority.bin}:/run/mtc-monitor/authority.bin:ro
-      - mtc-monitor-state:/var/lib/mtc-monitor
+      - mtc-monitor-a-state:/var/lib/mtc-monitor
+    restart: "no"
+
+  monitor-b:
+    build:
+      context: ..
+      dockerfile: docker/monitor/Dockerfile
+    command:
+      - --log-url
+      - ${MTC_MONITOR_LOG_URL:-http://mtc-log:8080}
+      - --trusted-authority
+      - /run/mtc-monitor/authority.bin
+      - --checker
+      - /usr/local/bin/check_snapshot
+      - --state-directory
+      - /var/lib/mtc-monitor
+      - --interval
+      - ${MTC_MONITOR_INTERVAL:-60}
+    depends_on:
+      - mtc-log
+    volumes:
+      - ${MTC_MONITOR_TRUSTED_AUTHORITY:-./monitor/authority.bin}:/run/mtc-monitor/authority.bin:ro
+      - mtc-monitor-b-state:/var/lib/mtc-monitor
+    restart: "no"
+
+  checkpoint-gossip:
+    profiles: ["gossip"]
+    build:
+      context: ..
+      dockerfile: docker/gossip/Dockerfile
+    command:
+      - --first
+      - /views/a/checkpoint.json
+      - --second
+      - /views/b/checkpoint.json
+      - --log-url
+      - ${MTC_GOSSIP_LOG_URL:-http://mtc-log:8080}
+    depends_on:
+      - mtc-log
+      - monitor-a
+      - monitor-b
+    volumes:
+      - mtc-monitor-a-state:/views/a:ro
+      - mtc-monitor-b-state:/views/b:ro
     restart: "no"
 
   external-cosigner:
@@ -91,4 +134,5 @@ volumes:
   cosigner-state:
     external: true
     name: mtc-external-cosigner_cosigner-state
-  mtc-monitor-state:
+  mtc-monitor-a-state:
+  mtc-monitor-b-state:
