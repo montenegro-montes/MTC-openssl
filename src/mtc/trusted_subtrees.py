@@ -7,7 +7,7 @@ policy enforcement remain the caller's responsibility.
 
 from dataclasses import dataclass
 
-from core import root, subtree_consistency, verify_subtree_consistency, valid_subtree
+from core import root, subtree_consistency, verify_subtree_consistency
 from landmarks import active, subtrees, validate_sequence
 
 
@@ -200,8 +200,13 @@ def _validate_trusted_subtree(subtree, seen):
     if (type(subtree.start) is not int
             or type(subtree.end) is not int
             or not 0 <= subtree.start < 1 << 48
-            or not 0 <= subtree.end < 1 << 48
-            or not valid_subtree(subtree.start, subtree.end)):
+            or not 0 <= subtree.end < 1 << 48):
+        raise ValueError("subtree interval")
+
+    size = subtree.end - subtree.start
+    if (size <= 0
+            or size & (size - 1) != 0
+            or subtree.start % size != 0):
         raise ValueError("subtree interval")
 
     if not isinstance(subtree.hash, bytes) or len(subtree.hash) != 32:

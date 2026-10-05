@@ -9,7 +9,10 @@ from landmarks import Landmark
 from local_log import LocalLog
 from trusted_subtrees import (
     SubtreeEvidence,
+    TrustedSubtree,
     build_evidence,
+    decode_trusted_subtrees,
+    encode_trusted_subtrees,
     validate_trusted_subtrees,
 )
 
@@ -206,5 +209,30 @@ try:
 
 finally:
     temp.cleanup()
+
+# MTS1 uses the same positive, power-of-two, aligned intervals as Chromium.
+valid_mts1 = encode_trusted_subtrees([
+    TrustedSubtree(1, 0, 4, b"\x11" * 32),
+])
+assert decode_trusted_subtrees(valid_mts1) == [
+    TrustedSubtree(1, 0, 4, b"\x11" * 32),
+]
+
+for start, end in ((0, 0), (0, 3)):
+    invalid = TrustedSubtree(1, start, end, b"\x11" * 32)
+    fail(
+        lambda invalid=invalid: encode_trusted_subtrees([invalid]),
+        "encoded invalid MTS1 subtree interval",
+    )
+    encoded = (
+        b"MTS1\x00\x01\x00\x01"
+        + start.to_bytes(6, "big")
+        + end.to_bytes(6, "big")
+        + b"\x11" * 32
+    )
+    fail(
+        lambda encoded=encoded: decode_trusted_subtrees(encoded),
+        "decoded invalid MTS1 subtree interval",
+    )
 
 print("PASS: draft-06 trusted subtrees")
