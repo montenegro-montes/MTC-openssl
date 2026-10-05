@@ -613,3 +613,21 @@ existing discovery/cryptographic validation/generation behavior. X.509 discovery
 PCAP and measurement routes are unchanged. The evidence is local trusted input;
 hash checks detect stale fixture data, not an attacker rewriting both data and
 its validation evidence.
+
+### RP state and MTS1 freshness policy
+
+`current` identifies the only authorized operational RP generation. A fully
+validated update publishes an immutable generation and atomically switches
+`current` to it; a failed update leaves `current` unchanged, so the previous
+last-known-good state remains usable. Historical generations are retained for
+audit and recovery, but the canonical flow never selects them automatically.
+Chromium consumes `trusted-subtrees.mts1` from the generation selected by
+`current`.
+
+Published MTS1 state currently has no TTL, max-age, or temporal expiration, so
+the last-known-good generation may be reused indefinitely at the protocol
+level. This preserves its cryptographic validity, but prolonged Log
+unavailability can delay incorporation of newer landmarks or operational and
+revocation changes. An MTS1 supplied directly outside the `current` flow is
+prevalidated local configuration and therefore an administrative trust
+boundary.
