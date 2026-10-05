@@ -9,7 +9,25 @@ CONFIG="$STATE/paths.env"
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
 usage() {
- echo 'Usage: mt-lab [init|status|--help]'
+ echo 'Usage: mt-lab [init|prepare|status|--help]'
+}
+
+fixture_valid() {
+ local root=$1 path
+ for path in \
+  manifest.json \
+  transparency/ecdsa-p256/persistent-log \
+  transparency/ecdsa-p256/snapshot-n8.mcp2 \
+  transparency/ecdsa-p256/snapshot-n16.mcp2 \
+  transparency/ecdsa-p256/trusted-authority.bin \
+  batch16/mtc/ecdsa-p256/manifest.json \
+  batch16/mtc/ecdsa-p256/landmarks.txt \
+  batch16/mtc/ecdsa-p256/authority.bin \
+  batch16/mtc/ecdsa-p256/trust.bin \
+  population/ecdsa-p256/0.key
+ do
+  [[ -e "$root/$path" ]] || return 1
+ done
 }
 
 init() {
@@ -26,6 +44,36 @@ init() {
  echo "MTC laboratory initialized: $CONFIG"
 }
 
+prepare() (
+ [[ -f "$CONFIG" ]] || fail 'Run mt-lab init first.'
+ source "$CONFIG"
+ [[ "${MT_LAB_REPOSITORY:-}" == "$REPO" && "${MT_LAB_STATE:-}" == "$STATE" ]] ||
+  fail 'Laboratory configuration does not match this checkout.'
+ if [[ -n "${MT_LAB_FIXTURE:-}" ]]; then
+  fixture_valid "$MT_LAB_FIXTURE" ||
+   fail "Selected fixture is incomplete; preserved at $MT_LAB_FIXTURE"
+  echo "MTC laboratory already prepared: $MT_LAB_FIXTURE"
+  return
+ fi
+ mkdir "$STATE/prepare.lock" 2>/dev/null || fail 'Laboratory preparation is already active.'
+ trap 'rmdir "$STATE/prepare.lock" 2>/dev/null || true' EXIT
+ local fixture temporary
+ fixture="$REPO/artifacts/mt-lab/fixture-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+ [[ ! -e "$fixture" ]] || fail "Fixture path already exists: $fixture"
+ "$REPO/bin/base/mt-prepare" run 2
+ python3 "$REPO/campaigns/scaling/mtc_profile_scaling/workflow.py" generate \
+  --output "$fixture" --profile ecdsa-p256 --sizes 16 --execute
+ fixture_valid "$fixture" || fail "Generated fixture is incomplete; preserved at $fixture"
+ temporary="$STATE/paths.env.tmp.$$"
+ {
+  printf 'MT_LAB_REPOSITORY=%q\n' "$REPO"
+  printf 'MT_LAB_STATE=%q\n' "$STATE"
+  printf 'MT_LAB_FIXTURE=%q\n' "$fixture"
+ } > "$temporary"
+ mv "$temporary" "$CONFIG"
+ echo "MTC laboratory prepared: $fixture"
+)
+
 status() {
  local fixture='' preparation docker
  if [[ -f "$CONFIG" ]]; then
@@ -36,7 +84,11 @@ status() {
  else
   state="not initialized ($STATE)"
  fi
- if [[ -d "$REPO/.mt-state/cryptographic-setup" ]]; then
+ if [[ -n "$fixture" ]] && fixture_valid "$fixture"; then
+  preparation='prepared'
+ elif [[ -n "$fixture" ]]; then
+  preparation='selected fixture is incomplete'
+ elif [[ -d "$REPO/.mt-state/cryptographic-setup" ]]; then
   preparation='mt-prepare state present; laboratory preparation not inferred'
  else
   preparation='not run'
@@ -57,6 +109,7 @@ status() {
 
 case "${1:---help}" in
  init) [[ "$#" == 1 ]] || fail 'Usage: mt-lab init'; init;;
+ prepare) [[ "$#" == 1 ]] || fail 'Usage: mt-lab prepare'; prepare;;
  status) [[ "$#" == 1 ]] || fail 'Usage: mt-lab status'; status;;
  help|--help|-h) [[ "$#" == 1 ]] || fail 'Usage: mt-lab --help'; usage;;
  *) fail 'Unknown command; use --help.';;
