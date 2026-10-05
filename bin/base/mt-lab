@@ -5,11 +5,32 @@ set -euo pipefail
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 STATE="$REPO/.mt-state/mt-lab"
 CONFIG="$STATE/paths.env"
+COMPOSE_PROJECT_NAME=mtc-lab
+COMPOSE_FILE="$REPO/docker/compose.yaml"
+COMPOSE_PREFLIGHT="$REPO/docker/compose.monitor-preflight.yaml"
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
 usage() {
- echo 'Usage: mt-lab [init|prepare|status|--help]'
+ echo 'Usage: mt-lab [init|prepare|up|status|down|--help]'
+}
+
+compose_base() {
+ COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME \
+  docker compose -f "$COMPOSE_FILE" "$@"
+}
+
+compose_lab() {
+ MTC_MONITOR_PREFLIGHT_LOG=$MT_LAB_FIXTURE/transparency/ecdsa-p256/persistent-log \
+ MTC_MONITOR_PREFLIGHT_SNAPSHOT=$MT_LAB_FIXTURE/transparency/ecdsa-p256/snapshot-n16.mcp2 \
+ MTC_MONITOR_PREFLIGHT_AUTHORITY=$MT_LAB_FIXTURE/transparency/ecdsa-p256/trusted-authority.bin \
+ COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME \
+  docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_PREFLIGHT" "$@"
+}
+
+docker_required() {
+ command -v docker >/dev/null 2>&1 || fail 'Docker is not installed or not in PATH.'
+ docker info >/dev/null 2>&1 || fail 'Docker daemon is not available.'
 }
 
 fixture_valid() {
@@ -74,6 +95,34 @@ prepare() (
  echo "MTC laboratory prepared: $fixture"
 )
 
+up() (
+ [[ -f "$CONFIG" ]] || fail 'Run mt-lab init and mt-lab prepare first.'
+ source "$CONFIG"
+ [[ "${MT_LAB_REPOSITORY:-}" == "$REPO" && "${MT_LAB_STATE:-}" == "$STATE" ]] ||
+  fail 'Laboratory configuration does not match this checkout.'
+ [[ -n "${MT_LAB_FIXTURE:-}" ]] && fixture_valid "$MT_LAB_FIXTURE" ||
+  fail 'Run mt-lab prepare before mt-lab up.'
+ docker_required
+ local volume
+ for volume in mtc-log-data mtc-external-cosigner_cosigner-secrets mtc-external-cosigner_cosigner-state; do
+  docker volume inspect "$volume" >/dev/null 2>&1 || docker volume create "$volume" >/dev/null
+ done
+ compose_lab --profile provision build \
+  mtc-log monitor-a monitor-b external-cosigner provision
+ if compose_lab --profile provision run --rm --no-deps --entrypoint /bin/sh provision -c '
+  for path in /run/cosigner/external.key /run/cosigner/server.key \
+   /run/cosigner/server.pem /run/cosigner/client-ca.pem /client/client.key \
+   /client/client.pem /client/server-ca.pem /client/external.pub; do
+   [ -s "$path" ] || exit 1
+  done
+ '; then
+  echo 'REUSE existing External Cosigner credentials.'
+ else
+  compose_lab --profile provision run --rm --no-deps provision
+ fi
+ compose_lab up -d mtc-log external-cosigner monitor-a monitor-b
+)
+
 status() {
  local fixture='' preparation docker
  if [[ -f "$CONFIG" ]]; then
@@ -93,10 +142,15 @@ status() {
  else
   preparation='not run'
  fi
- if command -v docker >/dev/null 2>&1; then
-  docker='command available; laboratory runtime not inspected'
+ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  docker='available'
+  services=yes
+ elif command -v docker >/dev/null 2>&1; then
+  docker='command available; daemon unavailable'
+  services=no
  else
-  docker='command unavailable; laboratory runtime not inspected'
+  docker='command unavailable'
+  services=no
  fi
  [[ -n "$fixture" ]] || fixture='not selected'
  printf 'MTC laboratory\n'
@@ -105,12 +159,24 @@ status() {
  printf 'preparation: %s\n' "$preparation"
  printf 'fixture: %s\n' "$fixture"
  printf 'docker: %s\n' "$docker"
+ if [[ "$services" == yes ]]; then
+  echo 'services:'
+  compose_base ps --all mtc-log external-cosigner monitor-a monitor-b ||
+   echo '  unable to inspect laboratory Compose project'
+ fi
+}
+
+down() {
+ docker_required
+ compose_base down --remove-orphans
 }
 
 case "${1:---help}" in
  init) [[ "$#" == 1 ]] || fail 'Usage: mt-lab init'; init;;
  prepare) [[ "$#" == 1 ]] || fail 'Usage: mt-lab prepare'; prepare;;
+ up) [[ "$#" == 1 ]] || fail 'Usage: mt-lab up'; up;;
  status) [[ "$#" == 1 ]] || fail 'Usage: mt-lab status'; status;;
+ down) [[ "$#" == 1 ]] || fail 'Usage: mt-lab down'; down;;
  help|--help|-h) [[ "$#" == 1 ]] || fail 'Usage: mt-lab --help'; usage;;
  *) fail 'Unknown command; use --help.';;
 esac
