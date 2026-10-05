@@ -12,6 +12,7 @@ import time
 
 import prepare
 from core import root, verify_consistency
+from config_formats import decode_mcp2
 from crypto_profiles import crypto_profile
 from local_log import LocalLog
 
@@ -60,6 +61,28 @@ def authenticate_snapshot(snapshot, trusted_authority, checker):
         raise ValueError('Invalid authenticated snapshot issuance log')
     LocalLog._check_state({'tree_size':state['tree_size'],'hash':state['hash']})
     return state
+
+
+def authenticate_snapshot_metadata(
+        snapshot, trusted_authority, checker,
+        authenticate=authenticate_snapshot):
+    """Authenticate MCP2 and return its authenticated checkpoint metadata."""
+    state = authenticate(snapshot, trusted_authority, checker)
+    try:
+        checkpoint = decode_mcp2(Path(snapshot).read_bytes())
+    except (OSError, ValueError) as exc:
+        raise ValueError("Invalid authenticated snapshot metadata") from exc
+
+    if (checkpoint.tree_size != state["tree_size"]
+            or checkpoint.root_hash.hex() != state["hash"]):
+        raise ValueError("Authenticated snapshot metadata mismatch")
+
+    return {
+        "log_number": state["log_number"],
+        "tree_size": state["tree_size"],
+        "hash": state["hash"],
+        "timestamp": checkpoint.timestamp,
+    }
 
 
 def verify_snapshot_consistency(old_snapshot,new_snapshot,trusted_authority,checker,path):

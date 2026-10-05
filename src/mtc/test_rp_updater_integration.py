@@ -9,10 +9,12 @@ import threading
 import prepare
 from build_check_snapshot import build_check_snapshot
 from crypto_profiles import crypto_profile
+from config_formats import decode_mcp2
 from landmarks import Landmark
 from local_log import LocalLog
 from log_service import LogServer
 from rp_state import RPStateStore
+from rp_policy import RPFreshnessPolicy
 from rp_updater import fetch_and_advance_checkpoint, update_and_publish
 from snapshots import export_snapshot
 from trusted_subtrees import decode_trusted_subtrees
@@ -221,6 +223,57 @@ def main():
 
             # Restore the authentic N=16 publication for subsequent tests.
             published.write_bytes(snapshot16.read_bytes())
+
+            # Optional local RP freshness policy is evaluated only after
+            # authenticating the real MCP2 checkpoint.  A stale but otherwise
+            # valid checkpoint must fail before persistent state publication.
+            checkpoint_timestamp = decode_mcp2(
+                snapshot16.read_bytes()).timestamp
+            freshness = RPFreshnessPolicy(
+                enabled=True,
+                max_age_seconds=300,
+                clock_skew_seconds=60,
+            )
+
+            selected_before_freshness_failure = store.current.readlink()
+            retained_before_freshness_failure = store.load_current()
+
+            rejected(
+                lambda: update_and_publish(
+                    base_url,
+                    authority,
+                    checker,
+                    rp_directory,
+                    1,
+                    sequence,
+                    checkpoint_timestamp + 301,
+                    freshness_policy=freshness,
+                ),
+                "stale authenticated checkpoint accepted",
+            )
+
+            retained_after_freshness_failure = store.load_current()
+            assert (
+                store.current.readlink()
+                == selected_before_freshness_failure
+            )
+            assert (
+                retained_after_freshness_failure
+                == retained_before_freshness_failure
+            )
+
+            # The exact max-age boundary remains acceptable.
+            fresh_state = update_and_publish(
+                base_url,
+                authority,
+                checker,
+                rp_directory,
+                1,
+                sequence,
+                checkpoint_timestamp + 300,
+                freshness_policy=freshness,
+            )
+            assert fresh_state["checkpoint"] == state16
 
             # The same CA/cosigner keys may authenticate an independent
             # issuance-log domain.  Switching from retained log 1 to log 2

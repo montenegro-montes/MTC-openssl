@@ -12,7 +12,9 @@ from crypto_profiles import crypto_profile
 from local_log import LocalLog
 from landmarks import Landmark
 from trusted_subtrees import build_evidence, validate_trusted_subtrees
-from snapshots import export_snapshot, authenticate_snapshot, verify_snapshot_consistency
+from snapshots import (export_snapshot, authenticate_snapshot,
+                       authenticate_snapshot_metadata,
+                       verify_snapshot_consistency)
 
 
 def rejected(operation):
@@ -56,6 +58,11 @@ def main():
             'tree_size':8,
             'hash':root(entries[:8]).hex(),
         }
+        metadata8=authenticate_snapshot_metadata(old,trusted,checker)
+        assert metadata8=={
+            **state8,
+            'timestamp':decode_mcp2(old.read_bytes()).timestamp,
+        }
         log=LocalLog(log.directory)
         for entry in entries[8:]:log.append(entry)
         new=export_snapshot(log,temp/'snapshot-16.mcp2',args.profile,keys)
@@ -65,6 +72,11 @@ def main():
             'log_number':1,
             'tree_size':16,
             'hash':root(entries).hex(),
+        }
+        metadata16=authenticate_snapshot_metadata(new,trusted,checker)
+        assert metadata16=={
+            **state16,
+            'timestamp':decode_mcp2(new.read_bytes()).timestamp,
         }
 
         # The external checker output is untrusted until its issuance-log

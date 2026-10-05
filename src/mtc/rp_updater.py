@@ -9,7 +9,8 @@ from urllib.request import Request, urlopen
 
 from core import verify_consistency
 from landmarks import active, subtrees, validate_sequence
-from snapshots import authenticate_snapshot
+from snapshots import authenticate_snapshot, authenticate_snapshot_metadata
+from rp_policy import RPFreshnessPolicy, check_checkpoint_freshness
 from rp_state import RPStateStore
 from trusted_subtrees import (
     SubtreeEvidence,
@@ -70,13 +71,31 @@ def _checkpoint(state):
 
 def fetch_authenticated_checkpoint(
         base_url, trusted_authority, checker,
-        authenticate=authenticate_snapshot):
+        authenticate=authenticate_snapshot,
+        freshness_policy=None, now=None):
     data = _get(base_url, "/snapshot", binary=True)
 
     with tempfile.TemporaryDirectory(prefix="mtc-rp-snapshot-") as temporary:
         snapshot = Path(temporary) / "snapshot.mcp2"
         snapshot.write_bytes(data)
-        state = authenticate(snapshot, trusted_authority, checker)
+
+        if (freshness_policy is None
+                or (isinstance(freshness_policy, RPFreshnessPolicy)
+                    and not freshness_policy.enabled)):
+            state = authenticate(snapshot, trusted_authority, checker)
+        else:
+            if not isinstance(freshness_policy, RPFreshnessPolicy):
+                raise ValueError("invalid RP freshness policy")
+            metadata = authenticate_snapshot_metadata(
+                snapshot, trusted_authority, checker,
+                authenticate=authenticate)
+            check_checkpoint_freshness(
+                metadata["timestamp"], freshness_policy, now)
+            state = {
+                "log_number": metadata["log_number"],
+                "tree_size": metadata["tree_size"],
+                "hash": metadata["hash"],
+            }
 
     return dict(_checkpoint(state))
 
@@ -139,9 +158,14 @@ def advance_checkpoint(
 
 def fetch_and_advance_checkpoint(
         base_url, trusted_authority, checker, previous=None,
-        authenticate=authenticate_snapshot):
+        authenticate=authenticate_snapshot,
+        freshness_policy=None, now=None):
     candidate = fetch_authenticated_checkpoint(
-        base_url, trusted_authority, checker, authenticate)
+        base_url, trusted_authority, checker,
+        authenticate=authenticate,
+        freshness_policy=freshness_policy,
+        now=now,
+    )
     return advance_checkpoint(base_url, previous, candidate)
 
 
@@ -234,8 +258,13 @@ def build_trusted_subtree_configuration(
 def update_and_publish(
         base_url, trusted_authority, checker, state_directory,
         log_number, sequence, now, max_active_landmarks=None,
-        authenticate=authenticate_snapshot):
-    """Run one complete fail-closed relying-party update transaction."""
+        authenticate=authenticate_snapshot, freshness_policy=None):
+    """Run one complete fail-closed relying-party update transaction.
+
+    freshness_policy is an optional local RP policy applied to the
+    authenticated MCP2 checkpoint timestamp; it is not a Draft-06
+    certificate or MTCProof verification requirement.
+    """
     store = RPStateStore(state_directory)
     current = store.load_current()
 
@@ -250,6 +279,8 @@ def update_and_publish(
         checker,
         previous=previous,
         authenticate=authenticate,
+        freshness_policy=freshness_policy,
+        now=now,
     )
 
     if checkpoint["log_number"] != log_number:
