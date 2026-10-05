@@ -1,0 +1,710 @@
+From c9f5d2ae0a810b6f6280de9ce2b84f3cbc794421 Mon Sep 17 00:00:00 2001
+From: Jose Antonio Montenegro Montes <jmmontes@uma.es>
+Date: Sun, 4 Oct 2026 08:13:23 +0200
+Subject: [PATCH 6/8] Propagate verified MTC metadata to PageInfo
+
+---
+ .../ui/page_info/page_info_unittest.cc        |  61 ++++++++-
+ components/BUILD.gn                           |   1 +
+ components/page_info/page_info.cc             |   2 +
+ components/page_info/page_info_ui.h           |   3 +
+ components/security_state/content/BUILD.gn    |  14 +++
+ .../security_state/content/content_utils.cc   |   1 +
+ .../content/content_utils_unittest.cc         | 118 ++++++++++++++++++
+ .../security_state/core/security_state.h      |   3 +
+ content/public/browser/ssl_status.cc          |  30 +++++
+ content/public/browser/ssl_status.h           |   4 +
+ net/BUILD.gn                                  |   1 +
+ net/cert/cert_verify_proc_builtin.cc          |   3 +
+ net/cert/cert_verify_proc_builtin_unittest.cc |  26 ++++
+ net/cert/cert_verify_result.cc                |   1 +
+ net/cert/cert_verify_result.h                 |   5 +
+ net/socket/ssl_client_socket_impl.cc          |   2 +
+ net/socket/ssl_client_socket_unittest.cc      |  26 ++++
+ net/ssl/mtc_verification_info.h               |  29 +++++
+ net/ssl/ssl_info.h                            |   5 +
+ 19 files changed, 334 insertions(+), 1 deletion(-)
+ create mode 100644 components/security_state/content/content_utils_unittest.cc
+ create mode 100644 net/ssl/mtc_verification_info.h
+
+diff --git a/chrome/browser/ui/page_info/page_info_unittest.cc b/chrome/browser/ui/page_info/page_info_unittest.cc
+index 9e3e5fb667..0bc13a0961 100644
+--- a/chrome/browser/ui/page_info/page_info_unittest.cc
++++ b/chrome/browser/ui/page_info/page_info_unittest.cc
+@@ -1199,12 +1199,71 @@ TEST_F(PageInfoTest, HTTPSConnection) {
+   visible_security_state_.connection_status = status;
+   visible_security_state_.connection_info_initialized = true;
+ 
+-  SetDefaultUIExpectations(mock_ui());
++  EXPECT_CALL(*mock_ui(), SetPermissionInfoStub());
++  PageInfoUI::IdentityInfo identity_info;
++  EXPECT_CALL(*mock_ui(), SetIdentityInfo(_))
++      .WillOnce(::testing::SaveArg<0>(&identity_info));
++  ExpectInitialSetCookieInfoCall(mock_ui());
+ 
+   EXPECT_EQ(PageInfo::SITE_CONNECTION_STATUS_ENCRYPTED,
+             page_info()->site_connection_status());
+   EXPECT_EQ(PageInfo::SITE_IDENTITY_STATUS_CERT,
+             page_info()->site_identity_status());
++  EXPECT_FALSE(identity_info.mtc_verification_info.has_value());
++}
++
++TEST_F(PageInfoTest, LandmarkMtcVerificationInfo) {
++  constexpr uint16_t kLogNumber = 7;
++  constexpr uint64_t kLeafIndex = 0x010203040506;
++  const std::vector<uint8_t> kCaId = {0x10, 0x20, 0x30};
++  visible_security_state_.mtc_verification_info = net::MtcVerificationInfo{
++      .mode = net::MtcVerificationMode::kLandmark,
++      .ca_id = kCaId,
++      .log_number = kLogNumber,
++      .leaf_index = kLeafIndex,
++  };
++
++  EXPECT_CALL(*mock_ui(), SetPermissionInfoStub());
++  PageInfoUI::IdentityInfo identity_info;
++  EXPECT_CALL(*mock_ui(), SetIdentityInfo(_))
++      .WillOnce(::testing::SaveArg<0>(&identity_info));
++  ExpectInitialSetCookieInfoCall(mock_ui());
++
++  page_info();
++
++  ASSERT_TRUE(identity_info.mtc_verification_info.has_value());
++  EXPECT_EQ(identity_info.mtc_verification_info->mode,
++            net::MtcVerificationMode::kLandmark);
++  EXPECT_EQ(identity_info.mtc_verification_info->ca_id, kCaId);
++  EXPECT_EQ(identity_info.mtc_verification_info->log_number, kLogNumber);
++  EXPECT_EQ(identity_info.mtc_verification_info->leaf_index, kLeafIndex);
++}
++
++TEST_F(PageInfoTest, StandaloneMtcVerificationInfo) {
++  constexpr uint16_t kLogNumber = 11;
++  constexpr uint64_t kLeafIndex = 0x0a0b0c0d0e0f;
++  const std::vector<uint8_t> kCaId = {0xaa, 0xbb, 0xcc};
++  visible_security_state_.mtc_verification_info = net::MtcVerificationInfo{
++      .mode = net::MtcVerificationMode::kStandalone,
++      .ca_id = kCaId,
++      .log_number = kLogNumber,
++      .leaf_index = kLeafIndex,
++  };
++
++  EXPECT_CALL(*mock_ui(), SetPermissionInfoStub());
++  PageInfoUI::IdentityInfo identity_info;
++  EXPECT_CALL(*mock_ui(), SetIdentityInfo(_))
++      .WillOnce(::testing::SaveArg<0>(&identity_info));
++  ExpectInitialSetCookieInfoCall(mock_ui());
++
++  page_info();
++
++  ASSERT_TRUE(identity_info.mtc_verification_info.has_value());
++  EXPECT_EQ(identity_info.mtc_verification_info->mode,
++            net::MtcVerificationMode::kStandalone);
++  EXPECT_EQ(identity_info.mtc_verification_info->ca_id, kCaId);
++  EXPECT_EQ(identity_info.mtc_verification_info->log_number, kLogNumber);
++  EXPECT_EQ(identity_info.mtc_verification_info->leaf_index, kLeafIndex);
+ }
+ 
+ // Define some dummy constants for Android-only resources.
+diff --git a/components/BUILD.gn b/components/BUILD.gn
+index d0b3d9f899..3cb98de80d 100644
+--- a/components/BUILD.gn
++++ b/components/BUILD.gn
+@@ -335,6 +335,7 @@ test("components_unittests") {
+     "//components/search_engines:unit_tests",
+     "//components/search_provider_logos:unit_tests",
+     "//components/security_interstitials/core:unit_tests",
++    "//components/security_state/content:unit_tests",
+     "//components/security_state/core:unit_tests",
+     "//components/segmentation_platform:unit_tests",
+     "//components/server_certificate_database:unit_tests",
+diff --git a/components/page_info/page_info.cc b/components/page_info/page_info.cc
+index 81954bda08..87b92da40d 100644
+--- a/components/page_info/page_info.cc
++++ b/components/page_info/page_info.cc
+@@ -1712,6 +1712,8 @@ void PageInfo::PresentSiteIdentity() {
+ 
+   info.certificate = certificate_;
+   info.two_qwac = two_qwac_;
++  info.mtc_verification_info =
++      visible_security_state_for_metrics_.mtc_verification_info;
+   info.show_ssl_decision_revoke_button = show_ssl_decision_revoke_button_;
+   info.show_change_password_buttons = show_change_password_buttons_;
+   ui_->SetIdentityInfo(info);
+diff --git a/components/page_info/page_info_ui.h b/components/page_info/page_info_ui.h
+index f41f217cef..f3f03874dd 100644
+--- a/components/page_info/page_info_ui.h
++++ b/components/page_info/page_info_ui.h
+@@ -6,6 +6,7 @@
+ #define COMPONENTS_PAGE_INFO_PAGE_INFO_UI_H_
+ 
+ #include <memory>
++#include <optional>
+ #include <string>
+ #include <vector>
+ 
+@@ -17,6 +18,7 @@
+ #include "components/page_info/page_info.h"
+ #include "components/permissions/object_permission_context_base.h"
+ #include "components/safe_browsing/buildflags.h"
++#include "net/ssl/mtc_verification_info.h"
+ #include "ui/base/models/image_model.h"
+ 
+ #if !BUILDFLAG(IS_ANDROID)
+@@ -148,6 +150,7 @@ class PageInfoUI {
+     scoped_refptr<net::X509Certificate> certificate;
+     // The 2-QWAC certificate if the site has a valid 2-QWAC.
+     scoped_refptr<net::X509Certificate> two_qwac;
++    std::optional<net::MtcVerificationInfo> mtc_verification_info;
+     // Status of the site's connection.
+     PageInfo::SiteConnectionStatus connection_status;
+     // Textual description of the site's connection status that is displayed to
+diff --git a/components/security_state/content/BUILD.gn b/components/security_state/content/BUILD.gn
+index 0331f31f74..547ebf8c46 100644
+--- a/components/security_state/content/BUILD.gn
++++ b/components/security_state/content/BUILD.gn
+@@ -16,3 +16,17 @@ static_library("content") {
+     "//content/public/common",
+   ]
+ }
++
++source_set("unit_tests") {
++  testonly = true
++  sources = [ "content_utils_unittest.cc" ]
++
++  deps = [
++    ":content",
++    "//base",
++    "//content/test:test_support",
++    "//net",
++    "//testing/gtest",
++    "//url",
++  ]
++}
+diff --git a/components/security_state/content/content_utils.cc b/components/security_state/content/content_utils.cc
+index 1871d2f599..97706882a2 100644
+--- a/components/security_state/content/content_utils.cc
++++ b/components/security_state/content/content_utils.cc
+@@ -43,6 +43,7 @@ std::unique_ptr<security_state::VisibleSecurityState> GetVisibleSecurityState(
+   state->connection_status = ssl.connection_status;
+   state->key_exchange_group = ssl.key_exchange_group;
+   state->peer_signature_algorithm = ssl.peer_signature_algorithm;
++  state->mtc_verification_info = ssl.mtc_verification_info;
+   state->pkp_bypassed = ssl.pkp_bypassed;
+   state->displayed_mixed_content =
+       !!(ssl.content_status & content::SSLStatus::DISPLAYED_INSECURE_CONTENT);
+diff --git a/components/security_state/content/content_utils_unittest.cc b/components/security_state/content/content_utils_unittest.cc
+new file mode 100644
+index 0000000000..ac8a84ccb1
+--- /dev/null
++++ b/components/security_state/content/content_utils_unittest.cc
+@@ -0,0 +1,118 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "components/security_state/content/content_utils.h"
++
++#include <cstdint>
++#include <memory>
++#include <optional>
++#include <vector>
++
++#include "base/memory/raw_ptr.h"
++#include "components/security_state/core/security_state.h"
++#include "content/public/browser/navigation_controller.h"
++#include "content/public/browser/navigation_entry.h"
++#include "content/public/browser/ssl_status.h"
++#include "content/public/browser/web_contents.h"
++#include "content/public/test/browser_task_environment.h"
++#include "content/public/test/test_browser_context.h"
++#include "content/public/test/test_web_contents_factory.h"
++#include "content/public/test/web_contents_tester.h"
++#include "net/ssl/ssl_info.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++
++namespace security_state {
++namespace {
++
++void ExpectMtcVerificationInfo(
++    const std::optional<net::MtcVerificationInfo>& info,
++    net::MtcVerificationMode mode,
++    const std::vector<uint8_t>& ca_id,
++    uint16_t log_number,
++    uint64_t leaf_index) {
++  ASSERT_TRUE(info.has_value());
++  EXPECT_EQ(info->mode, mode);
++  EXPECT_EQ(info->ca_id, ca_id);
++  EXPECT_EQ(info->log_number, log_number);
++  EXPECT_EQ(info->leaf_index, leaf_index);
++}
++
++class ContentUtilsTest : public testing::Test {
++ protected:
++  void SetUp() override {
++    web_contents_ = web_contents_factory_.CreateWebContents(&browser_context_);
++    content::WebContentsTester::For(web_contents_)
++        ->NavigateAndCommit(GURL("https://example.test"));
++  }
++
++  std::unique_ptr<VisibleSecurityState> GetState(
++      const content::SSLStatus& ssl_status) {
++    web_contents_->GetController().GetVisibleEntry()->GetSSL() =
++        ssl_status;
++    return GetVisibleSecurityState(web_contents_);
++  }
++
++  content::BrowserTaskEnvironment task_environment_;
++  content::TestBrowserContext browser_context_;
++  content::TestWebContentsFactory web_contents_factory_;
++  raw_ptr<content::WebContents> web_contents_ = nullptr;
++};
++
++TEST_F(ContentUtilsTest, MtcVerificationInfoAbsent) {
++  const content::SSLStatus ssl_status{net::SSLInfo()};
++  EXPECT_FALSE(ssl_status.mtc_verification_info.has_value());
++
++  std::unique_ptr<VisibleSecurityState> state = GetState(ssl_status);
++  EXPECT_FALSE(state->mtc_verification_info.has_value());
++}
++
++TEST_F(ContentUtilsTest, LandmarkMtcVerificationInfo) {
++  constexpr uint16_t kLogNumber = 7;
++  constexpr uint64_t kLeafIndex = 0x010203040506;
++  const std::vector<uint8_t> kCaId = {0x10, 0x20, 0x30};
++  net::SSLInfo ssl_info;
++  ssl_info.mtc_verification_info = bssl::MTCVerificationInfo{
++      .mode = bssl::MTCVerificationMode::kLandmark,
++      .ca_id = kCaId,
++      .log_number = kLogNumber,
++      .leaf_index = kLeafIndex,
++  };
++  const content::SSLStatus ssl_status{ssl_info};
++  ExpectMtcVerificationInfo(ssl_status.mtc_verification_info,
++                            net::MtcVerificationMode::kLandmark, kCaId,
++                            kLogNumber, kLeafIndex);
++
++  std::unique_ptr<VisibleSecurityState> state = GetState(ssl_status);
++
++  ExpectMtcVerificationInfo(state->mtc_verification_info,
++                            net::MtcVerificationMode::kLandmark, kCaId,
++                            kLogNumber, kLeafIndex);
++}
++
++TEST_F(ContentUtilsTest, StandaloneMtcVerificationInfo) {
++  constexpr uint16_t kLogNumber = 11;
++  constexpr uint64_t kLeafIndex = 0x0a0b0c0d0e0f;
++  const std::vector<uint8_t> kCaId = {0xaa, 0xbb, 0xcc};
++  net::SSLInfo ssl_info;
++  ssl_info.mtc_verification_info = bssl::MTCVerificationInfo{
++      .mode = bssl::MTCVerificationMode::kStandalone,
++      .ca_id = kCaId,
++      .log_number = kLogNumber,
++      .leaf_index = kLeafIndex,
++  };
++  const content::SSLStatus ssl_status{ssl_info};
++  ExpectMtcVerificationInfo(ssl_status.mtc_verification_info,
++                            net::MtcVerificationMode::kStandalone, kCaId,
++                            kLogNumber, kLeafIndex);
++
++  std::unique_ptr<VisibleSecurityState> state = GetState(ssl_status);
++
++  ExpectMtcVerificationInfo(state->mtc_verification_info,
++                            net::MtcVerificationMode::kStandalone, kCaId,
++                            kLogNumber, kLeafIndex);
++}
++
++}  // namespace
++}  // namespace security_state
+diff --git a/components/security_state/core/security_state.h b/components/security_state/core/security_state.h
+index 222e30b843..558d42d103 100644
+--- a/components/security_state/core/security_state.h
++++ b/components/security_state/core/security_state.h
+@@ -8,12 +8,14 @@
+ #include <stdint.h>
+ 
+ #include <memory>
++#include <optional>
+ #include <string>
+ 
+ #include "net/base/url_util.h"
+ #include "net/cert/cert_status_flags.h"
+ #include "net/cert/sct_status_flags.h"
+ #include "net/cert/x509_certificate.h"
++#include "net/ssl/mtc_verification_info.h"
+ #include "url/gurl.h"
+ 
+ // Provides helper methods and data types that are used to determine the
+@@ -186,6 +188,7 @@ struct VisibleSecurityState {
+   // The signature algorithm used by the peer in the TLS handshake, or zero if
+   // unknown (older cache entries may not store the value) or not applicable.
+   uint16_t peer_signature_algorithm;
++  std::optional<net::MtcVerificationInfo> mtc_verification_info;
+   // True if the page displayed passive mixed content.
+   bool displayed_mixed_content;
+   // True if the secure page contained a form with a nonsecure target.
+diff --git a/content/public/browser/ssl_status.cc b/content/public/browser/ssl_status.cc
+index 4a9ed77ecd..bc8482b57b 100644
+--- a/content/public/browser/ssl_status.cc
++++ b/content/public/browser/ssl_status.cc
+@@ -6,6 +6,34 @@
+ 
+ #include "net/ssl/ssl_info.h"
+ 
++namespace {
++
++std::optional<net::MtcVerificationInfo> ConvertMtcVerificationInfo(
++    const std::optional<bssl::MTCVerificationInfo>& mtc_verification_info) {
++  if (!mtc_verification_info) {
++    return std::nullopt;
++  }
++
++  net::MtcVerificationMode mode;
++  switch (mtc_verification_info->mode) {
++    case bssl::MTCVerificationMode::kLandmark:
++      mode = net::MtcVerificationMode::kLandmark;
++      break;
++    case bssl::MTCVerificationMode::kStandalone:
++      mode = net::MtcVerificationMode::kStandalone;
++      break;
++  }
++
++  return net::MtcVerificationInfo{
++      .mode = mode,
++      .ca_id = mtc_verification_info->ca_id,
++      .log_number = mtc_verification_info->log_number,
++      .leaf_index = mtc_verification_info->leaf_index,
++  };
++}
++
++}  // namespace
++
+ namespace content {
+ 
+ SSLStatus::SSLStatus()
+@@ -24,6 +52,8 @@ SSLStatus::SSLStatus(const net::SSLInfo& ssl_info)
+       key_exchange_group(ssl_info.key_exchange_group),
+       peer_signature_algorithm(ssl_info.peer_signature_algorithm),
+       connection_status(ssl_info.connection_status),
++      mtc_verification_info(
++          ConvertMtcVerificationInfo(ssl_info.mtc_verification_info)),
+       content_status(NORMAL_CONTENT),
+       pkp_bypassed(ssl_info.pkp_bypassed) {}
+ 
+diff --git a/content/public/browser/ssl_status.h b/content/public/browser/ssl_status.h
+index f07774c937..6126e69db7 100644
+--- a/content/public/browser/ssl_status.h
++++ b/content/public/browser/ssl_status.h
+@@ -7,9 +7,12 @@
+ 
+ #include <stdint.h>
+ 
++#include <optional>
++
+ #include "content/common/content_export.h"
+ #include "net/cert/cert_status_flags.h"
+ #include "net/cert/x509_certificate.h"
++#include "net/ssl/mtc_verification_info.h"
+ 
+ namespace net {
+ class SSLInfo;
+@@ -54,6 +57,7 @@ struct CONTENT_EXPORT SSLStatus {
+   uint16_t key_exchange_group;
+   uint16_t peer_signature_algorithm;
+   int connection_status;
++  std::optional<net::MtcVerificationInfo> mtc_verification_info;
+   // A combination of the ContentStatusFlags above. Flags are cleared when a
+   // navigation commits.
+   int content_status;
+diff --git a/net/BUILD.gn b/net/BUILD.gn
+index 72d158be37..81dfe1932d 100644
+--- a/net/BUILD.gn
++++ b/net/BUILD.gn
+@@ -1135,6 +1135,7 @@ component("net") {
+     "ssl/openssl_private_key.cc",
+     "ssl/openssl_private_key.h",
+     "ssl/openssl_ssl_util.cc",
++    "ssl/mtc_verification_info.h",
+     "ssl/openssl_ssl_util.h",
+     "ssl/ssl_cert_request_info.cc",
+     "ssl/ssl_cert_request_info.h",
+diff --git a/net/cert/cert_verify_proc_builtin.cc b/net/cert/cert_verify_proc_builtin.cc
+index c8a89e56ab..02a23481b5 100644
+--- a/net/cert/cert_verify_proc_builtin.cc
++++ b/net/cert/cert_verify_proc_builtin.cc
+@@ -1697,6 +1697,9 @@ int AssignVerifyResult(
+     }
+     return MapCertStatusToNetError(verify_result->cert_status);
+   }
++
++  CHECK(path_is_valid);
++  verify_result->mtc_verification_info = partial_path.mtc_verification_info;
+   return OK;
+ }
+ 
+diff --git a/net/cert/cert_verify_proc_builtin_unittest.cc b/net/cert/cert_verify_proc_builtin_unittest.cc
+index 8c20faad2d..bb96f26404 100644
+--- a/net/cert/cert_verify_proc_builtin_unittest.cc
++++ b/net/cert/cert_verify_proc_builtin_unittest.cc
+@@ -738,6 +738,7 @@ TEST_F(CertVerifyProcBuiltinTest, SimpleSuccess) {
+ 
+   int error = callback.WaitForResult();
+   EXPECT_THAT(error, IsOk());
++  EXPECT_FALSE(verify_result.mtc_verification_info.has_value());
+   // When CRS is not being used (mock_crs_version_ == 0), the anchor usage
+   // histogram should not be recorded.
+   histograms.ExpectTotalCount("Net.Certificate.TrustAnchor2.Verify", 0u);
+@@ -795,6 +796,15 @@ TEST_F(CertVerifyProcBuiltinTest, SimpleSignaturelessMtcSuccess) {
+         mtc_anchor->AsCert()->cert_buffer(),
+         verify_result.verified_cert->cert_buffers()[1].get()));
+     EXPECT_FALSE(verify_result.is_issued_by_known_root);
++    ASSERT_TRUE(verify_result.mtc_verification_info.has_value());
++    EXPECT_EQ(bssl::MTCVerificationMode::kLandmark,
++              verify_result.mtc_verification_info->mode);
++    EXPECT_EQ(base::ToVector(kMtcCaId),
++              verify_result.mtc_verification_info->ca_id);
++    EXPECT_EQ(kLogNumber,
++              verify_result.mtc_verification_info->log_number);
++    EXPECT_EQ(leaf_index,
++              verify_result.mtc_verification_info->leaf_index);
+   }
+ 
+   SetMockIsKnownRoot(false);
+@@ -810,6 +820,7 @@ TEST_F(CertVerifyProcBuiltinTest, SimpleSignaturelessMtcSuccess) {
+     int error = callback.WaitForResult();
+     EXPECT_THAT(error, IsOk());
+     EXPECT_TRUE(verify_result.is_issued_by_known_root);
++    EXPECT_TRUE(verify_result.mtc_verification_info.has_value());
+   }
+ }
+ 
+@@ -1246,6 +1257,15 @@ TEST_F(CertVerifyProcBuiltinTest, StandaloneMtcVerification) {
+         mtc_anchor->AsCert()->cert_buffer(),
+         verify_result.verified_cert->cert_buffers()[1].get()));
+     EXPECT_FALSE(verify_result.is_issued_by_known_root);
++    ASSERT_TRUE(verify_result.mtc_verification_info.has_value());
++    EXPECT_EQ(bssl::MTCVerificationMode::kStandalone,
++              verify_result.mtc_verification_info->mode);
++    EXPECT_EQ(base::ToVector(kMtcCaId),
++              verify_result.mtc_verification_info->ca_id);
++    EXPECT_EQ(kLogNumber,
++              verify_result.mtc_verification_info->log_number);
++    EXPECT_EQ(leaf_index,
++              verify_result.mtc_verification_info->leaf_index);
+   }
+ 
+   // Standalone MTC verification fails if the MTCAnchor in the trust store has
+@@ -1273,6 +1293,7 @@ TEST_F(CertVerifyProcBuiltinTest, StandaloneMtcVerification) {
+         mtc_anchor->AsCert()->cert_buffer(),
+         verify_result.verified_cert->cert_buffers()[1].get()));
+     EXPECT_FALSE(verify_result.is_issued_by_known_root);
++    EXPECT_FALSE(verify_result.mtc_verification_info.has_value());
+   }
+ }
+ 
+@@ -2085,6 +2106,9 @@ TEST_F(CertVerifyProcBuiltinTest, SignaturelessMtcChromeRootStoreConstraints) {
+ 
+     int error = callback.WaitForResult();
+     EXPECT_THAT(error, IsOk());
++    ASSERT_TRUE(verify_result.mtc_verification_info.has_value());
++    EXPECT_EQ(bssl::MTCVerificationMode::kLandmark,
++              verify_result.mtc_verification_info->mode);
+   }
+ 
+   // With constraint that doesn't match, verification fails.
+@@ -2099,6 +2123,7 @@ TEST_F(CertVerifyProcBuiltinTest, SignaturelessMtcChromeRootStoreConstraints) {
+ 
+     int error = callback.WaitForResult();
+     EXPECT_THAT(error, IsError(ERR_CERT_AUTHORITY_INVALID));
++    EXPECT_FALSE(verify_result.mtc_verification_info.has_value());
+   }
+ 
+   // With constraint that does match, verification succeeds.
+@@ -2114,6 +2139,7 @@ TEST_F(CertVerifyProcBuiltinTest, SignaturelessMtcChromeRootStoreConstraints) {
+ 
+     int error = callback.WaitForResult();
+     EXPECT_THAT(error, IsOk());
++    EXPECT_TRUE(verify_result.mtc_verification_info.has_value());
+   }
+ }
+ 
+diff --git a/net/cert/cert_verify_result.cc b/net/cert/cert_verify_result.cc
+index fbe43a5dd2..614dd64ae8 100644
+--- a/net/cert/cert_verify_result.cc
++++ b/net/cert/cert_verify_result.cc
+@@ -31,6 +31,7 @@ void CertVerifyResult::Reset() {
+   is_issued_by_known_root = false;
+ 
+   public_key_hashes.clear();
++  mtc_verification_info.reset();
+   ocsp_result = bssl::OCSPVerifyResult();
+ 
+   scts.clear();
+diff --git a/net/cert/cert_verify_result.h b/net/cert/cert_verify_result.h
+index e966388460..e7e1d7a33b 100644
+--- a/net/cert/cert_verify_result.h
++++ b/net/cert/cert_verify_result.h
+@@ -17,6 +17,7 @@
+ #include "net/cert/signed_certificate_timestamp_and_status.h"
+ #include "net/net_buildflags.h"
+ #include "third_party/boringssl/src/include/openssl/pki/ocsp.h"
++#include "third_party/boringssl/src/pki/verify_certificate_chain.h"
+ 
+ namespace ct {
+ enum class CTPolicyCompliance;
+@@ -73,6 +74,10 @@ class NET_EXPORT CertVerifyResult {
+   // (leaf to root).
+   std::vector<SHA256HashValue> public_key_hashes;
+ 
++  // Information authenticated while verifying an MTC. Only present when the
++  // complete certificate path was successfully verified.
++  std::optional<bssl::MTCVerificationInfo> mtc_verification_info;
++
+   // is_issued_by_known_root is true if we recognise the root CA as a standard
+   // root.  If it isn't then it's probably the case that this certificate was
+   // generated by a MITM proxy whose root has been installed locally. This is
+diff --git a/net/socket/ssl_client_socket_impl.cc b/net/socket/ssl_client_socket_impl.cc
+index f586acfe0f..f7080e3b0a 100644
+--- a/net/socket/ssl_client_socket_impl.cc
++++ b/net/socket/ssl_client_socket_impl.cc
+@@ -519,6 +519,8 @@ bool SSLClientSocketImpl::GetSSLInfo(SSLInfo* ssl_info) {
+       server_cert_verify_result_.is_issued_by_known_root;
+   ssl_info->pkp_bypassed = pkp_bypassed_;
+   ssl_info->public_key_hashes = server_cert_verify_result_.public_key_hashes;
++  ssl_info->mtc_verification_info =
++      server_cert_verify_result_.mtc_verification_info;
+   ssl_info->client_cert_sent = send_client_cert_ && client_cert_.get();
+   ssl_info->encrypted_client_hello = SSL_ech_accepted(ssl_.get());
+   ssl_info->is_fatal_cert_error = is_fatal_cert_error_;
+diff --git a/net/socket/ssl_client_socket_unittest.cc b/net/socket/ssl_client_socket_unittest.cc
+index f8944ab505..d0beb839bc 100644
+--- a/net/socket/ssl_client_socket_unittest.cc
++++ b/net/socket/ssl_client_socket_unittest.cc
+@@ -1615,6 +1615,7 @@ TEST_P(SSLClientSocketVersionTest, ConnectClientAuthSendNullCert) {
+   SSLInfo ssl_info;
+   sock_->GetSSLInfo(&ssl_info);
+   EXPECT_FALSE(ssl_info.client_cert_sent);
++  EXPECT_FALSE(ssl_info.mtc_verification_info.has_value());
+ 
+   sock_->Disconnect();
+   EXPECT_FALSE(sock_->IsConnected());
+@@ -2646,6 +2647,12 @@ TEST_P(SSLClientSocketVersionTest, VerifyReturnChainProperlyOrdered) {
+   verify_result.verified_cert = X509Certificate::CreateFromBuffer(
+       bssl::UpRef(certs[0]->cert_buffer()), std::move(temp_intermediates));
+   ASSERT_TRUE(verify_result.verified_cert);
++  const std::vector<uint8_t> kMtcCaId = {0x09, 0x08, 0x07};
++  constexpr uint16_t kMtcLogNumber = 3;
++  constexpr uint64_t kMtcLeafIndex = 42;
++  verify_result.mtc_verification_info = bssl::MTCVerificationInfo{
++      bssl::MTCVerificationMode::kLandmark, kMtcCaId, kMtcLogNumber,
++      kMtcLeafIndex};
+ 
+   // Add a rule that maps the server cert (A) to the chain of A->B->C2
+   // rather than A->B->C.
+@@ -2671,6 +2678,12 @@ TEST_P(SSLClientSocketVersionTest, VerifyReturnChainProperlyOrdered) {
+ 
+   SSLInfo ssl_info;
+   ASSERT_TRUE(sock_->GetSSLInfo(&ssl_info));
++  ASSERT_TRUE(ssl_info.mtc_verification_info.has_value());
++  EXPECT_EQ(bssl::MTCVerificationMode::kLandmark,
++            ssl_info.mtc_verification_info->mode);
++  EXPECT_EQ(kMtcCaId, ssl_info.mtc_verification_info->ca_id);
++  EXPECT_EQ(kMtcLogNumber, ssl_info.mtc_verification_info->log_number);
++  EXPECT_EQ(kMtcLeafIndex, ssl_info.mtc_verification_info->leaf_index);
+ 
+   // Verify that SSLInfo contains the corrected re-constructed chain A -> B
+   // -> C2.
+@@ -4778,6 +4791,12 @@ TEST_P(SSLClientSocketVersionTest, PKPBypassedSet) {
+   verify_result.verified_cert = server_cert;
+   verify_result.public_key_hashes =
+       MakeHashValueVector(kBadHashValueVectorInput);
++  const std::vector<uint8_t> kMtcCaId = {0x09, 0x08, 0x07};
++  constexpr uint16_t kMtcLogNumber = 5;
++  constexpr uint64_t kMtcLeafIndex = 84;
++  verify_result.mtc_verification_info = bssl::MTCVerificationInfo{
++      bssl::MTCVerificationMode::kStandalone, kMtcCaId, kMtcLogNumber,
++      kMtcLeafIndex};
+   cert_verifier_->AddResultForCert(server_cert.get(), verify_result, OK);
+ 
+   transport_security_state_->EnableStaticPinsForTesting();
+@@ -4791,6 +4810,12 @@ TEST_P(SSLClientSocketVersionTest, PKPBypassedSet) {
+                                                       new_host_port_pair, &rv));
+   SSLInfo ssl_info;
+   ASSERT_TRUE(sock_->GetSSLInfo(&ssl_info));
++  ASSERT_TRUE(ssl_info.mtc_verification_info.has_value());
++  EXPECT_EQ(bssl::MTCVerificationMode::kStandalone,
++            ssl_info.mtc_verification_info->mode);
++  EXPECT_EQ(kMtcCaId, ssl_info.mtc_verification_info->ca_id);
++  EXPECT_EQ(kMtcLogNumber, ssl_info.mtc_verification_info->log_number);
++  EXPECT_EQ(kMtcLeafIndex, ssl_info.mtc_verification_info->leaf_index);
+ 
+   EXPECT_THAT(rv, IsOk());
+   EXPECT_TRUE(sock_->IsConnected());
+@@ -5926,6 +5951,7 @@ TEST_F(SSLClientSocketTest, SSLOverSSLBadCertificate) {
+   SSLInfo ssl_info;
+   ASSERT_TRUE(client->GetSSLInfo(&ssl_info));
+   EXPECT_EQ(ssl_info.cert_status, expired_result.cert_status);
++  EXPECT_FALSE(ssl_info.mtc_verification_info.has_value());
+ 
+   // TODO(crbug.com/41430308): The server sees
+   // ERR_BAD_SSL_CLIENT_AUTH_CERT because its peer (the client) alerts it with
+diff --git a/net/ssl/mtc_verification_info.h b/net/ssl/mtc_verification_info.h
+new file mode 100644
+index 0000000000..f8ec0b2092
+--- /dev/null
++++ b/net/ssl/mtc_verification_info.h
+@@ -0,0 +1,29 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef NET_SSL_MTC_VERIFICATION_INFO_H_
++#define NET_SSL_MTC_VERIFICATION_INFO_H_
++
++#include <cstdint>
++#include <vector>
++
++#include "net/base/net_export.h"
++
++namespace net {
++
++enum class MtcVerificationMode {
++  kLandmark,
++  kStandalone,
++};
++
++struct NET_EXPORT MtcVerificationInfo {
++  MtcVerificationMode mode;
++  std::vector<uint8_t> ca_id;
++  uint16_t log_number;
++  uint64_t leaf_index;
++};
++
++}  // namespace net
++
++#endif  // NET_SSL_MTC_VERIFICATION_INFO_H_
+diff --git a/net/ssl/ssl_info.h b/net/ssl/ssl_info.h
+index fae1fe8e9e..789dbcef16 100644
+--- a/net/ssl/ssl_info.h
++++ b/net/ssl/ssl_info.h
+@@ -13,6 +13,7 @@
+ #include "net/cert/sct_status_flags.h"
+ #include "net/cert/signed_certificate_timestamp_and_status.h"
+ #include "net/net_buildflags.h"
++#include "third_party/boringssl/src/pki/verify_certificate_chain.h"
+ 
+ namespace net {
+ 
+@@ -99,6 +100,10 @@ class NET_EXPORT SSLInfo {
+   // root).
+   std::vector<SHA256HashValue> public_key_hashes;
+ 
++  // Information authenticated while verifying an MTC. Only present when the
++  // complete certificate path was successfully verified.
++  std::optional<bssl::MTCVerificationInfo> mtc_verification_info;
++
+   // List of SignedCertificateTimestamps and their corresponding validation
+   // status.
+   SignedCertificateTimestampAndStatusList signed_certificate_timestamps;
+-- 
+2.50.1 (Apple Git-155)
+

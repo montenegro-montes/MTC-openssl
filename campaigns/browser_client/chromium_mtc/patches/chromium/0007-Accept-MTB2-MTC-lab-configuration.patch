@@ -1,0 +1,25 @@
+From ffc46bf7d2109ebc1d96264e3195adc302857793 Mon Sep 17 00:00:00 2001
+From: Jose Antonio Montenegro Montes <jmmontes@uma.es>
+Date: Mon, 5 Oct 2026 11:09:49 +0200
+Subject: [PATCH 7/8] Accept MTB2 MTC lab configuration
+
+---
+ net/cert/mtc_plants05_lab_config.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/net/cert/mtc_plants05_lab_config.cc b/net/cert/mtc_plants05_lab_config.cc
+index 1b922a2cf8..17a84acea1 100644
+--- a/net/cert/mtc_plants05_lab_config.cc
++++ b/net/cert/mtc_plants05_lab_config.cc
+@@ -170,7 +170,7 @@ std::optional<MtcPlants05LabConfig> ParseConfig(std::string_view json) {
+ 
+   if (!format || *format != "chromium-mtc-plants05-lab" || !version ||
+       *version != 1 || !spec || *spec != "plants-05" || !source_format ||
+-      *source_format != "MCF1") {
++      *source_format != "MTB2") {
+     LOG(ERROR) << "Unsupported MTC Plants-05 lab config format";
+     return std::nullopt;
+   }
+-- 
+2.50.1 (Apple Git-155)
+

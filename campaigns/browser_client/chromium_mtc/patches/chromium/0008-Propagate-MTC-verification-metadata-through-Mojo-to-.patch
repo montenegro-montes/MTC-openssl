@@ -1,0 +1,706 @@
+From 687abc516706a08fa0deae6ea6324fe4e09935bf Mon Sep 17 00:00:00 2001
+From: Jose Antonio Montenegro Montes <jmmontes@uma.es>
+Date: Mon, 5 Oct 2026 11:11:15 +0200
+Subject: [PATCH 8/8] Propagate MTC verification metadata through Mojo to
+ PageInfo
+
+---
+ .../page_info_bubble_view_unittest.cc         | 71 +++++++++++++++++++
+ .../page_info_security_content_view.cc        | 52 ++++++++++++++
+ .../page_info_security_content_view.h         |  3 +
+ .../views/page_info/page_info_view_factory.h  |  1 +
+ components/page_info_strings.grdp             | 23 ++++++
+ services/network/public/cpp/BUILD.gn          |  3 +
+ .../cpp/cert_verify_result_mojom_traits.cc    |  2 +
+ .../cpp/cert_verify_result_mojom_traits.h     |  5 ++
+ ...ert_verify_result_mojom_traits_unittest.cc | 60 ++++++++++++++++
+ .../cpp/mtc_verification_info_mojom_traits.cc | 47 ++++++++++++
+ .../cpp/mtc_verification_info_mojom_traits.h  | 54 ++++++++++++++
+ .../public/cpp/ssl_info_mojom_traits.cc       |  2 +
+ .../public/cpp/ssl_info_mojom_traits.h        |  5 ++
+ .../cpp/ssl_info_mojom_traits_unittest.cc     | 40 +++++++++++
+ services/network/public/mojom/BUILD.gn        | 18 +++++
+ .../public/mojom/cert_verify_result.mojom     |  2 +
+ .../public/mojom/mtc_verification_info.mojom  | 19 +++++
+ services/network/public/mojom/ssl_info.mojom  |  2 +
+ 18 files changed, 409 insertions(+)
+ create mode 100644 services/network/public/cpp/cert_verify_result_mojom_traits_unittest.cc
+ create mode 100644 services/network/public/cpp/mtc_verification_info_mojom_traits.cc
+ create mode 100644 services/network/public/cpp/mtc_verification_info_mojom_traits.h
+ create mode 100644 services/network/public/mojom/mtc_verification_info.mojom
+
+diff --git a/chrome/browser/ui/views/page_info/page_info_bubble_view_unittest.cc b/chrome/browser/ui/views/page_info/page_info_bubble_view_unittest.cc
+index d653db2599..f158e28645 100644
+--- a/chrome/browser/ui/views/page_info/page_info_bubble_view_unittest.cc
++++ b/chrome/browser/ui/views/page_info/page_info_bubble_view_unittest.cc
+@@ -272,6 +272,25 @@ class PageInfoBubbleViewTestApi {
+         ->GetText();
+   }
+ 
++  SecurityInformationView* mtc_verification_view() {
++    return static_cast<SecurityInformationView*>(bubble_delegate_->GetViewByID(
++        PageInfoViewFactory::VIEW_ID_PAGE_INFO_MTC_VERIFICATION));
++  }
++
++  std::u16string_view GetMtcVerificationTitle() {
++    return static_cast<views::StyledLabel*>(
++               mtc_verification_view()->GetViewByID(
++                   PageInfoViewFactory::VIEW_ID_PAGE_INFO_SECURITY_SUMMARY_LABEL))
++        ->GetText();
++  }
++
++  std::u16string_view GetMtcVerificationDetails() {
++    return static_cast<views::StyledLabel*>(
++               mtc_verification_view()->GetViewByID(
++                   PageInfoViewFactory::VIEW_ID_PAGE_INFO_SECURITY_DETAILS_LABEL))
++        ->GetText();
++  }
++
+   std::u16string_view GetCookiesButtonTitleText() {
+     auto* button = bubble_delegate_->GetViewByID(
+         PageInfoViewFactory::VIEW_ID_PAGE_INFO_LINK_OR_BUTTON_COOKIES_SUBPAGE);
+@@ -1118,6 +1137,58 @@ TEST_F(PageInfoBubbleViewTest, CheckHeaderInteractions) {
+   page_view->ResetDecisionsClicked();
+ }
+ 
++TEST_F(PageInfoBubbleViewTest, MtcVerificationInfo) {
++  api_->navigation_handler()->OpenSecurityPage();
++  auto* page_view = static_cast<PageInfoSecurityContentView*>(
++      api_->current_view()->children()[1]);
++  ASSERT_TRUE(page_view);
++
++  PageInfoUI::IdentityInfo identity_info;
++  identity_info.identity_status = PageInfo::SITE_IDENTITY_STATUS_CERT;
++  identity_info.connection_status =
++      PageInfo::SITE_CONNECTION_STATUS_ENCRYPTED;
++
++  page_view->SetIdentityInfo(identity_info);
++  EXPECT_FALSE(api_->mtc_verification_view());
++
++  constexpr uint16_t kLandmarkLogNumber = 7;
++  constexpr uint64_t kLandmarkLeafIndex = 0x010203040506;
++  identity_info.mtc_verification_info = net::MtcVerificationInfo{
++      .mode = net::MtcVerificationMode::kLandmark,
++      .ca_id = {0x81, 0xfd, 0x59, 0x65, 0x01, 0x01, 0x01},
++      .log_number = kLandmarkLogNumber,
++      .leaf_index = kLandmarkLeafIndex,
++  };
++  page_view->SetIdentityInfo(identity_info);
++
++  ASSERT_TRUE(api_->mtc_verification_view());
++  EXPECT_EQ(api_->GetMtcVerificationTitle(),
++            l10n_util::GetStringUTF16(
++                IDS_PAGE_INFO_MTC_VERIFICATION_TITLE));
++  EXPECT_EQ(api_->GetMtcVerificationDetails(),
++            u"Mode: Landmark\nCA ID: 81fd5965010101\nLog number: 7\nLeaf "
++            u"index: 1108152157446");
++
++  constexpr uint16_t kStandaloneLogNumber = 11;
++  constexpr uint64_t kStandaloneLeafIndex = 42;
++  identity_info.mtc_verification_info = net::MtcVerificationInfo{
++      .mode = net::MtcVerificationMode::kStandalone,
++      .ca_id = {0xaa, 0x0b, 0xcc},
++      .log_number = kStandaloneLogNumber,
++      .leaf_index = kStandaloneLeafIndex,
++  };
++  page_view->SetIdentityInfo(identity_info);
++
++  ASSERT_TRUE(api_->mtc_verification_view());
++  EXPECT_EQ(api_->GetMtcVerificationDetails(),
++            u"Mode: Standalone\nCA ID: aa0bcc\nLog number: 11\nLeaf index: "
++            u"42");
++
++  identity_info.mtc_verification_info.reset();
++  page_view->SetIdentityInfo(identity_info);
++  EXPECT_FALSE(api_->mtc_verification_view());
++}
++
+ TEST_F(PageInfoBubbleViewTest, CertificateButtonShowsEvCertDetails) {
+   std::unique_ptr<content::NavigationSimulator> navigation =
+       content::NavigationSimulator::CreateRendererInitiated(
+diff --git a/chrome/browser/ui/views/page_info/page_info_security_content_view.cc b/chrome/browser/ui/views/page_info/page_info_security_content_view.cc
+index be458aab02..c363f00815 100644
+--- a/chrome/browser/ui/views/page_info/page_info_security_content_view.cc
++++ b/chrome/browser/ui/views/page_info/page_info_security_content_view.cc
+@@ -5,7 +5,10 @@
+ #include "chrome/browser/ui/views/page_info/page_info_security_content_view.h"
+ 
+ #include <string>
++#include <vector>
+ 
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_util.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "chrome/browser/ui/color/chrome_color_id.h"
+ #include "chrome/browser/ui/layout_constants.h"
+@@ -94,6 +97,55 @@ void PageInfoSecurityContentView::SetIdentityInfo(
+       base::BindRepeating(&PageInfoSecurityContentView::SecurityDetailsClicked,
+                           base::Unretained(this)));
+ 
++  if (mtc_verification_view_) {
++    auto old_mtc_verification_view =
++        RemoveChildViewT(mtc_verification_view_.get());
++    mtc_verification_view_ = nullptr;
++  }
++  if (identity_info.mtc_verification_info) {
++    const net::MtcVerificationInfo& mtc_info =
++        *identity_info.mtc_verification_info;
++    std::u16string mode;
++    switch (mtc_info.mode) {
++      case net::MtcVerificationMode::kLandmark:
++        mode =
++            l10n_util::GetStringUTF16(IDS_PAGE_INFO_MTC_MODE_LANDMARK);
++        break;
++      case net::MtcVerificationMode::kStandalone:
++        mode =
++            l10n_util::GetStringUTF16(IDS_PAGE_INFO_MTC_MODE_STANDALONE);
++        break;
++    }
++
++    const std::string ca_id =
++        base::ToLowerASCII(base::HexEncode(mtc_info.ca_id));
++    const std::vector<std::u16string> details = {
++        l10n_util::GetStringFUTF16(IDS_PAGE_INFO_MTC_MODE, mode),
++        l10n_util::GetStringFUTF16(IDS_PAGE_INFO_MTC_CA_ID,
++                                  base::UTF8ToUTF16(ca_id)),
++        l10n_util::GetStringFUTF16(
++            IDS_PAGE_INFO_MTC_LOG_NUMBER,
++            base::NumberToString16(mtc_info.log_number)),
++        l10n_util::GetStringFUTF16(
++            IDS_PAGE_INFO_MTC_LEAF_INDEX,
++            base::NumberToString16(mtc_info.leaf_index)),
++    };
++
++    mtc_verification_view_ =
++        AddChildView(std::make_unique<SecurityInformationView>(
++            ChromeLayoutProvider::Get()
++                ->GetInsetsMetric(views::INSETS_DIALOG)
++                .left()));
++    mtc_verification_view_->SetID(
++        PageInfoViewFactory::VIEW_ID_PAGE_INFO_MTC_VERIFICATION);
++    mtc_verification_view_->SetSummary(
++        l10n_util::GetStringUTF16(IDS_PAGE_INFO_MTC_VERIFICATION_TITLE),
++        views::style::STYLE_BODY_3_MEDIUM);
++    mtc_verification_view_->SetIcon(
++        PageInfoViewFactory::GetConnectionSecureIcon());
++    mtc_verification_view_->SetDetails(base::JoinString(details, u"\n"));
++  }
++
+   // The "re-enable warnings" button is shown if the user has bypassed SSL
+   // error interstitials or HTTP warning interstitials (with HTTPS-First Mode
+   // enabled) on this site.
+diff --git a/chrome/browser/ui/views/page_info/page_info_security_content_view.h b/chrome/browser/ui/views/page_info/page_info_security_content_view.h
+index 1feea4939f..8667a25a49 100644
+--- a/chrome/browser/ui/views/page_info/page_info_security_content_view.h
++++ b/chrome/browser/ui/views/page_info/page_info_security_content_view.h
+@@ -48,6 +48,9 @@ class PageInfoSecurityContentView : public views::View, public PageInfoUI {
+   // The view that shows the QWAC status of the site, if it is a 1-QWAC.
+   raw_ptr<SecurityInformationView> one_qwac_view_ = nullptr;
+ 
++  // The view that shows authenticated MTC verification metadata.
++  raw_ptr<SecurityInformationView> mtc_verification_view_ = nullptr;
++
+   // The button that displays identity information of a 2-QWAC and opens the
+   // certificate viewer for the 2-QWAC cert.
+   raw_ptr<RichHoverButton> two_qwac_button_ = nullptr;
+diff --git a/chrome/browser/ui/views/page_info/page_info_view_factory.h b/chrome/browser/ui/views/page_info/page_info_view_factory.h
+index 4d1a5d4301..eae868d0a5 100644
+--- a/chrome/browser/ui/views/page_info/page_info_view_factory.h
++++ b/chrome/browser/ui/views/page_info/page_info_view_factory.h
+@@ -64,6 +64,7 @@ class PageInfoViewFactory {
+     VIEW_ID_PAGE_INFO_PERMISSION_VIEW,
+     VIEW_ID_PAGE_INFO_SECURITY_SUMMARY_LABEL,
+     VIEW_ID_PAGE_INFO_SECURITY_DETAILS_LABEL,
++    VIEW_ID_PAGE_INFO_MTC_VERIFICATION,
+     VIEW_ID_PAGE_INFO_BACK_BUTTON,
+     VIEW_ID_PAGE_INFO_CLOSE_BUTTON,
+     VIEW_ID_PAGE_INFO_CURRENT_VIEW,
+diff --git a/components/page_info_strings.grdp b/components/page_info_strings.grdp
+index abfb38e4ad..40e77e2a1f 100644
+--- a/components/page_info_strings.grdp
++++ b/components/page_info_strings.grdp
+@@ -207,6 +207,29 @@
+       EU Qualified Status
+     </message>
+ 
++    <!-- MTC verification strings -->
++    <message name="IDS_PAGE_INFO_MTC_VERIFICATION_TITLE" desc="Title of the Page Info section that shows authenticated Merkle Tree Certificate verification metadata.">
++      MTC verification
++    </message>
++    <message name="IDS_PAGE_INFO_MTC_MODE_LANDMARK" desc="MTC verification mode indicating that the certificate was verified using a trusted landmark.">
++      Landmark
++    </message>
++    <message name="IDS_PAGE_INFO_MTC_MODE_STANDALONE" desc="MTC verification mode indicating that the certificate was verified using its standalone proof and signatures.">
++      Standalone
++    </message>
++    <message name="IDS_PAGE_INFO_MTC_MODE" desc="MTC verification mode shown in Page Info.">
++      Mode: <ph name="MODE">$1<ex>Landmark</ex></ph>
++    </message>
++    <message name="IDS_PAGE_INFO_MTC_CA_ID" desc="Identifier of the certificate authority that issued an MTC, shown as hexadecimal bytes in Page Info.">
++      CA ID: <ph name="CA_ID">$1<ex>81fd5965010101</ex></ph>
++    </message>
++    <message name="IDS_PAGE_INFO_MTC_LOG_NUMBER" desc="Transparency log number authenticated during MTC verification and shown in Page Info.">
++      Log number: <ph name="LOG_NUMBER">$1<ex>7</ex></ph>
++    </message>
++    <message name="IDS_PAGE_INFO_MTC_LEAF_INDEX" desc="Merkle tree leaf index authenticated during MTC verification and shown in Page Info.">
++      Leaf index: <ph name="LEAF_INDEX">$1<ex>1108152157446</ex></ph>
++    </message>
++
+     <!-- Certificate Info strings -->
+     <if expr="is_android">
+     <!-- Only used in the dialog shown after tapping "Details" in page info -->
+diff --git a/services/network/public/cpp/BUILD.gn b/services/network/public/cpp/BUILD.gn
+index 843f68b88a..a9006e4f08 100644
+--- a/services/network/public/cpp/BUILD.gn
++++ b/services/network/public/cpp/BUILD.gn
+@@ -367,6 +367,8 @@ component("network_param_mojom_support") {
+     "hash_value_mojom_traits.h",
+     "http_response_headers_mojom_traits.cc",
+     "http_response_headers_mojom_traits.h",
++    "mtc_verification_info_mojom_traits.cc",
++    "mtc_verification_info_mojom_traits.h",
+     "net_ipc_param_traits.cc",
+     "net_ipc_param_traits.h",
+     "network_param_mojom_traits.cc",
+@@ -802,6 +804,7 @@ source_set("tests") {
+   sources = [
+     "avail_language_header_parser_unittest.cc",
+     "basic_data_buffer_factory_unittest.cc",
++    "cert_verify_result_mojom_traits_unittest.cc",
+     "client_hints_unittest.cc",
+     "connection_allowlist_unittest.cc",
+     "content_decoding_interceptor_unittest.cc",
+diff --git a/services/network/public/cpp/cert_verify_result_mojom_traits.cc b/services/network/public/cpp/cert_verify_result_mojom_traits.cc
+index ffa0c6894c..2857f4b503 100644
+--- a/services/network/public/cpp/cert_verify_result_mojom_traits.cc
++++ b/services/network/public/cpp/cert_verify_result_mojom_traits.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "services/network/public/cpp/ct_policy_status_mojom_traits.h"
+ #include "services/network/public/cpp/hash_value_mojom_traits.h"
++#include "services/network/public/cpp/mtc_verification_info_mojom_traits.h"
+ #include "services/network/public/cpp/ocsp_verify_result_mojom_traits.h"
+ #include "services/network/public/cpp/signed_certificate_timestamp_and_status_mojom_traits.h"
+ #include "services/network/public/cpp/x509_certificate_mojom_traits.h"
+@@ -24,6 +25,7 @@ bool StructTraits<
+ #endif
+   return data.ReadVerifiedCert(&out->verified_cert) &&
+          data.ReadPublicKeyHashes(&out->public_key_hashes) &&
++         data.ReadMtcVerificationInfo(&out->mtc_verification_info) &&
+          data.ReadOcspResult(&out->ocsp_result) && data.ReadScts(&out->scts) &&
+          data.ReadPolicyCompliance(&out->policy_compliance) &&
+          data.ReadCtRequirementStatus(&out->ct_requirement_status);
+diff --git a/services/network/public/cpp/cert_verify_result_mojom_traits.h b/services/network/public/cpp/cert_verify_result_mojom_traits.h
+index 36b9046ca6..e0c9b4f9b5 100644
+--- a/services/network/public/cpp/cert_verify_result_mojom_traits.h
++++ b/services/network/public/cpp/cert_verify_result_mojom_traits.h
+@@ -7,6 +7,7 @@
+ 
+ #include <stdint.h>
+ 
++#include <optional>
+ #include <vector>
+ 
+ #include "base/component_export.h"
+@@ -35,6 +36,10 @@ class COMPONENT_EXPORT(NETWORK_CPP_NETWORK_PARAM)
+       const net::CertVerifyResult& result) {
+     return result.public_key_hashes;
+   }
++  static const std::optional<bssl::MTCVerificationInfo>& mtc_verification_info(
++      const net::CertVerifyResult& result) {
++    return result.mtc_verification_info;
++  }
+   static bool is_issued_by_known_root(const net::CertVerifyResult& result) {
+     return result.is_issued_by_known_root;
+   }
+diff --git a/services/network/public/cpp/cert_verify_result_mojom_traits_unittest.cc b/services/network/public/cpp/cert_verify_result_mojom_traits_unittest.cc
+new file mode 100644
+index 0000000000..bcc91e3490
+--- /dev/null
++++ b/services/network/public/cpp/cert_verify_result_mojom_traits_unittest.cc
+@@ -0,0 +1,60 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "services/network/public/cpp/cert_verify_result_mojom_traits.h"
++
++#include <optional>
++
++#include "mojo/public/cpp/test_support/test_utils.h"
++#include "net/cert/cert_verify_result.h"
++#include "services/network/public/mojom/cert_verify_result.mojom.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace {
++
++void ExpectMtcVerificationInfoEquals(
++    const bssl::MTCVerificationInfo& expected,
++    const std::optional<bssl::MTCVerificationInfo>& actual) {
++  ASSERT_TRUE(actual.has_value());
++  EXPECT_EQ(expected.mode, actual->mode);
++  EXPECT_EQ(expected.ca_id, actual->ca_id);
++  EXPECT_EQ(expected.log_number, actual->log_number);
++  EXPECT_EQ(expected.leaf_index, actual->leaf_index);
++}
++
++TEST(CertVerifyResultMojoTraitsTest, MtcVerificationInfo) {
++  net::CertVerifyResult in;
++  net::CertVerifyResult out;
++
++  ASSERT_TRUE(
++      mojo::test::SerializeAndDeserialize<network::mojom::CertVerifyResult>(
++          in, out));
++  EXPECT_FALSE(out.mtc_verification_info.has_value());
++
++  const bssl::MTCVerificationInfo landmark_info{
++      .mode = bssl::MTCVerificationMode::kLandmark,
++      .ca_id = {0x81, 0xfd, 0x59, 0x65},
++      .log_number = 7,
++      .leaf_index = 0x010203040506,
++  };
++  in.mtc_verification_info = landmark_info;
++  ASSERT_TRUE(
++      mojo::test::SerializeAndDeserialize<network::mojom::CertVerifyResult>(
++          in, out));
++  ExpectMtcVerificationInfoEquals(landmark_info, out.mtc_verification_info);
++
++  const bssl::MTCVerificationInfo standalone_info{
++      .mode = bssl::MTCVerificationMode::kStandalone,
++      .ca_id = {0xaa, 0x0b, 0xcc},
++      .log_number = 11,
++      .leaf_index = 42,
++  };
++  in.mtc_verification_info = standalone_info;
++  ASSERT_TRUE(
++      mojo::test::SerializeAndDeserialize<network::mojom::CertVerifyResult>(
++          in, out));
++  ExpectMtcVerificationInfoEquals(standalone_info, out.mtc_verification_info);
++}
++
++}  // namespace
+diff --git a/services/network/public/cpp/mtc_verification_info_mojom_traits.cc b/services/network/public/cpp/mtc_verification_info_mojom_traits.cc
+new file mode 100644
+index 0000000000..5af2c12b97
+--- /dev/null
++++ b/services/network/public/cpp/mtc_verification_info_mojom_traits.cc
+@@ -0,0 +1,47 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "services/network/public/cpp/mtc_verification_info_mojom_traits.h"
++
++#include "base/notreached.h"
++
++namespace mojo {
++
++// static
++network::mojom::MTCVerificationMode EnumTraits<
++    network::mojom::MTCVerificationMode,
++    bssl::MTCVerificationMode>::ToMojom(bssl::MTCVerificationMode input) {
++  switch (input) {
++    case bssl::MTCVerificationMode::kLandmark:
++      return network::mojom::MTCVerificationMode::kLandmark;
++    case bssl::MTCVerificationMode::kStandalone:
++      return network::mojom::MTCVerificationMode::kStandalone;
++  }
++  NOTREACHED();
++}
++
++// static
++std::optional<bssl::MTCVerificationMode>
++EnumTraits<network::mojom::MTCVerificationMode, bssl::MTCVerificationMode>::
++    FromMojom(network::mojom::MTCVerificationMode input) {
++  switch (input) {
++    case network::mojom::MTCVerificationMode::kLandmark:
++      return bssl::MTCVerificationMode::kLandmark;
++    case network::mojom::MTCVerificationMode::kStandalone:
++      return bssl::MTCVerificationMode::kStandalone;
++  }
++  return std::nullopt;
++}
++
++// static
++bool StructTraits<network::mojom::MTCVerificationInfoDataView,
++                  bssl::MTCVerificationInfo>::
++    Read(network::mojom::MTCVerificationInfoDataView data,
++         bssl::MTCVerificationInfo* out) {
++  out->log_number = data.log_number();
++  out->leaf_index = data.leaf_index();
++  return data.ReadMode(&out->mode) && data.ReadCaId(&out->ca_id);
++}
++
++}  // namespace mojo
+diff --git a/services/network/public/cpp/mtc_verification_info_mojom_traits.h b/services/network/public/cpp/mtc_verification_info_mojom_traits.h
+new file mode 100644
+index 0000000000..e7fe9a10d8
+--- /dev/null
++++ b/services/network/public/cpp/mtc_verification_info_mojom_traits.h
+@@ -0,0 +1,54 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef SERVICES_NETWORK_PUBLIC_CPP_MTC_VERIFICATION_INFO_MOJOM_TRAITS_H_
++#define SERVICES_NETWORK_PUBLIC_CPP_MTC_VERIFICATION_INFO_MOJOM_TRAITS_H_
++
++#include <cstdint>
++#include <optional>
++#include <vector>
++
++#include "base/component_export.h"
++#include "mojo/public/cpp/bindings/enum_traits.h"
++#include "mojo/public/cpp/bindings/struct_traits.h"
++#include "services/network/public/mojom/mtc_verification_info.mojom-shared.h"
++#include "third_party/boringssl/src/pki/verify_certificate_chain.h"
++
++namespace mojo {
++
++template <>
++struct COMPONENT_EXPORT(NETWORK_CPP_NETWORK_PARAM)
++    EnumTraits<network::mojom::MTCVerificationMode, bssl::MTCVerificationMode> {
++  static network::mojom::MTCVerificationMode ToMojom(
++      bssl::MTCVerificationMode input);
++  static std::optional<bssl::MTCVerificationMode> FromMojom(
++      network::mojom::MTCVerificationMode input);
++};
++
++template <>
++class COMPONENT_EXPORT(NETWORK_CPP_NETWORK_PARAM)
++    StructTraits<network::mojom::MTCVerificationInfoDataView,
++                 bssl::MTCVerificationInfo> {
++ public:
++  static bssl::MTCVerificationMode mode(const bssl::MTCVerificationInfo& info) {
++    return info.mode;
++  }
++  static const std::vector<uint8_t>& ca_id(
++      const bssl::MTCVerificationInfo& info) {
++    return info.ca_id;
++  }
++  static uint16_t log_number(const bssl::MTCVerificationInfo& info) {
++    return info.log_number;
++  }
++  static uint64_t leaf_index(const bssl::MTCVerificationInfo& info) {
++    return info.leaf_index;
++  }
++
++  static bool Read(network::mojom::MTCVerificationInfoDataView data,
++                   bssl::MTCVerificationInfo* out);
++};
++
++}  // namespace mojo
++
++#endif  // SERVICES_NETWORK_PUBLIC_CPP_MTC_VERIFICATION_INFO_MOJOM_TRAITS_H_
+diff --git a/services/network/public/cpp/ssl_info_mojom_traits.cc b/services/network/public/cpp/ssl_info_mojom_traits.cc
+index 1dbc0a02d3..a9eecc8d05 100644
+--- a/services/network/public/cpp/ssl_info_mojom_traits.cc
++++ b/services/network/public/cpp/ssl_info_mojom_traits.cc
+@@ -7,6 +7,7 @@
+ #include "base/notreached.h"
+ #include "services/network/public/cpp/ct_policy_status_mojom_traits.h"
+ #include "services/network/public/cpp/hash_value_mojom_traits.h"
++#include "services/network/public/cpp/mtc_verification_info_mojom_traits.h"
+ #include "services/network/public/cpp/signed_certificate_timestamp_and_status_mojom_traits.h"
+ #include "services/network/public/cpp/x509_certificate_mojom_traits.h"
+ 
+@@ -58,6 +59,7 @@ bool StructTraits<network::mojom::SSLInfoDataView, net::SSLInfo>::Read(
+   return data.ReadCert(&out->cert) &&
+          data.ReadUnverifiedCert(&out->unverified_cert) &&
+          data.ReadPublicKeyHashes(&out->public_key_hashes) &&
++         data.ReadMtcVerificationInfo(&out->mtc_verification_info) &&
+          data.ReadSignedCertificateTimestamps(
+              &out->signed_certificate_timestamps) &&
+          data.ReadHandshakeType(&out->handshake_type) &&
+diff --git a/services/network/public/cpp/ssl_info_mojom_traits.h b/services/network/public/cpp/ssl_info_mojom_traits.h
+index 008e96a209..e68c080703 100644
+--- a/services/network/public/cpp/ssl_info_mojom_traits.h
++++ b/services/network/public/cpp/ssl_info_mojom_traits.h
+@@ -5,6 +5,7 @@
+ #ifndef SERVICES_NETWORK_PUBLIC_CPP_SSL_INFO_MOJOM_TRAITS_H_
+ #define SERVICES_NETWORK_PUBLIC_CPP_SSL_INFO_MOJOM_TRAITS_H_
+ 
++#include <optional>
+ #include <vector>
+ 
+ #include "base/component_export.h"
+@@ -73,6 +74,10 @@ class COMPONENT_EXPORT(NETWORK_CPP_NETWORK_PARAM)
+       const net::SSLInfo& info) {
+     return info.public_key_hashes;
+   }
++  static const std::optional<bssl::MTCVerificationInfo>& mtc_verification_info(
++      const net::SSLInfo& info) {
++    return info.mtc_verification_info;
++  }
+   static const net::SignedCertificateTimestampAndStatusList&
+   signed_certificate_timestamps(const net::SSLInfo& info) {
+     return info.signed_certificate_timestamps;
+diff --git a/services/network/public/cpp/ssl_info_mojom_traits_unittest.cc b/services/network/public/cpp/ssl_info_mojom_traits_unittest.cc
+index 53cb5269a1..e3731ffddb 100644
+--- a/services/network/public/cpp/ssl_info_mojom_traits_unittest.cc
++++ b/services/network/public/cpp/ssl_info_mojom_traits_unittest.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "services/network/public/cpp/ssl_info_mojom_traits.h"
+ 
++#include <optional>
++
+ #include "base/time/time.h"
+ #include "mojo/public/cpp/test_support/test_utils.h"
+ #include "net/base/hash_value.h"
+@@ -120,6 +122,16 @@ Matcher<const net::SSLInfo&> SSLInfoEquals(const net::SSLInfo& expected) {
+       Field(&net::SSLInfo::is_fatal_cert_error, expected.is_fatal_cert_error));
+ }
+ 
++void ExpectMtcVerificationInfoEquals(
++    const bssl::MTCVerificationInfo& expected,
++    const std::optional<bssl::MTCVerificationInfo>& actual) {
++  ASSERT_TRUE(actual.has_value());
++  EXPECT_EQ(expected.mode, actual->mode);
++  EXPECT_EQ(expected.ca_id, actual->ca_id);
++  EXPECT_EQ(expected.log_number, actual->log_number);
++  EXPECT_EQ(expected.leaf_index, actual->leaf_index);
++}
++
+ }  // namespace
+ 
+ TEST(SSLInfoMojoTraitsTest, Default) {
+@@ -128,6 +140,34 @@ TEST(SSLInfoMojoTraitsTest, Default) {
+   ASSERT_TRUE(
+       mojo::test::SerializeAndDeserialize<network::mojom::SSLInfo>(in, out));
+   EXPECT_THAT(out, SSLInfoEquals(in));
++  EXPECT_FALSE(out.mtc_verification_info.has_value());
++}
++
++TEST(SSLInfoMojoTraitsTest, MtcVerificationInfo) {
++  net::SSLInfo in;
++  net::SSLInfo out;
++
++  const bssl::MTCVerificationInfo landmark_info{
++      .mode = bssl::MTCVerificationMode::kLandmark,
++      .ca_id = {0x81, 0xfd, 0x59, 0x65},
++      .log_number = 7,
++      .leaf_index = 0x010203040506,
++  };
++  in.mtc_verification_info = landmark_info;
++  ASSERT_TRUE(
++      mojo::test::SerializeAndDeserialize<network::mojom::SSLInfo>(in, out));
++  ExpectMtcVerificationInfoEquals(landmark_info, out.mtc_verification_info);
++
++  const bssl::MTCVerificationInfo standalone_info{
++      .mode = bssl::MTCVerificationMode::kStandalone,
++      .ca_id = {0xaa, 0x0b, 0xcc},
++      .log_number = 11,
++      .leaf_index = 42,
++  };
++  in.mtc_verification_info = standalone_info;
++  ASSERT_TRUE(
++      mojo::test::SerializeAndDeserialize<network::mojom::SSLInfo>(in, out));
++  ExpectMtcVerificationInfoEquals(standalone_info, out.mtc_verification_info);
+ }
+ 
+ // Test serializing a SSLInfo with non-default values to validate serialization
+diff --git a/services/network/public/mojom/BUILD.gn b/services/network/public/mojom/BUILD.gn
+index 58bd593c43..9b4db2ab0c 100644
+--- a/services/network/public/mojom/BUILD.gn
++++ b/services/network/public/mojom/BUILD.gn
+@@ -1168,6 +1168,7 @@ mojom("mojom_network_param") {
+     "ct_policy_status.mojom",
+     "hash_value.mojom",
+     "http_response_headers.mojom",
++    "mtc_verification_info.mojom",
+     "network_param.mojom",
+     "ocsp_verify_result.mojom",
+     "sct_status_flags.mojom",
+@@ -1263,6 +1264,23 @@ mojom("mojom_network_param") {
+       traits_public_deps =
+           [ "//services/network/public/cpp:network_param_mojom_support" ]
+     },
++    {
++      types = [
++        {
++          mojom = "network.mojom.MTCVerificationInfo"
++          cpp = "::bssl::MTCVerificationInfo"
++        },
++        {
++          mojom = "network.mojom.MTCVerificationMode"
++          cpp = "::bssl::MTCVerificationMode"
++        },
++      ]
++      traits_headers = [
++        "//services/network/public/cpp/mtc_verification_info_mojom_traits.h",
++      ]
++      traits_public_deps =
++          [ "//services/network/public/cpp:network_param_mojom_support" ]
++    },
+     {
+       types = [
+         {
+diff --git a/services/network/public/mojom/cert_verify_result.mojom b/services/network/public/mojom/cert_verify_result.mojom
+index 3d843fb411..08adb18573 100644
+--- a/services/network/public/mojom/cert_verify_result.mojom
++++ b/services/network/public/mojom/cert_verify_result.mojom
+@@ -6,6 +6,7 @@ module network.mojom;
+ 
+ import "services/network/public/mojom/ct_policy_status.mojom";
+ import "services/network/public/mojom/hash_value.mojom";
++import "services/network/public/mojom/mtc_verification_info.mojom";
+ import "services/network/public/mojom/ocsp_verify_result.mojom";
+ import "services/network/public/mojom/signed_certificate_timestamp_and_status.mojom";
+ import "services/network/public/mojom/x509_certificate.mojom";
+@@ -19,6 +20,7 @@ struct CertVerifyResult {
+   // `verified_cert` and not the originally-supplied certificate chain.
+   uint32 cert_status;
+   array<SHA256HashValue> public_key_hashes;
++  MTCVerificationInfo? mtc_verification_info;
+   bool is_issued_by_known_root;
+   OCSPVerifyResult ocsp_result;
+   array<SignedCertificateTimestampAndStatus> scts;
+diff --git a/services/network/public/mojom/mtc_verification_info.mojom b/services/network/public/mojom/mtc_verification_info.mojom
+new file mode 100644
+index 0000000000..633be03cde
+--- /dev/null
++++ b/services/network/public/mojom/mtc_verification_info.mojom
+@@ -0,0 +1,19 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++module network.mojom;
++
++// Typemapped to `bssl::MTCVerificationMode`.
++enum MTCVerificationMode {
++  kLandmark,
++  kStandalone,
++};
++
++// Typemapped to `bssl::MTCVerificationInfo`.
++struct MTCVerificationInfo {
++  MTCVerificationMode mode;
++  array<uint8> ca_id;
++  uint16 log_number;
++  uint64 leaf_index;
++};
+diff --git a/services/network/public/mojom/ssl_info.mojom b/services/network/public/mojom/ssl_info.mojom
+index 0baac17fec..7dfb4139c1 100644
+--- a/services/network/public/mojom/ssl_info.mojom
++++ b/services/network/public/mojom/ssl_info.mojom
+@@ -6,6 +6,7 @@ module network.mojom;
+ 
+ import "services/network/public/mojom/ct_policy_status.mojom";
+ import "services/network/public/mojom/hash_value.mojom";
++import "services/network/public/mojom/mtc_verification_info.mojom";
+ import "services/network/public/mojom/signed_certificate_timestamp_and_status.mojom";
+ import "services/network/public/mojom/x509_certificate.mojom";
+ 
+@@ -36,6 +37,7 @@ struct SSLInfo {
+   bool encrypted_client_hello;
+   SSLInfoHandshakeType handshake_type;
+   array<SHA256HashValue> public_key_hashes;
++  MTCVerificationInfo? mtc_verification_info;
+   array<SignedCertificateTimestampAndStatus> signed_certificate_timestamps;
+   CTPolicyCompliance ct_policy_compliance;
+   bool is_fatal_cert_error;
+-- 
+2.50.1 (Apple Git-155)
+
