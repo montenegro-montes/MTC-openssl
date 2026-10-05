@@ -11,6 +11,28 @@ services:
       - mtc-log-data:/data
     restart: "no"
 
+  monitor:
+    build:
+      context: ..
+      dockerfile: docker/monitor/Dockerfile
+    command:
+      - --log-url
+      - ${MTC_MONITOR_LOG_URL:-http://mtc-log:8080}
+      - --trusted-authority
+      - /run/mtc-monitor/authority.bin
+      - --checker
+      - /usr/local/bin/check_snapshot
+      - --state-directory
+      - /var/lib/mtc-monitor
+      - --interval
+      - ${MTC_MONITOR_INTERVAL:-60}
+    depends_on:
+      - mtc-log
+    volumes:
+      - ${MTC_MONITOR_TRUSTED_AUTHORITY:-./monitor/authority.bin}:/run/mtc-monitor/authority.bin:ro
+      - mtc-monitor-state:/var/lib/mtc-monitor
+    restart: "no"
+
   external-cosigner:
     build:
       context: ..
@@ -69,3 +91,4 @@ volumes:
   cosigner-state:
     external: true
     name: mtc-external-cosigner_cosigner-state
+  mtc-monitor-state:

@@ -1,0 +1,15 @@
+services:
+  mtc-log:
+    command:
+      - --port
+      - "8080"
+      - --snapshot
+      - /run/mtc-preflight/snapshot.mcp2
+      - --read-only
+    volumes:
+      - ${MTC_MONITOR_PREFLIGHT_LOG:?set MTC_MONITOR_PREFLIGHT_LOG}:/data:ro
+      - ${MTC_MONITOR_PREFLIGHT_SNAPSHOT:?set MTC_MONITOR_PREFLIGHT_SNAPSHOT}:/run/mtc-preflight/snapshot.mcp2:ro
+
+  monitor:
+    volumes:
+      - ${MTC_MONITOR_PREFLIGHT_AUTHORITY:?set MTC_MONITOR_PREFLIGHT_AUTHORITY}:/run/mtc-monitor/authority.bin:ro

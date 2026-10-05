@@ -18,16 +18,20 @@ from trusted_subtrees import (
 )
 
 
+class RPHTTPError(ValueError):
+    """The remote log service could not provide an HTTP response."""
+
+
 def _get(base_url, path, binary=False):
     url = urljoin(base_url.rstrip("/") + "/", path.lstrip("/"))
     try:
         with urlopen(Request(url, method="GET"), timeout=5) as response:
             if response.status != 200:
-                raise ValueError("HTTP request failed")
+                raise RPHTTPError("HTTP request failed")
             data = response.read()
             content_type = response.headers.get_content_type()
     except (HTTPError, URLError, OSError) as exc:
-        raise ValueError("HTTP request failed") from exc
+        raise RPHTTPError("HTTP request failed") from exc
 
     if binary:
         return data
