@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Minimal lifecycle entry point for the functional MTC laboratory.
+set -euo pipefail
+
+REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+STATE="$REPO/.mt-state/mt-lab"
+CONFIG="$STATE/paths.env"
+
+fail() { echo "ERROR: $*" >&2; exit 1; }
+
+usage() {
+ echo 'Usage: mt-lab [init|status|--help]'
+}
+
+init() {
+ mkdir -p "$STATE"
+ if [[ -f "$CONFIG" ]]; then
+  echo "KEEP existing configuration: $CONFIG"
+  return
+ fi
+ {
+  printf 'MT_LAB_REPOSITORY=%q\n' "$REPO"
+  printf 'MT_LAB_STATE=%q\n' "$STATE"
+  printf 'MT_LAB_FIXTURE=%q\n' ''
+ } > "$CONFIG"
+ echo "MTC laboratory initialized: $CONFIG"
+}
+
+status() {
+ local fixture='' preparation docker
+ if [[ -f "$CONFIG" ]]; then
+  # This ignored local file is created and owned by the launcher user.
+  source "$CONFIG"
+  fixture=${MT_LAB_FIXTURE:-}
+  state="initialized ($STATE)"
+ else
+  state="not initialized ($STATE)"
+ fi
+ if [[ -d "$REPO/.mt-state/cryptographic-setup" ]]; then
+  preparation='mt-prepare state present; laboratory preparation not inferred'
+ else
+  preparation='not run'
+ fi
+ if command -v docker >/dev/null 2>&1; then
+  docker='command available; laboratory runtime not inspected'
+ else
+  docker='command unavailable; laboratory runtime not inspected'
+ fi
+ [[ -n "$fixture" ]] || fixture='not selected'
+ printf 'MTC laboratory\n'
+ printf 'repository: %s\n' "$REPO"
+ printf 'state: %s\n' "$state"
+ printf 'preparation: %s\n' "$preparation"
+ printf 'fixture: %s\n' "$fixture"
+ printf 'docker: %s\n' "$docker"
+}
+
+case "${1:---help}" in
+ init) [[ "$#" == 1 ]] || fail 'Usage: mt-lab init'; init;;
+ status) [[ "$#" == 1 ]] || fail 'Usage: mt-lab status'; status;;
+ help|--help|-h) [[ "$#" == 1 ]] || fail 'Usage: mt-lab --help'; usage;;
+ *) fail 'Unknown command; use --help.';;
+esac
