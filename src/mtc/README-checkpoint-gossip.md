@@ -30,12 +30,14 @@ different root hashes are contradictory evidence by themselves.
 
 ## CLI
 
-Compare two persisted monitor checkpoints:
+Compare two monitor checkpoints over HTTP:
 
     PYTHONPATH=src/mtc python3 src/mtc/checkpoint_gossip.py \
-      --first monitor-a/checkpoint.json \
-      --second monitor-b/checkpoint.json \
+      --first-url http://monitor-a:8081/checkpoint \
+      --second-url http://monitor-b:8081/checkpoint \
       --log-url http://127.0.0.1:18080/
+
+`--first` and `--second` remain available for offline file-based checks.
 
 The Log URL is only required to establish consistency between checkpoints with
 different tree sizes.

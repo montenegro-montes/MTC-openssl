@@ -5,6 +5,7 @@ set -euo pipefail
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 STATE="$REPO/.mt-state/mt-lab"
 CONFIG="$STATE/paths.env"
+SERVICES="$STATE/services.env"
 COMPOSE_PROJECT_NAME=mtc-lab
 COMPOSE_FILE="$REPO/docker/compose.yaml"
 COMPOSE_PREFLIGHT="$REPO/docker/compose.monitor-preflight.yaml"
@@ -12,7 +13,7 @@ COMPOSE_PREFLIGHT="$REPO/docker/compose.monitor-preflight.yaml"
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
 usage() {
- echo 'Usage: mt-lab [init|prepare|up|status|down|gossip|--help]'
+ echo 'Usage: mt-lab [init|prepare|up|status|down|gossip|cosigner-test|--help]'
 }
 
 compose_base() {
@@ -24,8 +25,50 @@ compose_lab() {
  MTC_MONITOR_PREFLIGHT_LOG=$MT_LAB_FIXTURE/transparency/ecdsa-p256/persistent-log \
  MTC_MONITOR_PREFLIGHT_SNAPSHOT=$MT_LAB_FIXTURE/transparency/ecdsa-p256/snapshot-n16.mcp2 \
  MTC_MONITOR_PREFLIGHT_AUTHORITY=$MT_LAB_FIXTURE/transparency/ecdsa-p256/trusted-authority.bin \
+ MTC_MONITOR_PORT=8081 \
+ COSIGNER_SECRETS_VOLUME=mtc-lab-cosigner-secrets \
+ COSIGNER_STATE_VOLUME=mtc-lab-cosigner-state \
+ COSIGNER_CLIENT_DIRECTORY=$STATE/cosigner-client \
+ MTC_MONITOR_LOG_URL=$MTC_LOG_URL \
+ MTC_GOSSIP_FIRST_URL=$GOSSIP_FIRST_URL \
+ MTC_GOSSIP_SECOND_URL=$GOSSIP_SECOND_URL \
+ MTC_GOSSIP_LOG_URL=$GOSSIP_LOG_URL \
+ COSIGNER_SERVER_NAME=$COSIGNER_TLS_NAME COSIGNER_SERVER_SAN=$COSIGNER_TLS_SAN \
  COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME \
   docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_PREFLIGHT" "$@"
+}
+
+load_services() {
+ [[ -f "$SERVICES" ]] || fail 'Run mt-lab init first; services.env is missing.'
+ local key value required
+ while IFS='=' read -r key value || [[ -n "$key$value" ]]; do
+  case "$key" in
+   ''|'#'*) continue;;
+   MTC_LOG_BIND_ADDRESS|MTC_LOG_PORT|MTC_LOG_URL|\
+   COSIGNER_BIND_ADDRESS|COSIGNER_PORT|COSIGNER_TLS_NAME|\
+   MONITOR_A_BIND_ADDRESS|MONITOR_A_PORT|MONITOR_A_URL|\
+   MONITOR_B_BIND_ADDRESS|MONITOR_B_PORT|MONITOR_B_URL|\
+   GOSSIP_FIRST_URL|GOSSIP_SECOND_URL|GOSSIP_LOG_URL)
+    [[ -n "$value" ]] || fail "Empty service setting: $key"
+    printf -v "$key" '%s' "$value"
+    export "$key"
+    ;;
+   *) fail "Unknown service setting: $key";;
+  esac
+ done < "$SERVICES"
+ for required in MTC_LOG_BIND_ADDRESS MTC_LOG_PORT MTC_LOG_URL \
+  COSIGNER_BIND_ADDRESS COSIGNER_PORT COSIGNER_TLS_NAME \
+  MONITOR_A_BIND_ADDRESS MONITOR_A_PORT MONITOR_A_URL \
+  MONITOR_B_BIND_ADDRESS MONITOR_B_PORT MONITOR_B_URL \
+  GOSSIP_FIRST_URL GOSSIP_SECOND_URL GOSSIP_LOG_URL
+ do
+  [[ -n "${!required:-}" ]] || fail "Missing service setting: $required"
+ done
+ if [[ "$COSIGNER_TLS_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  COSIGNER_TLS_SAN="IP:$COSIGNER_TLS_NAME"
+ else
+  COSIGNER_TLS_SAN="DNS:$COSIGNER_TLS_NAME"
+ fi
 }
 
 docker_required() {
@@ -55,14 +98,47 @@ init() {
  mkdir -p "$STATE"
  if [[ -f "$CONFIG" ]]; then
   echo "KEEP existing configuration: $CONFIG"
-  return
+ else
+  {
+   printf 'MT_LAB_REPOSITORY=%q\n' "$REPO"
+   printf 'MT_LAB_STATE=%q\n' "$STATE"
+   printf 'MT_LAB_FIXTURE=%q\n' ''
+  } > "$CONFIG"
+  echo "MTC laboratory initialized: $CONFIG"
  fi
- {
-  printf 'MT_LAB_REPOSITORY=%q\n' "$REPO"
-  printf 'MT_LAB_STATE=%q\n' "$STATE"
-  printf 'MT_LAB_FIXTURE=%q\n' ''
- } > "$CONFIG"
- echo "MTC laboratory initialized: $CONFIG"
+ if [[ -f "$SERVICES" ]]; then
+  echo "KEEP existing service configuration: $SERVICES"
+ else
+  cat > "$SERVICES" <<'EOF'
+# MTC laboratory service endpoints
+
+# MTC Log
+MTC_LOG_BIND_ADDRESS=127.0.0.1
+MTC_LOG_PORT=18080
+MTC_LOG_URL=http://mtc-log:8080
+
+# External Cosigner
+COSIGNER_BIND_ADDRESS=127.0.0.1
+COSIGNER_PORT=8443
+COSIGNER_TLS_NAME=localhost
+
+# Monitor A
+MONITOR_A_BIND_ADDRESS=127.0.0.1
+MONITOR_A_PORT=18081
+MONITOR_A_URL=http://monitor-a:8081
+
+# Monitor B
+MONITOR_B_BIND_ADDRESS=127.0.0.1
+MONITOR_B_PORT=18082
+MONITOR_B_URL=http://monitor-b:8081
+
+# Gossip
+GOSSIP_FIRST_URL=http://monitor-a:8081/checkpoint
+GOSSIP_SECOND_URL=http://monitor-b:8081/checkpoint
+GOSSIP_LOG_URL=http://mtc-log:8080
+EOF
+  echo "MTC laboratory service configuration initialized: $SERVICES"
+ fi
 }
 
 prepare() (
@@ -102,9 +178,11 @@ up() (
   fail 'Laboratory configuration does not match this checkout.'
  [[ -n "${MT_LAB_FIXTURE:-}" ]] && fixture_valid "$MT_LAB_FIXTURE" ||
   fail 'Run mt-lab prepare before mt-lab up.'
+ load_services
  docker_required
  local volume
- for volume in mtc-log-data mtc-external-cosigner_cosigner-secrets mtc-external-cosigner_cosigner-state; do
+ mkdir -p "$STATE/cosigner-client"
+ for volume in mtc-log-data mtc-lab-cosigner-secrets mtc-lab-cosigner-state; do
   docker volume inspect "$volume" >/dev/null 2>&1 || docker volume create "$volume" >/dev/null
  done
  compose_lab --profile provision build \
@@ -124,7 +202,7 @@ up() (
 )
 
 status() {
- local fixture='' preparation docker
+ local fixture='' preparation docker configuration='not initialized'
  if [[ -f "$CONFIG" ]]; then
   # This ignored local file is created and owned by the launcher user.
   source "$CONFIG"
@@ -153,11 +231,23 @@ status() {
   services=no
  fi
  [[ -n "$fixture" ]] || fixture='not selected'
+ if [[ -f "$SERVICES" ]]; then
+  load_services
+  configuration=$SERVICES
+ fi
  printf 'MTC laboratory\n'
  printf 'repository: %s\n' "$REPO"
  printf 'state: %s\n' "$state"
  printf 'preparation: %s\n' "$preparation"
  printf 'fixture: %s\n' "$fixture"
+ printf 'configuration: %s\n' "$configuration"
+ if [[ -f "$SERVICES" ]]; then
+  printf 'mtc-log host: %s:%s\n' "$MTC_LOG_BIND_ADDRESS" "$MTC_LOG_PORT"
+  printf 'external-cosigner host: %s:%s\n' "$COSIGNER_BIND_ADDRESS" "$COSIGNER_PORT"
+  printf 'external-cosigner TLS identity: %s\n' "$COSIGNER_TLS_NAME"
+  printf 'monitor-a host: %s:%s\n' "$MONITOR_A_BIND_ADDRESS" "$MONITOR_A_PORT"
+  printf 'monitor-b host: %s:%s\n' "$MONITOR_B_BIND_ADDRESS" "$MONITOR_B_PORT"
+ fi
  printf 'docker: %s\n' "$docker"
  if [[ "$services" == yes ]]; then
   echo 'services:'
@@ -178,17 +268,47 @@ gossip() (
   fail 'Laboratory configuration does not match this checkout.'
  [[ -n "${MT_LAB_FIXTURE:-}" ]] && fixture_valid "$MT_LAB_FIXTURE" ||
   fail 'Run mt-lab prepare before mt-lab gossip.'
+ load_services
  docker_required
- local service monitor
+ local service
  for service in mtc-log external-cosigner monitor-a monitor-b; do
   [[ -n "$(compose_lab ps --status running --quiet "$service")" ]] ||
    fail "Laboratory service is not running: $service"
  done
- for monitor in monitor-a monitor-b; do
-  compose_lab exec -T "$monitor" test -s /var/lib/mtc-monitor/checkpoint.json >/dev/null 2>&1 ||
-   fail "Checkpoint is not available yet: $monitor"
- done
+ compose_lab --profile gossip build checkpoint-gossip
  compose_lab --profile gossip run --rm --no-deps checkpoint-gossip
+)
+
+cosigner_test() (
+ [[ -f "$CONFIG" ]] || fail 'Run mt-lab init and mt-lab prepare first.'
+ source "$CONFIG"
+ [[ "${MT_LAB_REPOSITORY:-}" == "$REPO" && "${MT_LAB_STATE:-}" == "$STATE" ]] ||
+  fail 'Laboratory configuration does not match this checkout.'
+ [[ -n "${MT_LAB_FIXTURE:-}" ]] && fixture_valid "$MT_LAB_FIXTURE" ||
+  fail 'Run mt-lab prepare before mt-lab cosigner-test.'
+ load_services
+ docker_required
+ local service credential url
+ for service in mtc-log external-cosigner monitor-a monitor-b; do
+  [[ -n "$(compose_lab ps --status running --quiet "$service")" ]] ||
+   fail "Laboratory service is not running: $service"
+ done
+ for credential in client.key client.pem server-ca.pem external.pub; do
+  [[ -s "$STATE/cosigner-client/$credential" ]] ||
+   fail "External Cosigner credential is missing: $credential"
+ done
+ url="https://$COSIGNER_TLS_NAME:$COSIGNER_PORT"
+ cd "$REPO/docker/external_cosigner"
+ PYTHONPATH="$REPO/src/mtc" python3 smoke.py accept --url "$url" \
+  --ca "$STATE/cosigner-client/server-ca.pem" \
+  --client-cert "$STATE/cosigner-client/client.pem" \
+  --client-key "$STATE/cosigner-client/client.key"
+ PYTHONPATH="$REPO/src/mtc" python3 smoke.py sign --url "$url" \
+  --ca "$STATE/cosigner-client/server-ca.pem" \
+  --client-cert "$STATE/cosigner-client/client.pem" \
+  --client-key "$STATE/cosigner-client/client.key"
+ PYTHONPATH="$REPO/src/mtc" python3 smoke.py no-cert --url "$url" \
+  --ca "$STATE/cosigner-client/server-ca.pem"
 )
 
 case "${1:---help}" in
@@ -198,6 +318,7 @@ case "${1:---help}" in
  status) [[ "$#" == 1 ]] || fail 'Usage: mt-lab status'; status;;
  down) [[ "$#" == 1 ]] || fail 'Usage: mt-lab down'; down;;
  gossip) [[ "$#" == 1 ]] || fail 'Usage: mt-lab gossip'; gossip;;
+ cosigner-test) [[ "$#" == 1 ]] || fail 'Usage: mt-lab cosigner-test'; cosigner_test;;
  help|--help|-h) [[ "$#" == 1 ]] || fail 'Usage: mt-lab --help'; usage;;
  *) fail 'Unknown command; use --help.';;
 esac

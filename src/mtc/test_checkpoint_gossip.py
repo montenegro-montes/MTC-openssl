@@ -3,7 +3,13 @@
 import json
 from pathlib import Path
 import tempfile
-from checkpoint_gossip import compare_checkpoints, main as gossip_main
+from urllib.error import URLError
+from unittest.mock import patch
+from checkpoint_gossip import (
+    _load_checkpoint_url,
+    compare_checkpoints,
+    main as gossip_main,
+)
 from rp_updater import RPHTTPError
 
 
@@ -13,6 +19,22 @@ def checkpoint(size, byte="11", log_number=1):
         "tree_size": size,
         "hash": byte * 32,
     }
+
+
+class Response:
+    status = 200
+
+    def __init__(self, value):
+        self.value = value
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def read(self):
+        return self.value
 
 
 def main():
@@ -134,6 +156,40 @@ def main():
             "--first", str(first_path),
             "--second", str(second_path),
         ]) == 1
+
+    # HTTP inputs use the same checkpoint validation and comparison.
+    with patch("checkpoint_gossip.urlopen", side_effect=[
+            Response(json.dumps(checkpoint(16)).encode()),
+            Response(json.dumps(checkpoint(16)).encode()),
+    ]):
+        assert gossip_main([
+            "--first-url", "http://monitor-a:8081/checkpoint",
+            "--second-url", "http://monitor-b:8081/checkpoint",
+        ]) == 0
+    with patch("checkpoint_gossip.urlopen", side_effect=[
+            Response(json.dumps(checkpoint(16, "11")).encode()),
+            Response(json.dumps(checkpoint(16, "22")).encode()),
+    ]):
+        assert gossip_main([
+            "--first-url", "http://monitor-a:8081/checkpoint",
+            "--second-url", "http://monitor-b:8081/checkpoint",
+        ]) == 1
+
+    with patch("checkpoint_gossip.urlopen", return_value=Response(b'{"bad":true}')):
+        try:
+            _load_checkpoint_url("http://monitor-a:8081/checkpoint")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid HTTP checkpoint accepted")
+
+    with patch("checkpoint_gossip.urlopen", side_effect=URLError("offline")):
+        try:
+            _load_checkpoint_url("http://monitor-a:8081/checkpoint")
+        except RPHTTPError:
+            pass
+        else:
+            raise AssertionError("unavailable HTTP checkpoint accepted")
 
     print("PASS: offline checkpoint gossip comparison")
 

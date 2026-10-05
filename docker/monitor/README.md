@@ -15,6 +15,12 @@ authority and the existing native `check_snapshot` implementation, and requests
 `/proof/consistency` only when the authenticated tree grows. It records only the
 last accepted checkpoint under `/var/lib/mtc-monitor`.
 
+The continuous process also exposes `GET /checkpoint` on
+`0.0.0.0:8081` by default. It returns the validated, last accepted checkpoint
+as JSON, or HTTP 404 before any checkpoint has been accepted. The endpoint is
+read-only and is intended for exchanging monitor views over the deployment
+network; `checkpoint.json` remains private persistent monitor state.
+
 It detects rollback, a different root at the same tree size, an invalid
 consistency proof, an unauthenticatable snapshot, corrupt local state, and Log
 unavailability. A single monitor does **not** demonstrate the global absence of

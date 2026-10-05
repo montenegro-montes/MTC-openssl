@@ -1,6 +1,7 @@
 """Continuous fail-closed monitoring of authenticated MTC checkpoints."""
 
 import argparse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
@@ -8,7 +9,7 @@ import signal
 import stat
 import sys
 import tempfile
-from threading import Event
+from threading import Event, Thread
 from urllib.parse import urlsplit
 
 from rp_updater import (
@@ -85,6 +86,53 @@ class CheckpointStateStore:
             if temporary.exists():
                 temporary.unlink()
         return checkpoint
+
+
+class CheckpointHTTPHandler(BaseHTTPRequestHandler):
+    checkpoint_store = None
+
+    def do_GET(self):
+        if self.path != "/checkpoint":
+            self.send_error(404)
+            return
+        try:
+            checkpoint = self.checkpoint_store.load()
+        except (MonitorStateError, OSError):
+            self.send_error(500)
+            return
+        if checkpoint is None:
+            self.send_error(404, "No accepted checkpoint")
+            return
+        data = (json.dumps(
+            checkpoint, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _method_not_allowed(self):
+        self.send_response(405)
+        self.send_header("Allow", "GET")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    do_DELETE = _method_not_allowed
+    do_HEAD = _method_not_allowed
+    do_OPTIONS = _method_not_allowed
+    do_PATCH = _method_not_allowed
+    do_POST = _method_not_allowed
+    do_PUT = _method_not_allowed
+
+    def log_message(self, format, *args):
+        pass
+
+
+def checkpoint_http_server(host, port, store):
+    class Handler(CheckpointHTTPHandler):
+        checkpoint_store = store
+
+    return ThreadingHTTPServer((host, port), Handler)
 
 
 def _result(result, severity, previous=None, candidate=None):
@@ -195,10 +243,14 @@ def main(argv=None):
         "--state-directory", type=Path,
         default=Path("/var/lib/mtc-monitor"))
     parser.add_argument("--interval", type=float, default=60.0)
+    parser.add_argument("--listen-host", default="0.0.0.0")
+    parser.add_argument("--listen-port", type=int, default=8081)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args(argv)
     if args.interval <= 0:
         parser.error("--interval must be positive")
+    if not 1 <= args.listen_port <= 65535:
+        parser.error("--listen-port must be between 1 and 65535")
     try:
         monitor = CheckpointMonitor(
             args.log_url, args.trusted_authority, args.checker,
@@ -214,12 +266,28 @@ def main(argv=None):
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, stop)
 
-    while not stopped.is_set():
-        result = monitor.check_once()
-        print(json.dumps(result, sort_keys=True, separators=(",", ":")), flush=True)
-        if args.once:
-            return 0 if result["severity"] == "PASS" else 1
-        stopped.wait(args.interval)
+    server = None
+    thread = None
+    if not args.once:
+        try:
+            server = checkpoint_http_server(
+                args.listen_host, args.listen_port, monitor.store)
+        except OSError as error:
+            parser.error(str(error))
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+    try:
+        while not stopped.is_set():
+            result = monitor.check_once()
+            print(json.dumps(result, sort_keys=True, separators=(",", ":")), flush=True)
+            if args.once:
+                return 0 if result["severity"] == "PASS" else 1
+            stopped.wait(args.interval)
+    finally:
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+            thread.join()
     return 0
 
 

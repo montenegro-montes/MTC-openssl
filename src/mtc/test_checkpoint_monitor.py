@@ -4,13 +4,16 @@ import json
 from pathlib import Path
 import signal
 import tempfile
-from urllib.error import URLError
+from threading import Thread
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from unittest.mock import patch
 
 from checkpoint_monitor import (
     CheckpointMonitor,
     CheckpointStateStore,
     MonitorStateError,
+    checkpoint_http_server,
     require_http_log_url,
 )
 import checkpoint_monitor
@@ -130,6 +133,44 @@ with tempfile.TemporaryDirectory(prefix="mtc-checkpoint-monitor-") as value:
         pass
     else:
         raise AssertionError("symlink monitor state accepted")
+
+    http_state = root / "http-state"
+    store = CheckpointStateStore(http_state)
+    server = checkpoint_http_server("127.0.0.1", 0, store)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        try:
+            urlopen(url + "/checkpoint")
+        except HTTPError as error:
+            assert error.code == 404
+        else:
+            raise AssertionError("missing checkpoint returned HTTP success")
+
+        store.save(cp8)
+        with urlopen(url + "/checkpoint") as response:
+            assert response.status == 200
+            assert response.headers.get_content_type() == "application/json"
+            assert json.loads(response.read()) == cp8
+
+        try:
+            urlopen(url + "/unknown")
+        except HTTPError as error:
+            assert error.code == 404
+        else:
+            raise AssertionError("unknown monitor route returned HTTP success")
+
+        try:
+            urlopen(Request(url + "/checkpoint", data=b"", method="POST"))
+        except HTTPError as error:
+            assert error.code == 405
+        else:
+            raise AssertionError("unsupported monitor method returned HTTP success")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 for accepted in (
         "http://localhost:8080", "http://127.0.0.1:8080",

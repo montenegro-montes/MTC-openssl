@@ -3,6 +3,8 @@
 import argparse
 import json
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from rp_updater import RPHTTPError, _checkpoint, advance_checkpoint
 
@@ -65,12 +67,31 @@ def _load_checkpoint(path):
         raise ValueError(f"invalid checkpoint file: {path}") from error
 
 
+def _load_checkpoint_url(url):
+    try:
+        with urlopen(Request(url, method="GET"), timeout=5) as response:
+            if response.status != 200:
+                raise RPHTTPError("checkpoint HTTP request failed")
+            data = response.read()
+    except (HTTPError, URLError, OSError) as error:
+        raise RPHTTPError("checkpoint HTTP request failed") from error
+    try:
+        value = json.loads(data)
+        return dict(_checkpoint(value))
+    except (ValueError, TypeError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"invalid checkpoint response: {url}") from error
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Compare two authenticated MTC checkpoint views."
     )
-    parser.add_argument("--first", required=True, help="first checkpoint JSON file")
-    parser.add_argument("--second", required=True, help="second checkpoint JSON file")
+    first = parser.add_mutually_exclusive_group(required=True)
+    first.add_argument("--first", help="first checkpoint JSON file")
+    first.add_argument("--first-url", help="first checkpoint HTTP URL")
+    second = parser.add_mutually_exclusive_group(required=True)
+    second.add_argument("--second", help="second checkpoint JSON file")
+    second.add_argument("--second-url", help="second checkpoint HTTP URL")
     parser.add_argument(
         "--log-url",
         help="MTC Log URL used to verify consistency when tree sizes differ",
@@ -78,8 +99,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     try:
-        first = _load_checkpoint(args.first)
-        second = _load_checkpoint(args.second)
+        first = (_load_checkpoint_url(args.first_url) if args.first_url
+                 else _load_checkpoint(args.first))
+        second = (_load_checkpoint_url(args.second_url) if args.second_url
+                  else _load_checkpoint(args.second))
         result = compare_checkpoints(
             first,
             second,
