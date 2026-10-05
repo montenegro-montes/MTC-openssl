@@ -12,7 +12,7 @@ COMPOSE_PREFLIGHT="$REPO/docker/compose.monitor-preflight.yaml"
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
 usage() {
- echo 'Usage: mt-lab [init|prepare|up|status|down|--help]'
+ echo 'Usage: mt-lab [init|prepare|up|status|down|gossip|--help]'
 }
 
 compose_base() {
@@ -171,12 +171,33 @@ down() {
  compose_base down --remove-orphans
 }
 
+gossip() (
+ [[ -f "$CONFIG" ]] || fail 'Run mt-lab init and mt-lab prepare first.'
+ source "$CONFIG"
+ [[ "${MT_LAB_REPOSITORY:-}" == "$REPO" && "${MT_LAB_STATE:-}" == "$STATE" ]] ||
+  fail 'Laboratory configuration does not match this checkout.'
+ [[ -n "${MT_LAB_FIXTURE:-}" ]] && fixture_valid "$MT_LAB_FIXTURE" ||
+  fail 'Run mt-lab prepare before mt-lab gossip.'
+ docker_required
+ local service monitor
+ for service in mtc-log external-cosigner monitor-a monitor-b; do
+  [[ -n "$(compose_lab ps --status running --quiet "$service")" ]] ||
+   fail "Laboratory service is not running: $service"
+ done
+ for monitor in monitor-a monitor-b; do
+  compose_lab exec -T "$monitor" test -s /var/lib/mtc-monitor/checkpoint.json >/dev/null 2>&1 ||
+   fail "Checkpoint is not available yet: $monitor"
+ done
+ compose_lab --profile gossip run --rm --no-deps checkpoint-gossip
+)
+
 case "${1:---help}" in
  init) [[ "$#" == 1 ]] || fail 'Usage: mt-lab init'; init;;
  prepare) [[ "$#" == 1 ]] || fail 'Usage: mt-lab prepare'; prepare;;
  up) [[ "$#" == 1 ]] || fail 'Usage: mt-lab up'; up;;
  status) [[ "$#" == 1 ]] || fail 'Usage: mt-lab status'; status;;
  down) [[ "$#" == 1 ]] || fail 'Usage: mt-lab down'; down;;
+ gossip) [[ "$#" == 1 ]] || fail 'Usage: mt-lab gossip'; gossip;;
  help|--help|-h) [[ "$#" == 1 ]] || fail 'Usage: mt-lab --help'; usage;;
  *) fail 'Unknown command; use --help.';;
 esac
