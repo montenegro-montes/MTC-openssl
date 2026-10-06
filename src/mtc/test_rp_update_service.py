@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 import rp_update_service
-from landmarks import Landmark, encode_publication
+from landmarks import Landmark, active, encode_publication
 from rp_updater import RPHTTPError
 
 
@@ -41,12 +41,22 @@ class RPUpdateServiceTest(unittest.TestCase):
         self.temporary.cleanup()
 
     def test_landmark_sequence(self):
-        sequence, now = rp_update_service.landmark_sequence(
-            self.landmarks
+        sequence = rp_update_service.landmark_sequence(
+            self.landmarks, 50
         )
 
         self.assertEqual(sequence, self.sequence)
-        self.assertEqual(now, 200)
+
+    def test_landmark_sequence_uses_supplied_time(self):
+        sequence = rp_update_service.landmark_sequence(
+            self.landmarks, 50
+        )
+
+        self.assertEqual(sequence, self.sequence)
+        self.assertEqual(
+            [landmark.number for landmark in active(sequence, 50)],
+            [1, 2],
+        )
 
     def test_once_success(self):
         original = rp_update_service.update_and_publish_remote

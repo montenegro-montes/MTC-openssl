@@ -180,7 +180,8 @@ prepare() (
  [[ ! -e "$fixture" ]] || fail "Fixture path already exists: $fixture"
  "$REPO/bin/base/mt-prepare" run 2
  python3 "$REPO/campaigns/scaling/mtc_profile_scaling/workflow.py" generate \
-  --output "$fixture" --profile ecdsa-p256 --sizes 16 --execute
+  --output "$fixture" --profile ecdsa-p256 --sizes 16 \
+  --server-hostname server.mtc.example.com --execute
  fixture_valid "$fixture" || fail "Generated fixture is incomplete; preserved at $fixture"
  temporary="$STATE/paths.env.tmp.$$"
  {

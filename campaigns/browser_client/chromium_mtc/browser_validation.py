@@ -849,7 +849,7 @@ def validate_mts1(path, expected_log_number):
         seen.add(key)
 
 
-def browser_command(executable, profile, case_dir, anchor, url, enable_mtc=False, browser_mode='headless', disable_trust_anchor_ids=False, trusted_subtrees=None):
+def browser_command(executable, profile, case_dir, anchor, url, enable_mtc=False, browser_mode='headless', disable_trust_anchor_ids=False, trusted_subtrees=None, trusted_subtrees_url=None):
     require(browser_mode in ('headless', 'headed'), 'Invalid browser mode')
     flags = [str(executable), '--headless=new', '--dump-dom', '--no-first-run', '--no-default-browser-check',
              '--disable-background-networking', '--disable-component-update', '--disable-sync', '--disable-quic',
@@ -867,8 +867,12 @@ def browser_command(executable, profile, case_dir, anchor, url, enable_mtc=False
         flags.append('--disable-features=TLSTrustAnchorIDs')
     if anchor:
         flags.append('--mtc-plants06-trust='+str(anchor))
+    require(not (trusted_subtrees and trusted_subtrees_url),
+            'MTC trusted-subtrees FILE and URL modes are mutually exclusive')
     if trusted_subtrees:
         flags.append('--mtc-plants06-trusted-subtrees='+str(trusted_subtrees))
+    if trusted_subtrees_url:
+        flags.append('--mtc-plants06-trusted-subtrees-url='+str(trusted_subtrees_url))
     return flags + [url]
 
 
@@ -931,7 +935,7 @@ def encrypted_extensions_selected(events, selected_tai=None):
     return False
 
 
-def classify(case, case_dir, url, process, *, positive_control=False, requested_tai=None, selected_tai=None):
+def classify(case, case_dir, url, process, *, positive_control=False, requested_tai=None, selected_tai=None, trusted_subtrees_url=None):
     requested_tai = requested_tai if requested_tai is not None else REQUESTED
     selected_tai = selected_tai if selected_tai is not None else SELECTED
     require(requested_tai is not None and selected_tai is not None, 'MTC fixture identity not selected')
@@ -971,7 +975,10 @@ def classify(case, case_dir, url, process, *, positive_control=False, requested_
     sent = [p.get('type') for name, p, _, _ in events if name == 'SSL_HANDSHAKE_MESSAGE_SENT']
     result['netlog_handshakes_received'] = received; result['netlog_handshakes_sent'] = sent
     netflight = all(t in received for t in (11, 15, 20))
-    config_error = 'without a valid trust config' in stderr or 'Invalid MTC Plants-06' in stderr
+    config_error = (
+        trusted_subtrees_url is None
+        and ('without a valid trust config' in stderr or 'Invalid MTC Plants-06' in stderr)
+    )
     cert_error = any(-299 <= e <= -200 for e in errors)
     positive = result['expected_outcome'] == 'accept'
     if positive:
@@ -1127,7 +1134,6 @@ def run_browser(cmd, output, timeout):
             result = child.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             result = 'timeout'
-        finally:
             try:
                 os.killpg(child.pid, signal.SIGTERM)
             except ProcessLookupError:
@@ -1135,7 +1141,8 @@ def run_browser(cmd, output, timeout):
             try:
                 child.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                os.killpg(child.pid, signal.SIGKILL); child.wait(timeout=5)
+                os.killpg(child.pid, signal.SIGKILL)
+                child.wait(timeout=5)
     return result
 
 
@@ -1154,7 +1161,7 @@ def x509_spki_pin(selected, image):
         return pin
 
 
-def run_case(case, credentials, browser, output, run_root, timeout, positive_control, browser_mode='headless', capture=None, x509_spki=None, trusted_subtrees=None):
+def run_case(case, credentials, browser, output, run_root, timeout, positive_control, browser_mode='headless', capture=None, x509_spki=None, trusted_subtrees=None, trusted_subtrees_url=None):
     require(x509_spki is None or (case == 'x509-positive' and capture is None),
             'SPKI capability bypass is only for standalone x509-positive')
     output.mkdir()
@@ -1185,6 +1192,7 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
                 browser_mode=browser_mode,
                 disable_trust_anchor_ids=case == 'x509-positive',
                 trusted_subtrees=trusted_subtrees if anchor else None,
+                trusted_subtrees_url=trusted_subtrees_url if anchor else None,
             )
             if x509_spki is not None:
                 cmd.insert(-1, '--ignore-certificate-errors-spki-list='+x509_spki)
@@ -1195,7 +1203,9 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
             capture.stop()
         server.stop(); server.created = False
         result = classify(case, output, url, exit_code, positive_control=positive_control,
-                          requested_tai=credentials['mtc']['requested_tai'], selected_tai=credentials['mtc']['selected_tai'])
+                          requested_tai=credentials['mtc']['requested_tai'],
+                          selected_tai=credentials['mtc']['selected_tai'],
+                          trusted_subtrees_url=trusted_subtrees_url)
         if x509_spki is not None:
             result.update(x509_trust_mode='spki-capability-bypass', normal_trusted_x509_baseline=False)
         if browser_mode == 'headed':
@@ -1267,6 +1277,8 @@ def main(argv=None):
     parser.add_argument('--chromium', type=Path)
     parser.add_argument('--mtc-trusted-subtrees', type=Path,
                         help='Optional prevalidated RP trusted-subtrees.mts1 override for MTC cases')
+    parser.add_argument('--mtc-trusted-subtrees-url',
+                        help='Optional RP HTTP(S) endpoint providing trusted-subtrees.mts1 for MTC cases')
     parser.add_argument('--x509-spki-capability', action='store_true',
                         help='Standalone x509-positive capability test with leaf SPKI trust bypass; not a trusted baseline')
     parser.add_argument('--x509-chromium-ca-policy', action='store_true',
@@ -1281,6 +1293,12 @@ def main(argv=None):
     require(args.mtc_trusted_subtrees is None or
             (args.action == 'run' and (args.case == 'all' or args.case in CASES[:4])),
             '--mtc-trusted-subtrees requires run with an MTC case or all')
+    require(args.mtc_trusted_subtrees_url is None or
+            (args.action == 'run' and (args.case == 'all' or args.case in CASES[:4])),
+            '--mtc-trusted-subtrees-url requires run with an MTC case or all')
+    require(not (args.mtc_trusted_subtrees is not None and
+                 args.mtc_trusted_subtrees_url is not None),
+            '--mtc-trusted-subtrees and --mtc-trusted-subtrees-url are mutually exclusive')
     trust_operation = args.action in ('trust-status', 'trust-x509', 'untrust-x509')
     require((args.root is not None) == trust_operation, '--root PATH is required only for trust-status/trust-x509/untrust-x509')
     require(not args.x509_fixture_set or args.action == 'run',
@@ -1380,7 +1398,8 @@ def main(argv=None):
             try:
                 result = run_case(case, credentials, browser, output/case, output, args.timeout, positive_pass,
                                   browser_mode=args.browser_mode, x509_spki=spki,
-                                  trusted_subtrees=args.mtc_trusted_subtrees)
+                                  trusted_subtrees=args.mtc_trusted_subtrees,
+                                  trusted_subtrees_url=args.mtc_trusted_subtrees_url)
             except Exception as e:
                 result = next(r for r in blocked_summary(output, str(e), browser)['cases'] if r['name'] == case)
                 result['reason'] = 'Execution incomplete: '+str(e)

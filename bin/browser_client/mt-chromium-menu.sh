@@ -14,12 +14,14 @@ menu_invoke() {
 
 menu_browser_mode() {
  local browser_case=$1 selection
+ shift
+ local extra_args=("$@")
  while true; do
   printf '\n%s\n1. Headless automated validation\n2. Visible browser inspection\n3. Back\n' "$browser_case"
   read -r -p 'Select an option: ' selection || exit 0
   case "$selection" in
-   1) menu_invoke confirm browser-validation run "$browser_case" --browser-mode headless; return 0;;
-   2) menu_invoke confirm browser-validation run "$browser_case" --browser-mode headed; return 0;;
+   1) menu_invoke confirm browser-validation run "$browser_case" --browser-mode headless "${extra_args[@]}"; return 0;;
+   2) menu_invoke confirm browser-validation run "$browser_case" --browser-mode headed "${extra_args[@]}"; return 0;;
    0|3) return 0;;
    *) echo 'Invalid option.';;
   esac
@@ -51,8 +53,8 @@ menu_submenu() {
    commands=(trust-status trust-x509 untrust-x509);;
   validation)
    title='Browser functional validation'; prefix=(browser-validation)
-   labels=('Plan' 'Status' 'Run mtc-positive' 'Run mtc-no-trust' 'Run mtc-bad-merkle' 'Run mtc-bad-serial' 'Run x509-positive' 'Run all')
-   commands=(plan status 'run mtc-positive' 'run mtc-no-trust' 'run mtc-bad-merkle' 'run mtc-bad-serial' 'run x509-positive' 'run all');;
+   labels=('Plan' 'Status' 'Run mtc-positive' 'Run mtc-no-trust' 'Run mtc-bad-merkle' 'Run mtc-bad-serial' 'Run x509-positive' 'Run all' 'Run MTC via RP HTTP')
+   commands=(plan status 'run mtc-positive' 'run mtc-no-trust' 'run mtc-bad-merkle' 'run mtc-bad-serial' 'run x509-positive' 'run all' 'run mtc-positive --mtc-trusted-subtrees-url http://127.0.0.1:18083/trusted-subtrees');;
   pcap)
    title='Browser PCAP validation'; prefix=(browser-pcap)
    labels=('Plan' 'Requirements / capture backend' 'Status' 'Capture mtc-positive' 'Capture mtc-no-trust' 'Capture mtc-bad-merkle' 'Capture mtc-bad-serial' 'Capture x509-positive' 'Capture all')
@@ -75,7 +77,7 @@ menu_submenu() {
   (( selection <= ${#labels[@]} )) || { echo 'Invalid option.'; continue; }
   read -r -a args <<< "${commands[selection-1]}"
   if [[ "$section" == validation && "${args[0]}" == run && "${args[1]}" != all ]]; then
-   menu_browser_mode "${args[1]}"
+   menu_browser_mode "${args[@]:1}"
    continue
   fi
   if [[ "$section" == trust ]]; then

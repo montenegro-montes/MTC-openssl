@@ -6,25 +6,17 @@ import json
 from pathlib import Path
 import signal
 import sys
+import time
 from threading import Event
 
 from landmarks import Landmark, decode_publication
 from rp_updater import RPHTTPError, update_and_publish_remote
 
 
-def landmark_sequence(path):
+def landmark_sequence(path, now):
     """Load a complete laboratory landmark publication."""
     data = Path(path).read_bytes()
 
-    lines = data.decode("ascii").splitlines()
-    if len(lines) < 2:
-        raise ValueError("Invalid landmark publication")
-
-    fields = lines[1].split()
-    if len(fields) != 2:
-        raise ValueError("Invalid newest landmark record")
-
-    now = int(fields[1])
     latest, records = decode_publication(data, now)
 
     numbered = [
@@ -39,11 +31,12 @@ def landmark_sequence(path):
             "through landmark zero"
         )
 
-    return sequence, now
+    return sequence
 
 
 def update_once(args):
-    sequence, now = landmark_sequence(args.landmarks)
+    now = int(time.time())
+    sequence = landmark_sequence(args.landmarks, now)
     log_number = sequence[-1].number
 
     state = update_and_publish_remote(
