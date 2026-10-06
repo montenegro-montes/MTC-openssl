@@ -188,9 +188,15 @@ PY
 campaign() {
  local module=$1
  shift
- if [[ "$module" == browser_validation && "${1:-}" == run ]]; then
-  selected_mtc_arguments "$@"
-  set -- "$@" "${MTC_ARGUMENTS[@]}"
+ if [[ "$module" == browser_validation ]]; then
+  if [[ "${1:-}" == run ]]; then
+   selected_mtc_arguments "$@"
+   set -- "$@" "${MTC_ARGUMENTS[@]}"
+  elif [[ "${1:-}" == run-prevalidated-mtc ]]; then
+   [[ "${2:-}" == mtc-positive ]] || fail 'run-prevalidated-mtc is restricted to mtc-positive.'
+   shift
+   set -- run "$@"
+  fi
  fi
  # Test entrypoints cannot fall back to generating credentials.
  python3 -B - "$REPO" "$module" "$@" <<'PY'
@@ -238,6 +244,7 @@ case "${1:-help}" in
  help|--help|-h) cat <<'HELP'
 Usage: mt-chromium-tests menu|status|preflight [--profile PROFILE] [--depth D] [--capture]
   browser-validation plan|status|run CASE [existing campaign options]
+  browser-validation run-prevalidated-mtc mtc-positive --mtc-fixture PATH --mtc-validation FILE [options]
   browser-pcap plan|requirements|status|run CASE [existing campaign options]
   browser-measurements plan|requirements|status|run [existing campaign options]
   browser-measurements matrix-smoke|matrix
@@ -255,7 +262,7 @@ HELP
  browser-validation|browser-pcap|browser-measurements)
   namespace=$1; shift
   case "${1:-}" in
-   plan|requirements|status|run|matrix-smoke|matrix|--help|-h) ;;
+   plan|requirements|status|run|run-prevalidated-mtc|matrix-smoke|matrix|--help|-h) ;;
    *) fail 'Expected a test action first; configuration belongs to mt-chromium-setup browser-validation.';;
   esac
   if [[ "$namespace" == browser-measurements ]]; then

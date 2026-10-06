@@ -13,7 +13,7 @@ COMPOSE_PREFLIGHT="$REPO/docker/compose.monitor-preflight.yaml"
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
 usage() {
- echo 'Usage: mt-lab [init|prepare|up|status|down|gossip|cosigner-test|rp-test|split-view-test|--help]'
+ echo 'Usage: mt-lab [init|prepare|up|status|down|gossip|cosigner-test|rp-test|chromium-test|split-view-test|--help]'
 }
 
 compose_base() {
@@ -369,6 +369,34 @@ rp_test() (
   ' sh "http://host.docker.internal:$MTC_LOG_PORT"
 )
 
+chromium_test() (
+ [[ -f "$CONFIG" ]] || fail 'Run mt-lab init and mt-lab prepare first.'
+ source "$CONFIG"
+ [[ "${MT_LAB_REPOSITORY:-}" == "$REPO" && "${MT_LAB_STATE:-}" == "$STATE" ]] ||
+  fail 'Laboratory configuration does not match this checkout.'
+ [[ -n "${MT_LAB_FIXTURE:-}" ]] && fixture_valid "$MT_LAB_FIXTURE" ||
+  fail 'Run mt-lab prepare before mt-lab chromium-test.'
+ load_services
+ docker_required
+
+ local service validation rp_local_url
+ for service in rp-server rp-updater; do
+  [[ -n "$(compose_lab ps --status running --quiet "$service")" ]] ||
+   fail "Laboratory service is not running: $service"
+ done
+
+ validation="$MT_LAB_FIXTURE-validation/validation.json"
+ [[ -f "$validation" ]] || fail \
+  "No exact Chromium validation for MT_LAB_FIXTURE. Prepare it with: python3 campaigns/browser_client/chromium_mtc/fixtures.py validate --fixtures '$MT_LAB_FIXTURE' --output '$MT_LAB_FIXTURE-validation' --server-hostname server.mtc.example.com --execute"
+ rp_local_url="http://$RP_SERVER_BIND_ADDRESS:$RP_SERVER_PORT"
+ "$REPO/bin/browser_client/mt-chromium-tests" \
+  browser-validation run-prevalidated-mtc mtc-positive \
+  --browser-mode headless \
+  --mtc-fixture "$MT_LAB_FIXTURE" \
+  --mtc-validation "$validation" \
+  --mtc-trusted-subtrees-url "$rp_local_url/trusted-subtrees"
+)
+
 
 split_view_test() (
  [[ -f "$CONFIG" ]] || fail 'Run mt-lab init and mt-lab prepare first.'
@@ -474,6 +502,7 @@ case "${1:---help}" in
  gossip) [[ "$#" == 1 ]] || fail 'Usage: mt-lab gossip'; gossip;;
  cosigner-test) [[ "$#" == 1 ]] || fail 'Usage: mt-lab cosigner-test'; cosigner_test;;
  rp-test) [[ "$#" == 1 ]] || fail 'Usage: mt-lab rp-test'; rp_test;;
+ chromium-test) [[ "$#" == 1 ]] || fail 'Usage: mt-lab chromium-test'; chromium_test;;
  split-view-test) [[ "$#" == 1 ]] || fail 'Usage: mt-lab split-view-test'; split_view_test;;
  help|--help|-h) [[ "$#" == 1 ]] || fail 'Usage: mt-lab --help'; usage;;
  *) fail 'Unknown command; use --help.';;
