@@ -89,6 +89,51 @@ services:
       - monitor-b
     restart: "no"
 
+  rp-server:
+    build:
+      context: ..
+      dockerfile: docker/rp_server/Dockerfile
+    command:
+      - --state
+      - /var/lib/mtc-rp
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8082"
+    ports:
+      - ${RP_SERVER_BIND_ADDRESS:-127.0.0.1}:${RP_SERVER_PORT:-18083}:8082
+    volumes:
+      - mtc-rp-state:/var/lib/mtc-rp
+    restart: "no"
+
+  rp-updater:
+    build:
+      context: ..
+      dockerfile: docker/rp_updater/Dockerfile
+    command:
+      - --log-url
+      - ${MTC_RP_LOG_URL:-http://mtc-log:8080}
+      - --rp-url
+      - ${MTC_RP_SERVER_URL:-http://rp-server:8082}
+      - --trusted-authority
+      - /run/mtc-rp/authority.bin
+      - --checker
+      - /usr/local/bin/check_snapshot
+      - --landmarks
+      - /run/mtc-rp/landmarks.txt
+      - --state-directory
+      - /var/lib/mtc-rp-updater
+      - --interval
+      - ${MTC_RP_UPDATE_INTERVAL:-60}
+    depends_on:
+      - mtc-log
+      - rp-server
+    volumes:
+      - ${MTC_RP_TRUSTED_AUTHORITY:-./rp_updater/authority.bin}:/run/mtc-rp/authority.bin:ro
+      - ${MTC_RP_LANDMARKS:-./rp_updater/landmarks.txt}:/run/mtc-rp/landmarks.txt:ro
+      - mtc-rp-updater-state:/var/lib/mtc-rp-updater
+    restart: "no"
+
   external-cosigner:
     build:
       context: ..
@@ -149,3 +194,5 @@ volumes:
     name: ${COSIGNER_STATE_VOLUME:-mtc-external-cosigner_cosigner-state}
   mtc-monitor-a-state:
   mtc-monitor-b-state:
+  mtc-rp-state:
+  mtc-rp-updater-state:

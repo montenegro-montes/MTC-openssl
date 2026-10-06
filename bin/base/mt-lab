@@ -30,6 +30,13 @@ compose_lab() {
  COSIGNER_STATE_VOLUME=mtc-lab-cosigner-state \
  COSIGNER_CLIENT_DIRECTORY=$STATE/cosigner-client \
  MTC_MONITOR_LOG_URL=$MTC_LOG_URL \
+ MTC_RP_TRUSTED_AUTHORITY=$MT_LAB_FIXTURE/transparency/ecdsa-p256/trusted-authority.bin \
+ MTC_RP_LANDMARKS=$MT_LAB_FIXTURE/batch16/mtc/ecdsa-p256/landmarks.txt \
+ MTC_RP_LOG_URL=$RP_UPDATER_LOG_URL \
+ MTC_RP_SERVER_URL=$RP_UPDATER_SERVER_URL \
+ MTC_RP_UPDATE_INTERVAL=$RP_UPDATER_INTERVAL \
+ RP_SERVER_BIND_ADDRESS=$RP_SERVER_BIND_ADDRESS \
+ RP_SERVER_PORT=$RP_SERVER_PORT \
  MTC_GOSSIP_FIRST_URL=$GOSSIP_FIRST_URL \
  MTC_GOSSIP_SECOND_URL=$GOSSIP_SECOND_URL \
  MTC_GOSSIP_LOG_URL=$GOSSIP_LOG_URL \
@@ -48,6 +55,8 @@ load_services() {
    COSIGNER_BIND_ADDRESS|COSIGNER_PORT|COSIGNER_TLS_NAME|\
    MONITOR_A_BIND_ADDRESS|MONITOR_A_PORT|MONITOR_A_URL|\
    MONITOR_B_BIND_ADDRESS|MONITOR_B_PORT|MONITOR_B_URL|\
+   RP_SERVER_BIND_ADDRESS|RP_SERVER_PORT|RP_SERVER_URL|\
+   RP_UPDATER_LOG_URL|RP_UPDATER_SERVER_URL|RP_UPDATER_INTERVAL|\
    GOSSIP_FIRST_URL|GOSSIP_SECOND_URL|GOSSIP_LOG_URL)
     [[ -n "$value" ]] || fail "Empty service setting: $key"
     printf -v "$key" '%s' "$value"
@@ -60,6 +69,8 @@ load_services() {
   COSIGNER_BIND_ADDRESS COSIGNER_PORT COSIGNER_TLS_NAME \
   MONITOR_A_BIND_ADDRESS MONITOR_A_PORT MONITOR_A_URL \
   MONITOR_B_BIND_ADDRESS MONITOR_B_PORT MONITOR_B_URL \
+  RP_SERVER_BIND_ADDRESS RP_SERVER_PORT RP_SERVER_URL \
+  RP_UPDATER_LOG_URL RP_UPDATER_SERVER_URL RP_UPDATER_INTERVAL \
   GOSSIP_FIRST_URL GOSSIP_SECOND_URL GOSSIP_LOG_URL
  do
   [[ -n "${!required:-}" ]] || fail "Missing service setting: $required"
@@ -132,6 +143,16 @@ MONITOR_B_BIND_ADDRESS=127.0.0.1
 MONITOR_B_PORT=18082
 MONITOR_B_URL=http://monitor-b:8081
 
+# RP Server
+RP_SERVER_BIND_ADDRESS=127.0.0.1
+RP_SERVER_PORT=18083
+RP_SERVER_URL=http://rp-server:8082
+
+# RP Updater
+RP_UPDATER_LOG_URL=http://mtc-log:8080
+RP_UPDATER_SERVER_URL=http://rp-server:8082
+RP_UPDATER_INTERVAL=60
+
 # Gossip
 GOSSIP_FIRST_URL=http://monitor-a:8081/checkpoint
 GOSSIP_SECOND_URL=http://monitor-b:8081/checkpoint
@@ -186,7 +207,7 @@ up() (
   docker volume inspect "$volume" >/dev/null 2>&1 || docker volume create "$volume" >/dev/null
  done
  compose_lab --profile provision build \
-  mtc-log monitor-a monitor-b external-cosigner provision
+  mtc-log monitor-a monitor-b rp-server rp-updater external-cosigner provision
  if compose_lab --profile provision run --rm --no-deps --entrypoint /bin/sh provision -c '
   for path in /run/cosigner/external.key /run/cosigner/server.key \
    /run/cosigner/server.pem /run/cosigner/client-ca.pem /client/client.key \
@@ -198,7 +219,8 @@ up() (
  else
   compose_lab --profile provision run --rm --no-deps provision
  fi
- compose_lab up -d mtc-log external-cosigner monitor-a monitor-b
+ compose_lab up -d \
+  mtc-log external-cosigner monitor-a monitor-b rp-server rp-updater
 )
 
 status() {
@@ -247,11 +269,14 @@ status() {
   printf 'external-cosigner TLS identity: %s\n' "$COSIGNER_TLS_NAME"
   printf 'monitor-a host: %s:%s\n' "$MONITOR_A_BIND_ADDRESS" "$MONITOR_A_PORT"
   printf 'monitor-b host: %s:%s\n' "$MONITOR_B_BIND_ADDRESS" "$MONITOR_B_PORT"
+  printf 'rp-server host: %s:%s\n' "$RP_SERVER_BIND_ADDRESS" "$RP_SERVER_PORT"
+  printf 'rp-updater: %s -> %s\n' "$RP_UPDATER_LOG_URL" "$RP_UPDATER_SERVER_URL"
  fi
  printf 'docker: %s\n' "$docker"
  if [[ "$services" == yes ]]; then
   echo 'services:'
-  compose_base ps --all mtc-log external-cosigner monitor-a monitor-b ||
+  compose_base ps --all \
+   mtc-log external-cosigner monitor-a monitor-b rp-server rp-updater ||
    echo '  unable to inspect laboratory Compose project'
  fi
 }

@@ -12,6 +12,7 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY --from=checker /build/check_snapshot /usr/local/bin/check_snapshot
 COPY src/mtc/checkpoint_monitor.py src/mtc/rp_updater.py \
+     src/mtc/rp_policy.py \
      src/mtc/core.py src/mtc/landmarks.py src/mtc/snapshots.py \
      src/mtc/local_log.py src/mtc/prepare.py src/mtc/config_formats.py \
      src/mtc/crypto_profiles.py src/mtc/trust_anchor_ids.py \
