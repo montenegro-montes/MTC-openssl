@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from rp_server import RPServer
+import rp_updater
 from rp_updater import RPHTTPError, publish_remote_state
 from rp_state import RPStateStore
 from trusted_subtrees import TrustedSubtree, encode_trusted_subtrees
@@ -618,6 +619,105 @@ class RPServerHTTPTest(unittest.TestCase):
             daemon=True,
         )
         self.thread.start()
+
+
+    def test_remote_update_advances_private_state_after_distribution(self):
+        updater_state = Path(self.temporary.name) / "updater"
+        checkpoint = {
+            "log_number": 1,
+            "tree_size": 16,
+            "hash": "11" * 32,
+        }
+        mts1 = encode_trusted_subtrees([])
+
+        original = rp_updater._prepare_update
+        try:
+            rp_updater._prepare_update = lambda *args, **kwargs: (
+                checkpoint,
+                mts1,
+                None,
+            )
+
+            result = rp_updater.update_and_publish_remote(
+                "http://unused-log",
+                Path("unused-authority"),
+                None,
+                updater_state,
+                self.base_url,
+                1,
+                [],
+                0,
+            )
+        finally:
+            rp_updater._prepare_update = original
+
+        self.assertEqual(result["checkpoint"], checkpoint)
+        self.assertEqual(
+            RPStateStore(updater_state).load_current()["checkpoint"],
+            checkpoint,
+        )
+        self.assertEqual(
+            self.rp_server.current()["checkpoint"],
+            checkpoint,
+        )
+
+    def test_remote_update_does_not_advance_private_state_on_distribution_failure(self):
+        updater_state = Path(self.temporary.name) / "updater"
+
+        previous = {
+            "log_number": 1,
+            "tree_size": 8,
+            "hash": "11" * 32,
+        }
+        candidate = {
+            "log_number": 1,
+            "tree_size": 16,
+            "hash": "22" * 32,
+        }
+        mts1 = encode_trusted_subtrees([])
+
+        RPStateStore(updater_state).publish(
+            previous,
+            mts1,
+            None,
+        )
+
+        self.rp_server.publish(
+            {
+                "log_number": 1,
+                "tree_size": 16,
+                "hash": "33" * 32,
+            },
+            mts1,
+            None,
+        )
+
+        original = rp_updater._prepare_update
+        try:
+            rp_updater._prepare_update = lambda *args, **kwargs: (
+                candidate,
+                mts1,
+                None,
+            )
+
+            with self.assertRaises(RPHTTPError):
+                rp_updater.update_and_publish_remote(
+                    "http://unused-log",
+                    Path("unused-authority"),
+                    None,
+                    updater_state,
+                    self.base_url,
+                    1,
+                    [],
+                    0,
+                )
+        finally:
+            rp_updater._prepare_update = original
+
+        self.assertEqual(
+            RPStateStore(updater_state).load_current()["checkpoint"],
+            previous,
+        )
 
 
 if __name__ == "__main__":

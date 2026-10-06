@@ -302,17 +302,11 @@ def publish_remote_state(
         raise RPHTTPError("RP state publication failed") from exc
 
 
-def update_and_publish(
-        base_url, trusted_authority, checker, state_directory,
+def _prepare_update(
+        base_url, trusted_authority, checker, store,
         log_number, sequence, now, max_active_landmarks=None,
         authenticate=authenticate_snapshot, freshness_policy=None):
-    """Run one complete fail-closed relying-party update transaction.
-
-    freshness_policy is an optional local RP policy applied to the
-    authenticated MCP2 checkpoint timestamp; it is not a Draft-06
-    certificate or MTCProof verification requirement.
-    """
-    store = RPStateStore(state_directory)
+    """Build one validated RP state update without publishing it."""
     current = store.load_current()
 
     previous = None
@@ -343,6 +337,68 @@ def update_and_publish(
         checkpoint,
         max_active_landmarks=max_active_landmarks,
     )
-    retained_landmark = trusted.retained_landmark
+
+    return checkpoint, mts1, trusted.retained_landmark
+
+
+def update_and_publish(
+        base_url, trusted_authority, checker, state_directory,
+        log_number, sequence, now, max_active_landmarks=None,
+        authenticate=authenticate_snapshot, freshness_policy=None):
+    """Run one complete fail-closed relying-party update transaction.
+
+    freshness_policy is an optional local RP policy applied to the
+    authenticated MCP2 checkpoint timestamp; it is not a Draft-06
+    certificate or MTCProof verification requirement.
+    """
+    store = RPStateStore(state_directory)
+
+    checkpoint, mts1, retained_landmark = _prepare_update(
+        base_url,
+        trusted_authority,
+        checker,
+        store,
+        log_number,
+        sequence,
+        now,
+        max_active_landmarks=max_active_landmarks,
+        authenticate=authenticate,
+        freshness_policy=freshness_policy,
+    )
+
+    return store.publish(checkpoint, mts1, retained_landmark)
+
+
+def update_and_publish_remote(
+        base_url, trusted_authority, checker, state_directory,
+        rp_url, log_number, sequence, now, max_active_landmarks=None,
+        authenticate=authenticate_snapshot, freshness_policy=None):
+    """Run one fail-closed RP update and publish it to a remote RP server.
+
+    state_directory is private updater state.  It records the last
+    successfully distributed validated state used for subsequent
+    checkpoint consistency verification.
+    """
+    store = RPStateStore(state_directory)
+
+    checkpoint, mts1, retained_landmark = _prepare_update(
+        base_url,
+        trusted_authority,
+        checker,
+        store,
+        log_number,
+        sequence,
+        now,
+        max_active_landmarks=max_active_landmarks,
+        authenticate=authenticate,
+        freshness_policy=freshness_policy,
+    )
+
+    publish_remote_state(
+        rp_url,
+        checkpoint,
+        mts1,
+        retained_landmark,
+    )
 
     return store.publish(checkpoint, mts1, retained_landmark)
