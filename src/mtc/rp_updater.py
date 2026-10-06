@@ -255,6 +255,53 @@ def build_trusted_subtree_configuration(
     return trusted, mts1
 
 
+
+def publish_remote_state(
+        base_url, checkpoint, trusted_subtrees, retained_landmark=None):
+    """Publish already-validated RP state to a remote RP server."""
+    checkpoint = _checkpoint(checkpoint)
+
+    if not isinstance(trusted_subtrees, bytes):
+        raise ValueError("trusted-subtree state must be bytes")
+
+    if (retained_landmark is not None
+            and (type(retained_landmark) is not int
+                 or not 1 <= retained_landmark < 1 << 48)):
+        raise ValueError("invalid retained landmark")
+
+    url = urljoin(
+        base_url.rstrip("/") + "/",
+        "internal/state",
+    )
+
+    headers = {
+        "Content-Type": "application/octet-stream",
+        "MTC-RP-Version": "1",
+        "MTC-Log-Number": str(checkpoint["log_number"]),
+        "MTC-Tree-Size": str(checkpoint["tree_size"]),
+        "MTC-Checkpoint-Hash": checkpoint["hash"],
+        "MTC-Retained-Landmark": (
+            "none"
+            if retained_landmark is None
+            else str(retained_landmark)
+        ),
+    }
+
+    request = Request(
+        url,
+        data=trusted_subtrees,
+        headers=headers,
+        method="PUT",
+    )
+
+    try:
+        with urlopen(request, timeout=5) as response:
+            if response.status != 204:
+                raise RPHTTPError("RP state publication failed")
+    except (HTTPError, URLError, OSError) as exc:
+        raise RPHTTPError("RP state publication failed") from exc
+
+
 def update_and_publish(
         base_url, trusted_authority, checker, state_directory,
         log_number, sequence, now, max_active_landmarks=None,

@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from rp_server import RPServer
+from rp_updater import RPHTTPError, publish_remote_state
 from rp_state import RPStateStore
 from trusted_subtrees import TrustedSubtree, encode_trusted_subtrees
 
@@ -516,6 +517,107 @@ class RPServerHTTPTest(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, 400)
         self.assertIsNone(self.rp_server.current())
+
+
+    def test_remote_updater_publication(self):
+        checkpoint = {
+            "log_number": 1,
+            "tree_size": 16,
+            "hash": "11" * 32,
+        }
+        mts1 = encode_trusted_subtrees([])
+
+        publish_remote_state(
+            self.base_url,
+            checkpoint,
+            mts1,
+            retained_landmark=1,
+        )
+
+        current = self.rp_server.current()
+
+        self.assertEqual(current["checkpoint"], checkpoint)
+        self.assertEqual(current["trusted_subtrees"], mts1)
+        self.assertEqual(current["retained_landmark"], 1)
+
+        status, content_type, body = self.request(
+            "/trusted-subtrees"
+        )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            content_type,
+            "application/octet-stream",
+        )
+        self.assertEqual(body, mts1)
+
+
+    def test_remote_updater_reports_server_rejection(self):
+        mts1 = encode_trusted_subtrees([])
+
+        publish_remote_state(
+            self.base_url,
+            {
+                "log_number": 1,
+                "tree_size": 16,
+                "hash": "11" * 32,
+            },
+            mts1,
+        )
+
+        with self.assertRaisesRegex(
+                RPHTTPError,
+                "RP state publication failed"):
+            publish_remote_state(
+                self.base_url,
+                {
+                    "log_number": 1,
+                    "tree_size": 8,
+                    "hash": "22" * 32,
+                },
+                mts1,
+            )
+
+        self.assertEqual(
+            self.rp_server.current()["checkpoint"]["tree_size"],
+            16,
+        )
+
+    def test_remote_updater_reports_unavailable_server(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        self.thread.join()
+
+        with self.assertRaisesRegex(
+                RPHTTPError,
+                "RP state publication failed"):
+            publish_remote_state(
+                self.base_url,
+                {
+                    "log_number": 1,
+                    "tree_size": 16,
+                    "hash": "11" * 32,
+                },
+                encode_trusted_subtrees([]),
+            )
+
+        self.httpd = __import__(
+            "http.server",
+            fromlist=["ThreadingHTTPServer"],
+        ).ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            __import__(
+                "rp_server",
+                fromlist=["make_handler"],
+            ).make_handler(self.rp_server),
+        )
+
+        import threading
+        self.thread = threading.Thread(
+            target=self.httpd.serve_forever,
+            daemon=True,
+        )
+        self.thread.start()
 
 
 if __name__ == "__main__":
