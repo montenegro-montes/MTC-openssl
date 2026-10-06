@@ -34,6 +34,30 @@ class RPServer:
             return None
         return current["trusted_subtrees"]
 
+    def publish(self, checkpoint, trusted_subtrees, retained_landmark=None):
+        """Publish state without allowing rollback or cross-log replacement."""
+        current = self.current()
+
+        if current is not None:
+            previous = current["checkpoint"]
+
+            if checkpoint["log_number"] != previous["log_number"]:
+                raise ValueError("RP publication changes issuance log")
+
+            if checkpoint["tree_size"] < previous["tree_size"]:
+                raise ValueError("RP publication rollback")
+
+            if (checkpoint["tree_size"] == previous["tree_size"]
+                    and checkpoint["hash"] != previous["hash"]):
+                raise ValueError(
+                    "RP publication changes hash at same tree size")
+
+        return self.store.publish(
+            checkpoint,
+            trusted_subtrees,
+            retained_landmark,
+        )
+
 
 def make_handler(server):
     class Handler(BaseHTTPRequestHandler):
@@ -94,7 +118,77 @@ def make_handler(server):
             self._send(405, "text/plain")
 
         def do_PUT(self):
-            self._send(405, "text/plain")
+            path = urlsplit(self.path).path
+
+            if path != "/internal/state":
+                self._send(405, "text/plain")
+                return
+
+            try:
+                if self.headers.get_content_type() != "application/octet-stream":
+                    self._send(415, "text/plain")
+                    return
+
+                if self.headers.get("MTC-RP-Version") != "1":
+                    self._send(400, "text/plain")
+                    return
+
+                content_length = self.headers.get("Content-Length")
+                if content_length is None:
+                    self._send(411, "text/plain")
+                    return
+
+                try:
+                    content_length = int(content_length)
+                except ValueError:
+                    self._send(400, "text/plain")
+                    return
+
+                if content_length < 0 or content_length > 16 * 1024 * 1024:
+                    self._send(413, "text/plain")
+                    return
+
+                try:
+                    log_number = int(self.headers["MTC-Log-Number"])
+                    tree_size = int(self.headers["MTC-Tree-Size"])
+                    checkpoint_hash = self.headers["MTC-Checkpoint-Hash"]
+                except (KeyError, ValueError):
+                    self._send(400, "text/plain")
+                    return
+
+                retained_header = self.headers.get("MTC-Retained-Landmark")
+                if retained_header is None or retained_header == "none":
+                    retained_landmark = None
+                else:
+                    try:
+                        retained_landmark = int(retained_header)
+                    except ValueError:
+                        self._send(400, "text/plain")
+                        return
+
+                body = self.rfile.read(content_length)
+                if len(body) != content_length:
+                    self._send(400, "text/plain")
+                    return
+
+                checkpoint = {
+                    "log_number": log_number,
+                    "tree_size": tree_size,
+                    "hash": checkpoint_hash,
+                }
+
+                server.publish(
+                    checkpoint,
+                    body,
+                    retained_landmark,
+                )
+
+                self._send(204, "text/plain")
+
+            except ValueError:
+                self._send(409, "text/plain")
+            except OSError:
+                self._send(500, "text/plain")
 
         def do_DELETE(self):
             self._send(405, "text/plain")

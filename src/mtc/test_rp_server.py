@@ -70,6 +70,139 @@ class RPServerTest(unittest.TestCase):
         self.assertEqual(server.trusted_subtrees(), mts1)
 
 
+    def test_publish_is_idempotent(self):
+        server = RPServer(self.state)
+
+        checkpoint = {
+            "log_number": 1,
+            "tree_size": 16,
+            "hash": "11" * 32,
+        }
+        mts1 = encode_trusted_subtrees([])
+
+        first = server.publish(checkpoint, mts1)
+        second = server.publish(checkpoint, mts1)
+
+        self.assertEqual(
+            first["checkpoint"],
+            second["checkpoint"],
+        )
+        self.assertEqual(
+            first["trusted_subtrees"],
+            second["trusted_subtrees"],
+        )
+
+    def test_publish_rejects_rollback(self):
+        server = RPServer(self.state)
+        mts1 = encode_trusted_subtrees([])
+
+        server.publish(
+            {
+                "log_number": 1,
+                "tree_size": 16,
+                "hash": "11" * 32,
+            },
+            mts1,
+        )
+
+        with self.assertRaisesRegex(ValueError, "rollback"):
+            server.publish(
+                {
+                    "log_number": 1,
+                    "tree_size": 8,
+                    "hash": "22" * 32,
+                },
+                mts1,
+            )
+
+        self.assertEqual(
+            server.current()["checkpoint"]["tree_size"],
+            16,
+        )
+
+    def test_publish_rejects_same_size_equivocation(self):
+        server = RPServer(self.state)
+        mts1 = encode_trusted_subtrees([])
+
+        server.publish(
+            {
+                "log_number": 1,
+                "tree_size": 16,
+                "hash": "11" * 32,
+            },
+            mts1,
+        )
+
+        with self.assertRaisesRegex(ValueError, "same tree size"):
+            server.publish(
+                {
+                    "log_number": 1,
+                    "tree_size": 16,
+                    "hash": "22" * 32,
+                },
+                mts1,
+            )
+
+        self.assertEqual(
+            server.current()["checkpoint"]["hash"],
+            "11" * 32,
+        )
+
+    def test_publish_rejects_log_change(self):
+        server = RPServer(self.state)
+
+        server.publish(
+            {
+                "log_number": 1,
+                "tree_size": 16,
+                "hash": "11" * 32,
+            },
+            encode_trusted_subtrees([]),
+        )
+
+        with self.assertRaisesRegex(ValueError, "issuance log"):
+            server.publish(
+                {
+                    "log_number": 2,
+                    "tree_size": 16,
+                    "hash": "22" * 32,
+                },
+                encode_trusted_subtrees([]),
+            )
+
+        self.assertEqual(
+            server.current()["checkpoint"]["log_number"],
+            1,
+        )
+
+    def test_publish_accepts_forward_state(self):
+        server = RPServer(self.state)
+        mts1 = encode_trusted_subtrees([])
+
+        server.publish(
+            {
+                "log_number": 1,
+                "tree_size": 16,
+                "hash": "11" * 32,
+            },
+            mts1,
+        )
+
+        published = server.publish(
+            {
+                "log_number": 1,
+                "tree_size": 32,
+                "hash": "22" * 32,
+            },
+            mts1,
+        )
+
+        self.assertEqual(
+            published["checkpoint"]["tree_size"],
+            32,
+        )
+
+
 class RPServerHTTPTest(unittest.TestCase):
 
     def setUp(self):
@@ -195,6 +328,195 @@ class RPServerHTTPTest(unittest.TestCase):
         for method in ("POST", "PUT", "DELETE"):
             status, _, _ = self.request("/trusted-subtrees", method=method)
             self.assertEqual(status, 405)
+
+    def put_state(self, checkpoint, mts1, retained_landmark=None):
+        from urllib.error import HTTPError
+        from urllib.request import Request, urlopen
+
+        headers = {
+            "Content-Type": "application/octet-stream",
+            "MTC-RP-Version": "1",
+            "MTC-Log-Number": str(checkpoint["log_number"]),
+            "MTC-Tree-Size": str(checkpoint["tree_size"]),
+            "MTC-Checkpoint-Hash": checkpoint["hash"],
+            "MTC-Retained-Landmark": (
+                "none"
+                if retained_landmark is None
+                else str(retained_landmark)
+            ),
+        }
+
+        request = Request(
+            self.base_url + "/internal/state",
+            data=mts1,
+            headers=headers,
+            method="PUT",
+        )
+
+        try:
+            with urlopen(request, timeout=2) as response:
+                return response.status
+        except HTTPError as exc:
+            return exc.code
+
+    def test_internal_put_publishes_state(self):
+        checkpoint = {
+            "log_number": 1,
+            "tree_size": 16,
+            "hash": "11" * 32,
+        }
+        mts1 = encode_trusted_subtrees([])
+
+        status = self.put_state(
+            checkpoint,
+            mts1,
+            retained_landmark=1,
+        )
+
+        self.assertEqual(status, 204)
+
+        current = self.rp_server.current()
+        self.assertEqual(current["checkpoint"], checkpoint)
+        self.assertEqual(current["trusted_subtrees"], mts1)
+        self.assertEqual(current["retained_landmark"], 1)
+
+    def test_internal_put_rejects_rollback(self):
+        mts1 = encode_trusted_subtrees([])
+
+        self.assertEqual(
+            self.put_state(
+                {
+                    "log_number": 1,
+                    "tree_size": 16,
+                    "hash": "11" * 32,
+                },
+                mts1,
+            ),
+            204,
+        )
+
+        self.assertEqual(
+            self.put_state(
+                {
+                    "log_number": 1,
+                    "tree_size": 8,
+                    "hash": "22" * 32,
+                },
+                mts1,
+            ),
+            409,
+        )
+
+        self.assertEqual(
+            self.rp_server.current()["checkpoint"]["tree_size"],
+            16,
+        )
+
+
+    def test_internal_put_rejects_same_size_equivocation(self):
+        mts1 = encode_trusted_subtrees([])
+
+        self.assertEqual(
+            self.put_state(
+                {
+                    "log_number": 1,
+                    "tree_size": 16,
+                    "hash": "11" * 32,
+                },
+                mts1,
+            ),
+            204,
+        )
+
+        self.assertEqual(
+            self.put_state(
+                {
+                    "log_number": 1,
+                    "tree_size": 16,
+                    "hash": "22" * 32,
+                },
+                mts1,
+            ),
+            409,
+        )
+
+        self.assertEqual(
+            self.rp_server.current()["checkpoint"]["hash"],
+            "11" * 32,
+        )
+
+    def test_internal_put_rejects_log_change(self):
+        mts1 = encode_trusted_subtrees([])
+
+        self.assertEqual(
+            self.put_state(
+                {
+                    "log_number": 1,
+                    "tree_size": 16,
+                    "hash": "11" * 32,
+                },
+                mts1,
+            ),
+            204,
+        )
+
+        self.assertEqual(
+            self.put_state(
+                {
+                    "log_number": 2,
+                    "tree_size": 32,
+                    "hash": "22" * 32,
+                },
+                mts1,
+            ),
+            409,
+        )
+
+        self.assertEqual(
+            self.rp_server.current()["checkpoint"]["log_number"],
+            1,
+        )
+
+    def test_internal_put_rejects_malformed_mts1(self):
+        checkpoint = {
+            "log_number": 1,
+            "tree_size": 16,
+            "hash": "11" * 32,
+        }
+
+        self.assertEqual(
+            self.put_state(
+                checkpoint,
+                b"not-an-mts1",
+            ),
+            409,
+        )
+
+        self.assertIsNone(self.rp_server.current())
+
+
+    def test_internal_put_requires_protocol_version(self):
+        from urllib.error import HTTPError
+        from urllib.request import Request, urlopen
+
+        request = Request(
+            self.base_url + "/internal/state",
+            data=encode_trusted_subtrees([]),
+            headers={
+                "Content-Type": "application/octet-stream",
+                "MTC-Log-Number": "1",
+                "MTC-Tree-Size": "16",
+                "MTC-Checkpoint-Hash": "11" * 32,
+            },
+            method="PUT",
+        )
+
+        with self.assertRaises(HTTPError) as raised:
+            urlopen(request, timeout=2)
+
+        self.assertEqual(raised.exception.code, 400)
+        self.assertIsNone(self.rp_server.current())
+
 
 if __name__ == "__main__":
     unittest.main()
