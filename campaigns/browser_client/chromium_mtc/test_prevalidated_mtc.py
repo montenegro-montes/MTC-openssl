@@ -40,7 +40,8 @@ class PrevalidatedMtcTests(unittest.TestCase):
                                          image_id=self.image, draft=c.DRAFT)])
         self.save(self.validation, self.evidence)
         self.enterContext(patch.object(bv, 'parse_landmark', return_value=dict(
-            ca_id='32473.101', min_serial=1<<48, max_serial=(1<<48)+15,
+            ca_id='32473.101', log_number=1,
+            min_serial=1<<48, max_serial=(1<<48)+15,
             landmark=dict(tree_size=16, requested_trust_anchor_id='32473.101.2.1.1',
                           selected_trust_anchor_id='32473.101.1.1.1'))))
         self.crypto = self.enterContext(patch.object(bv, 'validate_mtc', side_effect=AssertionError('crypto called')))

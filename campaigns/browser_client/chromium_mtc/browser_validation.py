@@ -862,13 +862,13 @@ def browser_command(executable, profile, case_dir, anchor, url, enable_mtc=False
         flags.remove('--log-net-log='+str(case_dir/'netlog.json'))
         flags.remove('--net-log-capture-mode=Everything')
     if enable_mtc:
-        flags.append('--enable-features=MtcPlants05Lab,VerifyMTCs')
+        flags.append('--enable-features=MtcPlants06Lab,VerifyMTCs')
     if disable_trust_anchor_ids:
         flags.append('--disable-features=TLSTrustAnchorIDs')
     if anchor:
-        flags.append('--mtc-plants05-trust='+str(anchor))
+        flags.append('--mtc-plants06-trust='+str(anchor))
     if trusted_subtrees:
-        flags.append('--mtc-plants05-trusted-subtrees='+str(trusted_subtrees))
+        flags.append('--mtc-plants06-trusted-subtrees='+str(trusted_subtrees))
     return flags + [url]
 
 
@@ -971,7 +971,7 @@ def classify(case, case_dir, url, process, *, positive_control=False, requested_
     sent = [p.get('type') for name, p, _, _ in events if name == 'SSL_HANDSHAKE_MESSAGE_SENT']
     result['netlog_handshakes_received'] = received; result['netlog_handshakes_sent'] = sent
     netflight = all(t in received for t in (11, 15, 20))
-    config_error = 'without a valid trust config' in stderr or 'Invalid MTC Plants-05' in stderr
+    config_error = 'without a valid trust config' in stderr or 'Invalid MTC Plants-06' in stderr
     cert_error = any(-299 <= e <= -200 for e in errors)
     positive = result['expected_outcome'] == 'accept'
     if positive:
@@ -1000,7 +1000,7 @@ def classify(case, case_dir, url, process, *, positive_control=False, requested_
                 and not result['selected_tai_observed']
                 and server_handshake_failure
                 and -113 in errors
-                and 'Invalid MTC Plants-05' not in stderr
+                and 'Invalid MTC Plants-06' not in stderr
                 and process != 'timeout'
             )
             success_reason = (

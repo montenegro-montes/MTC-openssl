@@ -32,14 +32,14 @@ class Mts1IntegrationTests(unittest.TestCase):
         command = bv.browser_command(
             "chrome", self.root / "profile", self.root, self.root / "anchor.json",
             "https://example.test/", trusted_subtrees=self.path)
-        self.assertIn("--mtc-plants05-trusted-subtrees=" + str(self.path), command)
+        self.assertIn("--mtc-plants06-trusted-subtrees=" + str(self.path), command)
 
     def test_absent_override_preserves_fallback(self):
         command = bv.browser_command(
             "chrome", self.root / "profile", self.root, self.root / "anchor.json",
             "https://example.test/")
-        self.assertTrue(any(value.startswith("--mtc-plants05-trust=") for value in command))
-        self.assertFalse(any(value.startswith("--mtc-plants05-trusted-subtrees=")
+        self.assertTrue(any(value.startswith("--mtc-plants06-trust=") for value in command))
+        self.assertFalse(any(value.startswith("--mtc-plants06-trusted-subtrees=")
                              for value in command))
 
     def test_bad_magic(self):
@@ -72,13 +72,18 @@ class Mts1IntegrationTests(unittest.TestCase):
             b"\x00\x00" +
             b"\x00\x00\x00"
         )
-        reader = bv.Reader(proof)
-        self.assertEqual(reader.vector(), b"")
-        self.assertEqual(reader.number(6), 0)
-        self.assertEqual(reader.number(6), 16)
-        self.assertEqual(reader.vector(), b"")
-        self.assertEqual(reader.vector(3), b"")
-        reader.finish()
+
+        extensions, pos = bv.take_vector(proof, 0)
+        self.assertEqual(extensions, b"")
+        start, pos = bv.take_number(proof, pos, 6)
+        self.assertEqual(start, 0)
+        end, pos = bv.take_number(proof, pos, 6)
+        self.assertEqual(end, 16)
+        path, pos = bv.take_vector(proof, pos)
+        self.assertEqual(path, b"")
+        signatures, pos = bv.take_vector(proof, pos, 3)
+        self.assertEqual(signatures, b"")
+        self.assertEqual(pos, len(proof))
 
     def test_uint16_mtcproof_signatures_leaves_trailing_byte(self):
         proof = (
@@ -88,14 +93,17 @@ class Mts1IntegrationTests(unittest.TestCase):
             b"\x00\x00" +
             b"\x00\x00\x00"
         )
-        reader = bv.Reader(proof)
-        reader.vector()
-        reader.number(6)
-        reader.number(6)
-        reader.vector()
-        reader.vector()
-        with self.assertRaisesRegex(ValueError, "trailing bytes"):
-            reader.finish()
+
+        extensions, pos = bv.take_vector(proof, 0)
+        self.assertEqual(extensions, b"")
+        _, pos = bv.take_number(proof, pos, 6)
+        _, pos = bv.take_number(proof, pos, 6)
+        _, pos = bv.take_vector(proof, pos)
+
+        # Legacy U16 interprets the first two bytes of the U24 length as
+        # zero, leaving the third byte as trailing data.
+        _, pos = bv.take_vector(proof, pos)
+        self.assertNotEqual(pos, len(proof))
 
 
 if __name__ == "__main__":
