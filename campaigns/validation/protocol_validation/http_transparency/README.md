@@ -24,7 +24,7 @@ Validated cases:
 
 The real positive E2E validation was: local persistent log -> HTTP snapshot and
 subtree proofs -> authenticated checkpoint -> Section 7.4 RP validation ->
-published MTS1 -> Chromium `--mtc-plants05-trusted-subtrees` -> TLS 1.3 MTC
+published MTS1 -> Chromium `--mtc-plants06-trusted-subtrees` -> TLS 1.3 MTC
 PASS. Managed runs use an OS-selected loopback port by default; an explicit
 `--log-port` remains supported and the selected base URL is recorded in HTTP
 evidence.

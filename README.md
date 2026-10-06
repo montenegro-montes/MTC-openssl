@@ -276,7 +276,7 @@ creating a backup. It preserves tracked source files and `results/`.
 ## Scope boundary
 
 `campaigns/browser_client/` contains browser-oriented MTC implementations and
-interoperability experiments. `chromium_mtc/` contains the Chromium Plants-05
+interoperability experiments. `chromium_mtc/` contains the Chromium Plants-06
 integration and reproducibility workflow, while `boringssl_mtc_client/`
 preserves the earlier BoringSSL-based client and wire-validation utilities.
 
