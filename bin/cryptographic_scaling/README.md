@@ -2,8 +2,8 @@
 
 Run `bin/cryptographic_scaling/mt-cert-scaling` from the repository root. The launcher covers X.509 and experimental MTC fixture generation, validation, crossover analysis, boundary audits, mutual-authentication crossover, and the D=2–5 scaling verification.
 
-Each new configuration selects `X25519`, `X25519+ML-KEM512`, or
-`ML-KEM-512`. TLS stages inherit that OpenSSL group, result paths include its
+Each new configuration selects `X25519`, `X25519+ML-KEM768`, or
+`ML-KEM-768`. TLS stages inherit that OpenSSL group, result paths include its
 slug, and generated TLS CSV and JSON evidence records the selection.
 
 The active profiles are ECDSA P-256/P-384/P-521, Ed25519, Ed448, ML-DSA-44/65/87 and SLH-DSA-SHA2-128s. Tree-size studies use the configured values shown by the launcher status. Outputs are new directories below `artifacts/`; `.mt-state/cert-scaling/` records resumable stage state.

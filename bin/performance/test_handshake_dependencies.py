@@ -138,7 +138,7 @@ class Dependencies(unittest.TestCase):
     def test_mutual_d2_reuse_and_hybrid_preserved(self):
         result = shell('''
 command=run-native-mutual
-configure_kem x25519_mlkem512
+configure_kem x25519_mlkem768
 configure_depth 2
 ACTIVE_CASES=("${MUTUAL_CASES[@]}")
 preflight_mtc_generation() { :; }
@@ -151,7 +151,7 @@ printf '%s %s\n' "$KEM_GROUP" "${common[*]}"
 ''')
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertIn('MUTUAL_FOUND',result.stdout)
-        self.assertIn('-groups x25519_mlkem512',result.stdout)
+        self.assertIn('-groups X25519MLKEM768',result.stdout)
 
     def test_all6_resolves_once(self):
         result = shell('''

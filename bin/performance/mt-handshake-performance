@@ -72,11 +72,11 @@ configure_kem() {
   case "${1:-x25519}" in
     1|x25519|X25519)
       KEM=x25519; KEM_LABEL=X25519; KEM_GROUP=X25519; KEM_SLUG=x25519;;
-    2|x25519-mlkem512|x25519_mlkem512|X25519+ML-KEM512)
-      KEM=x25519-mlkem512; KEM_LABEL=X25519+ML-KEM512; KEM_GROUP=x25519_mlkem512; KEM_SLUG=x25519-mlkem512;;
-    3|mlkem512|ML-KEM-512)
-      KEM=mlkem512; KEM_LABEL=ML-KEM-512; KEM_GROUP=mlkem512; KEM_SLUG=mlkem512;;
-    *) fail 'KEM must be 1/x25519, 2/x25519-mlkem512, or 3/mlkem512.';;
+    2|x25519-mlkem768|x25519_mlkem768|X25519+ML-KEM768)
+      KEM=x25519-mlkem768; KEM_LABEL=X25519+ML-KEM768; KEM_GROUP=X25519MLKEM768; KEM_SLUG=x25519-mlkem768;;
+    3|mlkem768|ML-KEM-768)
+      KEM=mlkem768; KEM_LABEL=ML-KEM-768; KEM_GROUP=mlkem768; KEM_SLUG=mlkem768;;
+    *) fail 'KEM must be 1/x25519, 2/x25519-mlkem768, or 3/mlkem768.';;
   esac
   export KEM KEM_LABEL KEM_GROUP KEM_SLUG
   common=( -tls1_3 -groups "$KEM_GROUP" -ciphersuites TLS_AES_256_GCM_SHA384 )
@@ -84,7 +84,7 @@ configure_kem() {
 
 select_kem() {
   local selection
-  printf 'Key establishment:\n  1 X25519 (default)\n  2 X25519+ML-KEM512\n  3 ML-KEM-512\n' >&2
+  printf 'Key establishment:\n  1 X25519 (default)\n  2 X25519+ML-KEM768\n  3 ML-KEM-768\n' >&2
   read -r -p '> ' selection || selection=1
   configure_kem "${selection:-1}"
 }
@@ -421,7 +421,7 @@ for root in (repo/'artifacts/mtc').glob('n16-*'):
     # Credential bytes are KEM-independent; historical path labels are not
     # negotiated-group evidence. The selected-group gate runs separately.
     stamp = None
-    for prefix in ('n16-x25519-', 'n16-x25519-mlkem512-', 'n16-x25519_mlkem512-', 'n16-mlkem512-'):
+    for prefix in ('n16-x25519-', 'n16-x25519-mlkem768-', 'n16-x25519_mlkem768-', 'n16-mlkem768-', 'n16-x25519-mlkem512-', 'n16-x25519_mlkem512-', 'n16-mlkem512-'):
         if root.name.startswith(prefix):
             candidate = root.name[len(prefix):]
             if candidate[:4].isdigit():
@@ -541,7 +541,7 @@ ensure_kem_supported() {
   # Every client/server command receives -groups explicitly, so OpenSSL itself
   # performs the authoritative capability check when that scenario starts.
   case "$KEM_GROUP" in
-    X25519|x25519_mlkem512|mlkem512) ;;
+    X25519|X25519MLKEM768|mlkem768) ;;
     *) fail "Unsupported configured TLS group: $KEM_GROUP";;
   esac
   printf 'Key establishment: %s (OpenSSL group %s)\n' "$KEM_LABEL" "$KEM_GROUP"

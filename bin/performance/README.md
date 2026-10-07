@@ -23,8 +23,8 @@ bin/performance/mt-handshake-performance
 Creating a configuration asks for one key-establishment option:
 
 1. `X25519` (OpenSSL group `X25519`)
-2. `X25519+ML-KEM512` (OpenSSL group `x25519_mlkem512`)
-3. `ML-KEM-512` (OpenSSL group `mlkem512`)
+2. `X25519+ML-KEM768` (OpenSSL group `X25519MLKEM768`)
+3. `ML-KEM-768` (OpenSSL group `mlkem768`)
 
 The selected value is stored as `KEM` in the configuration. Default result and
 report directory names include its stable slug, and both JSON and HTML reports

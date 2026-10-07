@@ -3,7 +3,7 @@
 `mt-network` coordinates latency, bandwidth, packet-loss and combined campaigns
 for all nine profiles. Every operation that prepares, shows, executes or
 analyzes a campaign requires an authentication mode: `single` or `mutual`.
-Initialization selects `X25519`, `X25519+ML-KEM512`, or `ML-KEM-512`.
+Initialization selects `X25519`, `X25519+ML-KEM768`, or `ML-KEM-768`.
 The selection is stored in the configuration, included in result directory
 names, propagated to every TLS endpoint, and recorded in CSV and JSON evidence.
 
