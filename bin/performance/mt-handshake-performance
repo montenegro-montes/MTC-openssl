@@ -443,6 +443,12 @@ for root in (repo/'artifacts/mtc').glob('n16-*'):
         manifest = json.loads((root/'manifest.json').read_text())
         if 16 not in manifest.get('sizes', []) or not set(sys.argv[2:]) <= set(manifest.get('profiles', [])):
             continue
+        if not all(
+            (root/'batch16/mtc'/profile/'trust.bin').read_bytes()[:4] == b'MTB2'
+            and (root/'batch16/mtc'/profile/'authority.bin').read_bytes()[:4] == b'MCA2'
+            for profile in sys.argv[2:]
+        ):
+            continue
     except (OSError, ValueError, TypeError, AttributeError):
         continue
     pairs.append((date, root.relative_to(repo), validation.relative_to(repo)))
@@ -835,7 +841,7 @@ measure_pcap() {
   local output=$1 profile case_name repetition directory pcap keylog log capture_log analysis_log analysis_values analysis_status ready attempt done_count=0 total_count started now eta
   local -a analyzer_args
   total_count=$(( ${#PROFILES[@]} * ${#ACTIVE_CASES[@]} * PCAP_RUNS )); started=$(date +%s)
-  printf 'profile,case,key_establishment,openssl_group,repetition,tcp_handshake_ms,tcp_syn_to_clienthello_ms,tls_clienthello_to_client_finished_ms,tcp_syn_to_first_application_request_ms,tls_client_handshake_bytes,tls_server_handshake_bytes,tls_handshake_bytes,tls_client_handshake_wire_bytes,tls_server_handshake_wire_bytes,tls_handshake_wire_bytes,tls_client_handshake_packets,tls_server_handshake_packets,tls_handshake_packets,tls_client_certificate_bytes,tls_server_certificate_bytes,tcp_stream,client_random,analysis_status,analysis_error,tcp_retransmission_packets\n' > "$output/pcap.csv"
+  printf 'profile,case,key_establishment,openssl_group,repetition,tcp_handshake_ms,tcp_syn_to_clienthello_ms,tls_clienthello_to_client_finished_ms,tcp_syn_to_first_application_request_ms,tls_client_handshake_bytes,tls_server_handshake_bytes,tls_handshake_bytes,tls_client_handshake_wire_bytes,tls_server_handshake_wire_bytes,tls_handshake_wire_bytes,tcp_handshake_wire_bytes,connection_handshake_wire_bytes,tls_client_handshake_packets,tls_server_handshake_packets,tls_handshake_packets,tls_client_certificate_bytes,tls_server_certificate_bytes,tcp_stream,client_random,analysis_status,analysis_error,tcp_retransmission_packets\n' > "$output/pcap.csv"
   printf '\nPCAP MEASUREMENTS — 9 profiles × %d authentication cases\n' "${#ACTIVE_CASES[@]}"
   for profile in "${PROFILES[@]}"; do
    for case_name in "${ACTIVE_CASES[@]}"; do
@@ -955,6 +961,8 @@ root=Path(sys.argv[1]); result={
  'tls_client_handshake_wire_bytes':'sum of frame lengths for client TCP-payload frames from ClientHello through client Finished, inclusive',
  'tls_server_handshake_wire_bytes':'sum of frame lengths for server TCP-payload frames over the same TLS interval',
  'tls_handshake_wire_bytes':'client plus server handshake wire bytes; pure TCP ACKs are excluded',
+ 'tcp_handshake_wire_bytes':'sum of frame lengths for the SYN, corresponding SYN/ACK and first ACK completing the selected TCP stream handshake',
+ 'connection_handshake_wire_bytes':'sum of unique frame lengths across the TCP three-way handshake and TLS handshake interval; an ACK carrying TLS data is counted once',
  'tls_handshake_packets':'client plus server TCP-payload frames in the TLS handshake interval',
  'tls_client_certificate_bytes':'complete client Certificate handshake message, including its four-byte handshake header; zero only when not requested; applies to X.509 and project MTC credentials carried in Certificate',
  'tls_server_certificate_bytes':'complete server Certificate handshake message, including its four-byte handshake header; applies to X.509 and project MTC credentials carried in Certificate',
@@ -976,7 +984,7 @@ for source,key in [('native.csv','native'),('pcap.csv','pcap')]:
   cases[profile]={}
   for name in sorted({r['case'] for r in measured if r['profile']==profile}):
    group=[r for r in measured if r['profile']==profile and r['case']==name]
-   fields=['tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native','process_wall_ms','tls_bytes_total'] if key=='native' else ['tcp_handshake_ms','tcp_syn_to_clienthello_ms','tls_clienthello_to_client_finished_ms','tcp_syn_to_first_application_request_ms','tls_client_handshake_bytes','tls_server_handshake_bytes','tls_handshake_bytes','tls_client_handshake_wire_bytes','tls_server_handshake_wire_bytes','tls_handshake_wire_bytes','tls_client_handshake_packets','tls_server_handshake_packets','tls_handshake_packets','tls_client_certificate_bytes','tls_server_certificate_bytes','tcp_retransmission_packets']
+   fields=['tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native','process_wall_ms','tls_bytes_total'] if key=='native' else ['tcp_handshake_ms','tcp_syn_to_clienthello_ms','tls_clienthello_to_client_finished_ms','tcp_syn_to_first_application_request_ms','tls_client_handshake_bytes','tls_server_handshake_bytes','tls_handshake_bytes','tls_client_handshake_wire_bytes','tls_server_handshake_wire_bytes','tls_handshake_wire_bytes','tcp_handshake_wire_bytes','connection_handshake_wire_bytes','tls_client_handshake_packets','tls_server_handshake_packets','tls_handshake_packets','tls_client_certificate_bytes','tls_server_certificate_bytes','tcp_retransmission_packets']
    cases[profile][name]={
     'key_establishment':result['key_establishment'],
     **({'depth_including_root':int(sys.argv[5]),'transmitted_certificates':int(sys.argv[5])-1,

@@ -9,7 +9,7 @@ from pathlib import Path
 class AnalysisError(ValueError): pass
 
 FIELDS=("frame.time_epoch","frame.number","frame.len","tcp.stream","ip.src","ip.dst","ipv6.src","ipv6.dst","tcp.srcport","tcp.dstport","tcp.flags.syn","tcp.flags.ack","tcp.seq","tcp.ack","tcp.len","tcp.payload","tls.handshake.type","tls.handshake.length","tls.handshake.random","tls.record.length","http.request.method","tcp.analysis.retransmission","tcp.analysis.fast_retransmission","tcp.analysis.spurious_retransmission")
-METRIC_FIELDS=("tcp_handshake_ms","tcp_syn_to_clienthello_ms","tls_clienthello_to_client_finished_ms","tcp_syn_to_first_application_request_ms","tls_client_handshake_bytes","tls_server_handshake_bytes","tls_handshake_bytes","tls_client_handshake_wire_bytes","tls_server_handshake_wire_bytes","tls_handshake_wire_bytes","tls_client_handshake_packets","tls_server_handshake_packets","tls_handshake_packets","tls_client_certificate_bytes","tls_server_certificate_bytes","tcp_stream","client_random","analysis_status","analysis_error","tcp_retransmission_packets")
+METRIC_FIELDS=("tcp_handshake_ms","tcp_syn_to_clienthello_ms","tls_clienthello_to_client_finished_ms","tcp_syn_to_first_application_request_ms","tls_client_handshake_bytes","tls_server_handshake_bytes","tls_handshake_bytes","tls_client_handshake_wire_bytes","tls_server_handshake_wire_bytes","tls_handshake_wire_bytes","tcp_handshake_wire_bytes","connection_handshake_wire_bytes","tls_client_handshake_packets","tls_server_handshake_packets","tls_handshake_packets","tls_client_certificate_bytes","tls_server_certificate_bytes","tcp_stream","client_random","analysis_status","analysis_error","tcp_retransmission_packets")
 
 def _items(value): return [x.strip() for x in value.split(',') if x.strip()]
 def _yes(value): return value.strip().lower() in {'1','true'}
@@ -89,9 +89,11 @@ def analyze(rows,server_port='4433',expect_client_certificate=False):
  hello=hellos[0];hello_time=_time(hello);randoms=_items(hello.get('tls.handshake.random',''))
  client_random=randoms[0].replace(':','').lower() if len(randoms)==1 else ''
  if not re.fullmatch(r'[0-9a-f]{64}',client_random):raise AnalysisError('ClientHello client_random missing, malformed, or ambiguous')
- acks=[r for r in flow if c2s(r) and not _yes(r.get('tcp.flags.syn','')) and _yes(r.get('tcp.flags.ack','')) and r.get('tcp.len')=='0' and synack_time<=_time(r)<=hello_time and _integer(r,'tcp.ack')==synack_seq+1]
- if len(acks)!=1:raise AnalysisError(f'expected one ACK completing the TCP handshake, found {len(acks)}')
- ack=acks[0]
+ acks=[r for r in flow if c2s(r) and not _yes(r.get('tcp.flags.syn','')) and _yes(r.get('tcp.flags.ack','')) and synack_time<=_time(r)<=hello_time and _integer(r,'tcp.ack')==synack_seq+1]
+ if not acks:raise AnalysisError('expected ACK completing the TCP handshake, found 0')
+ ack_time=min(_time(r) for r in acks);first_acks=[r for r in acks if _time(r)==ack_time]
+ if len(first_acks)!=1:raise AnalysisError(f'ACK completing the TCP handshake is ambiguous: {len(first_acks)} frames at the first ACK time')
+ ack=first_acks[0]
  finishes=[r for r in flow if c2s(r) and '20' in _items(r.get('tls.handshake.type','')) and _time(r)>=hello_time]
  if len(finishes)!=1:raise AnalysisError(f'expected one client Finished, found {len(finishes)}')
  finished=finishes[0];finished_time=_time(finished)
@@ -106,6 +108,9 @@ def analyze(rows,server_port='4433',expect_client_certificate=False):
  client_frames=[r for r in interval if c2s(r)];server_frames=[r for r in interval if s2c(r)]
  if len(client_frames)+len(server_frames)!=len(interval):raise AnalysisError('TLS interval contains a frame with an unknown direction')
  client_wire=sum(_integer(r,'frame.len') for r in client_frames);server_wire=sum(_integer(r,'frame.len') for r in server_frames)
+ tcp_frames=(syn,synack,ack);tcp_wire=sum(_integer(r,'frame.len') for r in tcp_frames)
+ connection_frames={_integer(r,'frame.number'):r for r in (*tcp_frames,*interval)}
+ connection_wire=sum(_integer(r,'frame.len') for r in connection_frames.values())
  client_tls=_logical_records(client_frames);server_tls=_logical_records(server_frames)
  certs={'client':set(),'server':set()};certificate_request=False
  for row in interval:
@@ -116,7 +121,7 @@ def analyze(rows,server_port='4433',expect_client_certificate=False):
  if len(certs['client'])>1:raise AnalysisError(f"expected at most one analyzable client Certificate, found {len(certs['client'])}")
  if (certificate_request or expect_client_certificate) and not certs['client']:raise AnalysisError('client Certificate was required/requested but is not analyzable')
  client_cert=next(iter(certs['client'])) if certs['client'] else 0;ms=Decimal(1000)
- return {'tcp_handshake_ms':float((_time(ack)-syn_time)*ms),'tcp_syn_to_clienthello_ms':float((hello_time-syn_time)*ms),'tls_clienthello_to_client_finished_ms':float((finished_time-hello_time)*ms),'tcp_syn_to_first_application_request_ms':float((_time(request)-syn_time)*ms),'tls_client_handshake_bytes':client_tls,'tls_server_handshake_bytes':server_tls,'tls_handshake_bytes':client_tls+server_tls,'tls_client_handshake_wire_bytes':client_wire,'tls_server_handshake_wire_bytes':server_wire,'tls_handshake_wire_bytes':client_wire+server_wire,'tls_client_handshake_packets':len(client_frames),'tls_server_handshake_packets':len(server_frames),'tls_handshake_packets':len(interval),'tls_client_certificate_bytes':client_cert,'tls_server_certificate_bytes':next(iter(certs['server'])),'tcp_stream':int(stream),'client_random':client_random,'analysis_status':'OK','analysis_error':'','tcp_retransmission_packets':sum(_retransmission(r) for r in interval)}
+ return {'tcp_handshake_ms':float((_time(ack)-syn_time)*ms),'tcp_syn_to_clienthello_ms':float((hello_time-syn_time)*ms),'tls_clienthello_to_client_finished_ms':float((finished_time-hello_time)*ms),'tcp_syn_to_first_application_request_ms':float((_time(request)-syn_time)*ms),'tls_client_handshake_bytes':client_tls,'tls_server_handshake_bytes':server_tls,'tls_handshake_bytes':client_tls+server_tls,'tls_client_handshake_wire_bytes':client_wire,'tls_server_handshake_wire_bytes':server_wire,'tls_handshake_wire_bytes':client_wire+server_wire,'tcp_handshake_wire_bytes':tcp_wire,'connection_handshake_wire_bytes':connection_wire,'tls_client_handshake_packets':len(client_frames),'tls_server_handshake_packets':len(server_frames),'tls_handshake_packets':len(interval),'tls_client_certificate_bytes':client_cert,'tls_server_certificate_bytes':next(iter(certs['server'])),'tcp_stream':int(stream),'client_random':client_random,'analysis_status':'OK','analysis_error':'','tcp_retransmission_packets':sum(_retransmission(r) for r in interval)}
 
 def analyze_safe(rows,server_port='4433',expect_client_certificate=False):
  try:return analyze(rows,server_port,expect_client_certificate)

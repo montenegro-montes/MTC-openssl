@@ -36,6 +36,7 @@ class Tests(unittest.TestCase):
   self.assertAlmostEqual(r['tcp_handshake_ms'],.045);self.assertAlmostEqual(r['tcp_syn_to_clienthello_ms'],.957);self.assertAlmostEqual(r['tls_clienthello_to_client_finished_ms'],7.255);self.assertAlmostEqual(r['tcp_syn_to_first_application_request_ms'],9)
   self.assertEqual(r['tls_client_handshake_bytes'],150);self.assertEqual(r['tls_server_handshake_bytes'],507);self.assertEqual(r['tls_handshake_bytes'],657)
   self.assertEqual((r['tls_client_handshake_wire_bytes'],r['tls_server_handshake_wire_bytes'],r['tls_handshake_wire_bytes']),(560,893,1453))
+  self.assertEqual((r['tcp_handshake_wire_bytes'],r['connection_handshake_wire_bytes']),(198,1651))
   self.assertEqual((r['tls_client_handshake_packets'],r['tls_server_handshake_packets'],r['tls_handshake_packets']),(2,1,3));self.assertEqual(r['tls_client_certificate_bytes'],0);self.assertEqual(r['tls_server_certificate_bytes'],304);self.assertEqual((r['tcp_stream'],r['client_random'],r['analysis_status']),(0,RANDOM,'OK'))
  def test_multiple_records_include_each_header(self):
   self.assertEqual(p.analyze(fixture())['tls_server_handshake_bytes'],sum((54,24,304,64,36))+5*5)
@@ -43,6 +44,10 @@ class Tests(unittest.TestCase):
   r=p.analyze(fixture(fragment=True));self.assertEqual(r['tls_server_handshake_bytes'],507);self.assertEqual(r['tls_server_handshake_packets'],2);self.assertEqual(r['tls_server_handshake_wire_bytes'],1393)
  def test_retransmission_is_wire_cost_not_duplicate_logical_bytes(self):
   r=p.analyze(fixture(retransmission=True));self.assertEqual(r['tls_server_handshake_bytes'],507);self.assertEqual(r['tls_server_handshake_wire_bytes'],1786);self.assertEqual(r['tls_server_handshake_packets'],2);self.assertEqual(r['tcp_retransmission_packets'],1)
+ def test_ack_with_clienthello_is_counted_once_in_connection_wire_bytes(self):
+  rows=[r for r in fixture() if r['frame.number']!='3'];r=p.analyze(rows)
+  self.assertEqual(r['tcp_handshake_wire_bytes'],546);self.assertEqual(r['tls_handshake_wire_bytes'],1453)
+  self.assertEqual(r['connection_handshake_wire_bytes'],1585)
  def test_mutual_client_certificate(self):
   r=p.analyze(fixture(mutual=True));self.assertEqual(r['tls_client_certificate_bytes'],144);self.assertEqual(r['tls_server_certificate_bytes'],304)
  def test_requested_client_certificate_unavailable_is_error_not_zero(self):
@@ -53,7 +58,7 @@ class Tests(unittest.TestCase):
   full=p.analyze(fixture());trim=p.analyze(fixture()[:7]+[fixture()[8]])
   for key in ('tls_handshake_bytes','tls_handshake_wire_bytes','tls_handshake_packets'):self.assertEqual(full[key],trim[key])
  def test_missing_event_and_ambiguous_flow_are_controlled_errors(self):
-  rows=[r for r in fixture() if r['frame.number']!='3'];self.assertEqual(p.analyze_safe(rows)['analysis_status'],'ERROR')
+  rows=[r for r in fixture() if r['frame.number']!='3'];rows[2]['tcp.ack']='0';self.assertEqual(p.analyze_safe(rows)['analysis_status'],'ERROR')
   rows=fixture();rows.append(row(20,'.1','10.0.0.4','10.0.0.3',50001,4433,**{'tcp_stream':'1','tcp_flags_syn':'True','tcp_flags_ack':'False','tcp_seq':'0','tcp_ack':'0'}));self.assertIn('one initial SYN/flow',p.analyze_safe(rows)['analysis_error'])
  def test_header_preserves_identity_and_has_no_obsolete_names(self):
   text=Path(__file__).with_name('mt-handshake-performance').read_text();header='profile,case,key_establishment,openssl_group,repetition,'+','.join(p.METRIC_FIELDS);self.assertIn("printf '"+header+"\\n'",text)
