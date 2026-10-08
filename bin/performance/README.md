@@ -37,9 +37,14 @@ configurations can coexist under `.mt-state/`.
 Native and PCAP populations can be executed independently for simple or mutual
 authentication. `run-single` and `run-mutual` execute Native followed by PCAP
 only for their three authentication cases. `run-native-pcap` retains the full
-six-case execution.
+six-case execution. Both Native and PCAP execute the configured warmup phase
+before measured repetitions. Their CSV rows use `phase=warmup|measured`, and
+only measured rows contribute to `summary.json`.
 
 HTML renderers are centralized under `bin/renders/`.
+Handshake dependency resolution and PCAP analysis are implemented under
+`campaigns/performance/handshake_performance/`; this directory contains only
+the public launcher and its usage documentation.
 
 ### Performance KEM selection versus fixture provenance
 

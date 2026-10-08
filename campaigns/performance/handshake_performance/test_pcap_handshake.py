@@ -61,6 +61,9 @@ class Tests(unittest.TestCase):
   rows=[r for r in fixture() if r['frame.number']!='3'];rows[2]['tcp.ack']='0';self.assertEqual(p.analyze_safe(rows)['analysis_status'],'ERROR')
   rows=fixture();rows.append(row(20,'.1','10.0.0.4','10.0.0.3',50001,4433,**{'tcp_stream':'1','tcp_flags_syn':'True','tcp_flags_ack':'False','tcp_seq':'0','tcp_ack':'0'}));self.assertIn('one initial SYN/flow',p.analyze_safe(rows)['analysis_error'])
  def test_header_preserves_identity_and_has_no_obsolete_names(self):
-  text=Path(__file__).with_name('mt-handshake-performance').read_text();header='profile,case,key_establishment,openssl_group,repetition,'+','.join(p.METRIC_FIELDS);self.assertIn("printf '"+header+"\\n'",text)
+  text=(Path(__file__).resolve().parents[3]/'bin/performance/mt-handshake-performance').read_text();header='profile,case,key_establishment,openssl_group,phase,repetition,'+','.join(p.METRIC_FIELDS);self.assertIn("printf '"+header+"\\n'",text)
+  self.assertIn('for phase in warmup measured; do',text)
+  self.assertIn('(WARMUPS + PCAP_RUNS)',text)
+  self.assertIn('${profile}-${case_name}-${phase}-${repetition}',text)
   for obsolete in ('connection_syn_to_clienthello_ms','connection_syn_to_client_finished_ms','tls_handshake_frame_count,'):self.assertNotIn(obsolete,text)
 if __name__=='__main__':unittest.main()

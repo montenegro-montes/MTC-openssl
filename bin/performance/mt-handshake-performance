@@ -191,7 +191,7 @@ resolve_dependencies() {
     fi
     [[ -z "${X509_CHAIN_FIXTURES:-}" ]] || chain_args+=(--preferred "$X509_CHAIN_FIXTURES")
     [[ "$mode" != run ]] || chain_args+=(--execute)
-    CHAIN_BINDINGS=$(python3 -B "$REPO/bin/performance/handshake_dependencies.py" \
+    CHAIN_BINDINGS=$(python3 -B "$REPO/campaigns/performance/handshake_performance/handshake_dependencies.py" \
       --profile "${PROFILES[@]}" --depth "${X509_DEPTHS[@]}" --image "$IMAGE" "${chain_args[@]}") \
       || fail 'Dependency preparation failed: X.509 chains. No measurements started.'
   fi
@@ -838,17 +838,20 @@ PYMETRICS
 }
 
 measure_pcap() {
-  local output=$1 profile case_name repetition directory pcap keylog log capture_log analysis_log analysis_values analysis_status ready attempt done_count=0 total_count started now eta
+  local output=$1 profile case_name phase count repetition directory pcap keylog log capture_log analysis_log analysis_values analysis_status ready attempt done_count=0 total_count started now eta
   local -a analyzer_args
-  total_count=$(( ${#PROFILES[@]} * ${#ACTIVE_CASES[@]} * PCAP_RUNS )); started=$(date +%s)
-  printf 'profile,case,key_establishment,openssl_group,repetition,tcp_handshake_ms,tcp_syn_to_clienthello_ms,tls_clienthello_to_client_finished_ms,tcp_syn_to_first_application_request_ms,tls_client_handshake_bytes,tls_server_handshake_bytes,tls_handshake_bytes,tls_client_handshake_wire_bytes,tls_server_handshake_wire_bytes,tls_handshake_wire_bytes,tcp_handshake_wire_bytes,connection_handshake_wire_bytes,tls_client_handshake_packets,tls_server_handshake_packets,tls_handshake_packets,tls_client_certificate_bytes,tls_server_certificate_bytes,tcp_stream,client_random,analysis_status,analysis_error,tcp_retransmission_packets\n' > "$output/pcap.csv"
+  total_count=$(( ${#PROFILES[@]} * ${#ACTIVE_CASES[@]} * (WARMUPS + PCAP_RUNS) )); started=$(date +%s)
+  printf 'profile,case,key_establishment,openssl_group,phase,repetition,tcp_handshake_ms,tcp_syn_to_clienthello_ms,tls_clienthello_to_client_finished_ms,tcp_syn_to_first_application_request_ms,tls_client_handshake_bytes,tls_server_handshake_bytes,tls_handshake_bytes,tls_client_handshake_wire_bytes,tls_server_handshake_wire_bytes,tls_handshake_wire_bytes,tcp_handshake_wire_bytes,connection_handshake_wire_bytes,tls_client_handshake_packets,tls_server_handshake_packets,tls_handshake_packets,tls_client_certificate_bytes,tls_server_certificate_bytes,tcp_stream,client_random,analysis_status,analysis_error,tcp_retransmission_packets\n' > "$output/pcap.csv"
   printf '\nPCAP MEASUREMENTS — 9 profiles × %d authentication cases\n' "${#ACTIVE_CASES[@]}"
   for profile in "${PROFILES[@]}"; do
    for case_name in "${ACTIVE_CASES[@]}"; do
-    printf '\n[PCAP] profile=%s case=%s captures=%d\n' "$profile" "$case_name" "$PCAP_RUNS"
-    for ((repetition=1; repetition<=PCAP_RUNS; repetition++)); do
+    printf '\n[PCAP] profile=%s case=%s: %d warmups + %d measured captures\n' "$profile" "$case_name" "$WARMUPS" "$PCAP_RUNS"
+    for phase in warmup measured; do
+     [[ "$phase" == warmup ]] && count=$WARMUPS || count=$PCAP_RUNS
+     printf '[PCAP] profile=%s case=%s phase=%s repetitions=%d\n' "$profile" "$case_name" "$phase" "$count"
+     for ((repetition=1; repetition<=count; repetition++)); do
       start_server "$profile" "$case_name"
-      directory="$output/pcap/${profile}-${case_name}-${repetition}"; mkdir "$directory"
+      directory="$output/pcap/${profile}-${case_name}-${phase}-${repetition}"; mkdir "$directory"
       pcap="$directory/handshake.pcap"; keylog="$directory/keylog.txt"; log="$directory/client.log"; capture_log="$directory/tcpdump.log"
       docker run -d --name "${SERVER}-capture" --network "container:$SERVER" --cap-add NET_RAW --cap-add NET_ADMIN \
         -v "$directory:/capture" --entrypoint tcpdump "$CAPTURE_IMAGE" \
@@ -889,14 +892,15 @@ measure_pcap() {
         || fail "$profile $case_name tshark analysis failed; inspect $directory/tshark.stderr"
       analyzer_args=()
       [[ "$case_name" != *-mutual ]] || analyzer_args+=(--expect-client-certificate)
-      if analysis_values=$(python3 "$REPO/bin/performance/pcap_handshake.py" "$analysis_log" --format csv "${analyzer_args[@]}" 2>>"$directory/tshark.stderr"); then
+      if analysis_values=$(python3 "$REPO/campaigns/performance/handshake_performance/pcap_handshake.py" "$analysis_log" --format csv "${analyzer_args[@]}" 2>>"$directory/tshark.stderr"); then
         analysis_status=OK
       else
         analysis_status=ERROR
       fi
-      printf '%s,%s,%s,%s,%s,%s\n' "$profile" "$case_name" "$KEM_LABEL" "$KEM_GROUP" "$repetition" "$analysis_values" >> "$output/pcap.csv"
+      printf '%s,%s,%s,%s,%s,%s,%s\n' "$profile" "$case_name" "$KEM_LABEL" "$KEM_GROUP" "$phase" "$repetition" "$analysis_values" >> "$output/pcap.csv"
       done_count=$((done_count+1)); now=$(date +%s); eta=$(( done_count ? (now-started)*(total_count-done_count)/done_count : 0 ))
-      printf '[PCAP] %d/%d profile=%s case=%s capture=%d analysis=%s elapsed=%ds eta=%ds\n' "$done_count" "$total_count" "$profile" "$case_name" "$repetition" "$analysis_status" "$((now-started))" "$eta"
+      printf '[PCAP] %d/%d profile=%s case=%s %s=%d analysis=%s elapsed=%ds eta=%ds\n' "$done_count" "$total_count" "$profile" "$case_name" "$phase" "$repetition" "$analysis_status" "$((now-started))" "$eta"
+     done
     done
    done
   done
@@ -1083,8 +1087,8 @@ status_config() {
 
   load_plan_counts "$config"
   depth_plan '(selected output)'
-  printf 'Key establishment: %s (%s)\nRepetitions: native=%s measured + %s warmups; PCAP=%s\n' \
-    "$KEM_LABEL" "$KEM_GROUP" "$RUNS" "$WARMUPS" "$PCAP_RUNS"
+  printf 'Key establishment: %s (%s)\nRepetitions: native=%s measured + %s warmups; PCAP=%s measured + %s warmups\n' \
+    "$KEM_LABEL" "$KEM_GROUP" "$RUNS" "$WARMUPS" "$PCAP_RUNS" "$WARMUPS"
 }
 
 menu() {
@@ -1156,12 +1160,12 @@ case "$command" in
     printf 'Mutual authentication: client and server use the same signature profile.\n\n'
     printf ' 4 Native single:        27 scenarios; %d measured + %d warmups\n' "$((27 * RUNS))" "$((27 * WARMUPS))"
     printf ' 5 Native mutual:        27 scenarios; %d measured + %d warmups\n' "$((27 * RUNS))" "$((27 * WARMUPS))"
-    printf ' 6 PCAP single:          27 scenarios; %d captures\n' "$((27 * PCAP_RUNS))"
-    printf ' 7 PCAP mutual:          27 scenarios; %d captures\n' "$((27 * PCAP_RUNS))"
+    printf ' 6 PCAP single:          27 scenarios; %d measured + %d warmup captures\n' "$((27 * PCAP_RUNS))" "$((27 * WARMUPS))"
+    printf ' 7 PCAP mutual:          27 scenarios; %d measured + %d warmup captures\n' "$((27 * PCAP_RUNS))" "$((27 * WARMUPS))"
     printf ' 8 Native + PCAP single: options 4 + 6\n'
     printf ' 9 Native + PCAP mutual: options 5 + 7\n'
-    printf '10 Native + PCAP all:    54 scenarios; %d native observations and %d captures\n' \
-      "$((54 * (RUNS + WARMUPS)))" "$((54 * PCAP_RUNS))"
+    printf '10 Native + PCAP all:    54 scenarios; %d native observations and %d PCAP captures\n' \
+      "$((54 * (RUNS + WARMUPS)))" "$((54 * (PCAP_RUNS + WARMUPS)))"
     printf '11 Trust Anchor Retry:   9 profiles; 630 transactions (70/profile)\n\n'
     printf 'Single cases: %s\nMutual cases: %s\n' "${SINGLE_CASES[*]}" "${MUTUAL_CASES[*]}"
     printf 'Example next output: %s\n' "$output"

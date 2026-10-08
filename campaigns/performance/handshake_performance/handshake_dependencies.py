@@ -8,7 +8,7 @@ import re
 import subprocess
 import sys
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 CHAIN = REPO / 'campaigns/scaling/cert_chain_scaling'
 sys.path.insert(0, str(CHAIN))
 from result_state import validate_fixture

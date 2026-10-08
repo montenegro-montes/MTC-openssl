@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import handshake_dependencies as deps
 
-DRIVER = Path(__file__).with_name('mt-handshake-performance').read_text()
+DRIVER = (deps.REPO/'bin/performance/mt-handshake-performance').read_text()
 # Load definitions only, with a fixed repo path; never enter the CLI dispatcher.
 FUNCTIONS = DRIVER.split('command=${1:-menu}')[0]
 FUNCTIONS = FUNCTIONS.replace('source "$REPO/bin/lib/docker-preflight.sh"', ':')
