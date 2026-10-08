@@ -39,8 +39,8 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
         self.assertIn('args.x509_fixture_set = FORMAL_X509_FIXTURE_SET', text)
 
     def test_missing_formal_fixture_fails_reuse_only_without_generation(self):
-        with patch.object(measurements.bv, 'x509_paths', return_value=[]), \
-             patch.object(measurements.bv, 'discover', return_value=(None, [])), \
+        with patch.object(measurements.bv, 'precheck_formal_x509_fixture',
+                          side_effect=ValueError('missing exact cell')), \
              patch.object(measurements, 'existing_mtc', return_value={'profile': 'ecdsa-p256'}), \
              patch.object(measurements.bv, 'generate_x509') as generate:
             with self.assertRaisesRegex(ValueError,
@@ -69,8 +69,9 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
 
     def test_policy_failure_precedes_measurement_setup(self):
         selected = dict(fixture='/formal/d3', root='/formal/d3/root.pem', root_sha256='a'*64)
-        with patch.object(measurements.bv, 'x509_paths', return_value=[Path('/formal/d3')]), \
-             patch.object(measurements.bv, 'discover', return_value=(selected, [])), \
+        with patch.object(measurements.bv, 'precheck_formal_x509_fixture',
+                          return_value=Path('/formal/d3')), \
+             patch.object(measurements.bv, 'validate_x509', return_value=selected), \
              patch.object(measurements, 'existing_mtc', return_value={'profile': 'ecdsa-p256'}), \
              patch.object(measurements.bv, 'chromium_ca_policy',
                           side_effect=ValueError('policy lacks selected root')) as policy:
@@ -85,14 +86,52 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
         metadata = dict(x509_trust_mode='chromium-ca-policy',
                         certificate_verification_bypass=False,
                         policy_root_der_sha256='b'*64)
-        with patch.object(measurements.bv, 'x509_paths', return_value=[Path('/formal/d3')]), \
-             patch.object(measurements.bv, 'discover', return_value=(selected, [])), \
+        with patch.object(measurements.bv, 'precheck_formal_x509_fixture',
+                          return_value=Path('/formal/d3')) as precheck, \
+             patch.object(measurements.bv, 'validate_x509', return_value=selected) as validate, \
              patch.object(measurements, 'existing_mtc', return_value={'profile': 'ecdsa-p256'}), \
              patch.object(measurements.bv, 'chromium_ca_policy', return_value=metadata):
             actual = measurements.profile_run_preconditions(
                 REPO, 'unused-image', 'ecdsa-p256', 3,
                 measurements.FORMAL_X509_FIXTURE_SET)
         self.assertEqual(actual, ({'mtc': {'profile': 'ecdsa-p256'}, 'x509': selected}, metadata))
+        precheck.assert_called_once_with(
+            REPO, 'ecdsa-p256', 3, measurements.FORMAL_X509_FIXTURE_SET)
+        validate.assert_called_once_with(
+            Path('/formal/d3'), profile='ecdsa-p256', depth=3,
+            image='unused-image', fixture_set=measurements.FORMAL_X509_FIXTURE_SET)
+
+    def test_existing_mtc_preselects_locally_and_validates_only_selected_fixture(self):
+        selected = dict(fixture='/mtc/selected', anchor='/mtc/anchor.json',
+                        anchor_sha256='a'*64, anchor_origin='reused')
+        validated = dict(fixture='/mtc/selected', profile='mldsa44')
+        with patch.object(measurements.bv, 'preselect_mtc_fixture',
+                          return_value=(selected, [])) as preselect, \
+             patch.object(measurements.bv, 'validate_mtc', return_value=validated) as validate, \
+             patch.object(measurements.bv, 'discover') as discover:
+            actual = measurements.existing_mtc(REPO, 'image', 'mldsa44')
+        preselect.assert_called_once_with(REPO, 'mldsa44')
+        validate.assert_called_once_with(Path('/mtc/selected'), 'mldsa44', 'image')
+        discover.assert_not_called()
+        self.assertEqual(actual['anchor'], '/mtc/anchor.json')
+
+    def test_all_profiles_validate_only_the_selected_mtc_and_x509(self):
+        policy = {'policy_applied': True}
+        with patch.object(measurements, 'existing_mtc',
+                          side_effect=lambda repo, image, profile: {'profile': profile}) as mtc, \
+             patch.object(measurements.bv, 'precheck_formal_x509_fixture',
+                          side_effect=lambda repo, profile, depth, fixture_set:
+                          Path('/formal')/profile/f'd{depth}'), \
+             patch.object(measurements.bv, 'validate_x509',
+                          side_effect=lambda path, **kwargs:
+                          {'fixture': str(path), 'root': str(path/'root.pem')}) as x509, \
+             patch.object(measurements.bv, 'chromium_ca_policy', return_value=policy):
+            prepared = measurements.campaign_preconditions(
+                REPO, 'image', measurements.CAMPAIGN_PROFILES, 3,
+                measurements.FORMAL_X509_FIXTURE_SET)
+        self.assertEqual(set(prepared), set(measurements.CAMPAIGN_PROFILES))
+        self.assertEqual(mtc.call_count, 5)
+        self.assertEqual(x509.call_count, 5)
 
     def test_preconditions_precede_capture_lock_and_result_directory(self):
         source = (REPO/'campaigns/browser_client/chromium_mtc/browser_measurements.py').read_text()

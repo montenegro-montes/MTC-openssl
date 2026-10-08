@@ -33,35 +33,26 @@ BYTE_DEFINITION = 'Observed TCP payload bytes including retransmissions, excludi
 
 
 def existing_mtc(repo, image, profile):
-    paths = [path.parent for path in (repo/'artifacts/mtc').glob('*/manifest.json')]
-    selected, _ = bv.discover(paths, lambda path: bv.validate_mtc(path, profile, image))
-    if selected is None:
+    try:
+        selected, _ = bv.preselect_mtc_fixture(repo, profile)
+    except ValueError as error:
         raise ValueError(
             f'profile={profile}: missing valid MTC N=16 landmark leaf 0 fixture; '
             'browser-measurements is reuse-only/fail-closed. Prepare it with: '
-            f'bin/browser_client/mt-chromium-setup browser-validation credentials --profile {profile}')
-    expected = bv.expected_anchor(selected)
-    fixture = Path(selected['fixture'])
-    candidates = sorted(set(fixture.parent.glob(fixture.name+'*chromium*.json')) |
-                        set(fixture.glob('*chromium*.json')))
-    anchors = [path for path in candidates if not path.is_symlink() and bv.read(path) == expected]
-    if not anchors:
-        raise ValueError(
-            f'profile={profile}: missing exact reusable Chromium MTC anchor; '
-            'browser-measurements is reuse-only/fail-closed. Prepare browser credentials with: '
-            f'bin/browser_client/mt-chromium-setup browser-validation credentials --profile {profile}')
-    selected.update(anchor=str(anchors[0].resolve()), anchor_sha256=bv.sha(anchors[0]),
-                    anchor_origin='reused')
-    return selected
+            f'bin/browser_client/mt-chromium-setup browser-validation credentials --profile {profile}. '
+            f'Reason: {error}') from error
+    validated = bv.validate_mtc(Path(selected['fixture']), profile, image)
+    validated.update(anchor=selected['anchor'], anchor_sha256=selected['anchor_sha256'],
+                     anchor_origin=selected['anchor_origin'], origin='reused-prechecked')
+    return validated
 
 
 def profile_run_preconditions(repo, image, profile, depth, fixture_set):
     mtc = existing_mtc(repo, image, profile)
-    validator = lambda path: bv.validate_x509(
-        path, profile=profile, depth=depth, image=image,
-        fixture_set=fixture_set)
-    selected, _ = bv.discover(bv.x509_paths(repo), validator)
-    if selected is None:
+    try:
+        fixture = bv.precheck_formal_x509_fixture(
+            repo, profile, depth, fixture_set)
+    except ValueError as error:
         setup = (f'bin/browser_client/mt-chromium-setup x509-fixtures generate-matrix '
                  f'--fixture-set {fixture_set} --output NEW_PATH'
                  if fixture_set == FORMAL_X509_FIXTURE_SET else
@@ -70,7 +61,11 @@ def profile_run_preconditions(repo, image, profile, depth, fixture_set):
         raise ValueError(
             f'Missing valid X509 fixture: fixture_set={fixture_set}, '
             f'profile={profile}, depth={depth}. browser-measurements is '
-            f'reuse-only/fail-closed; prepare it with: {setup}')
+            f'reuse-only/fail-closed; prepare it with: {setup}. Reason: {error}') from error
+    selected = bv.validate_x509(
+        fixture, profile=profile, depth=depth, image=image,
+        fixture_set=fixture_set)
+    selected['origin'] = 'reused-formal-fixture-set'
     policy = bv.chromium_ca_policy(selected['root'])
     return dict(mtc=mtc, x509=selected), policy
 

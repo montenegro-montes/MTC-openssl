@@ -462,12 +462,14 @@ def preselect_mtc_fixture(repo, profile):
 
 
 def precheck_formal_x509_fixture(repo, profile, depth, fixture_set):
-    require(fixture_set == 'chromium-x509-depth-matrix-v1' and depth == 2,
-            'Optimized credentials require the formal X509 D=2 matrix')
-    fixture = repo/'artifacts/x509'/fixture_set/profile/'d2'
+    require(fixture_set == 'chromium-x509-depth-matrix-v1' and depth in (2, 3, 4, 5),
+            'Optimized credentials require the formal X509 depth matrix')
+    fixture = repo/'artifacts/x509'/fixture_set/profile/f'd{depth}'
     require(fixture.is_dir() and not fixture.is_symlink(),
             f'Missing formal X509 fixture: {fixture}')
     files = [fixture/name for name in ('manifest.json', 'server.pem', 'server.key', 'root.pem')]
+    if depth > 2:
+        files.append(fixture/'intermediates.pem')
     require(all(path.is_file() and not path.is_symlink() for path in files),
             'Formal X509 fixture files missing or unsafe')
     require(not any(path.is_symlink() for path in fixture.rglob('*')),

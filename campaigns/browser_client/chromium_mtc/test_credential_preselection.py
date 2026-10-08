@@ -24,12 +24,16 @@ class CredentialPreselectionTests(unittest.TestCase):
 
     def x509(self, profile='ecdsa-p256', *, fixture_set='chromium-x509-depth-matrix-v1',
              depth=2, corrupt=False):
-        fixture = self.repo/'artifacts/x509'/fixture_set/profile/'d2'
+        fixture = self.repo/'artifacts/x509'/fixture_set/profile/f'd{depth}'
         fixture.mkdir(parents=True)
         for name, data in [('server.pem', b'server'), ('server.key', b'key'),
                            ('root.pem', b'root')]:
             (fixture/name).write_bytes(data)
-        saved = {name: bv.sha(fixture/name) for name in ('server.pem', 'server.key', 'root.pem')}
+        names = ['server.pem', 'server.key', 'root.pem']
+        if depth > 2:
+            (fixture/'intermediates.pem').write_bytes(b'intermediate')
+            names.append('intermediates.pem')
+        saved = {name: bv.sha(fixture/name) for name in names}
         manifest = dict(fixture_set=fixture_set, profile=profile, family_id=profile,
                         depth=depth, hostname=bv.HOST, files_sha256=saved,
                         server_key_sha256=saved['server.key'], root_der_sha256='root-der')
@@ -63,6 +67,20 @@ class CredentialPreselectionTests(unittest.TestCase):
             certificate.signature_algorithm_oid.dotted_string = '1.2.840.10045.4.3.2'
             selected = bv.precheck_formal_x509_fixture(
                 self.repo, 'ecdsa-p256', 2, 'chromium-x509-depth-matrix-v1')
+        self.assertEqual(selected, fixture)
+        docker.assert_not_called()
+
+    def test_exact_formal_x509_d3_is_selected_without_docker(self):
+        fixture = self.x509(depth=3)
+        with patch.object(bv, 'certificate_sha256', return_value='root-der'), \
+             patch.object(bv.cryptography_x509, 'load_pem_x509_certificate') as load, \
+             patch.object(bv, 'docker_openssl') as docker:
+            certificate = load.return_value
+            certificate.public_key.return_value = bv.ec.generate_private_key(
+                bv.ec.SECP256R1()).public_key()
+            certificate.signature_algorithm_oid.dotted_string = '1.2.840.10045.4.3.2'
+            selected = bv.precheck_formal_x509_fixture(
+                self.repo, 'ecdsa-p256', 3, 'chromium-x509-depth-matrix-v1')
         self.assertEqual(selected, fixture)
         docker.assert_not_called()
 
