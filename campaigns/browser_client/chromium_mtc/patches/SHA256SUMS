@@ -1,4 +1,3 @@
-1a73969cdd9b34c43f55fd2986e1ad0c8e14113fee165737ba60446c10ff7856  0011-chromium-plants06-private-anchor-policy.patch
 a6ee2dc1eac2575f3bf775a38474eed1fb752d35dda7255e16455fb8d015b516  boringssl/0001-Add-experimental-Plants-05-landmark-verification.patch
 8dd223147180579b1f458214156f97b3edfddb4be72e269bce95100f79011328  boringssl/0002-Update-MTC-verification-for-draft-06-encoding.patch
 902629636bac8ae994cfc1f5e3c6b4d5893904a0e185eafaf2943a0d81f81505  chromium/0001-Add-Plants-05-MTC-interoperability-test.patch
@@ -11,3 +10,4 @@ a357790dfa84011068d6c4a628a38d4363c71d946c719d9bd133e07cf5de1e54  chromium/0007-
 2b793352a375f44aa8bf47d4bf4218c1fcb705da2276156fb7abf655d4dcd8a1  chromium/0008-Propagate-MTC-verification-metadata-through-Mojo-to-.patch
 c8b20098b55a07ff5cad05c602a0b24c352477273f135be9ff42c1c8b23e8d70  chromium/0009-Add-Plants-06-RP-HTTP-trusted-subtrees.patch
 ca289d64085b44b57d8be4d7ccea578e86159a9d8bfb9b7d365972687eb4c863  chromium/0010-Add-Plants-06-standalone-trust-configuration-and-tests.patch
+1a73969cdd9b34c43f55fd2986e1ad0c8e14113fee165737ba60446c10ff7856  chromium/0011-chromium-plants06-private-anchor-policy.patch
