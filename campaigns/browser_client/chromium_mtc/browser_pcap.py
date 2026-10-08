@@ -117,6 +117,7 @@ def browser_metric_values(primary, browser_result, net):
     types = {v: k for k, v in net.get('constants', {}).get('logEventTypes', {}).items()}
     phases = net.get('constants', {}).get('logEventPhase', {})
     begin, end = phases.get('PHASE_BEGIN', 1), phases.get('PHASE_END', 2)
+    none = phases.get('PHASE_NONE', 0)
     events = net.get('events', [])
 
     def name(event): return types.get(event.get('type'), event.get('type'))
@@ -159,7 +160,8 @@ def browser_metric_values(primary, browser_result, net):
             and e.get('params', {}).get('url') == url]
     values['browser_navigation_to_clienthello_ms'] = interval(jobs, [ch])
     requests = [e for e in linked if name(e) == 'HTTP_TRANSACTION_SEND_REQUEST' and e.get('phase') == begin]
-    headers = [e for e in linked if name(e) == 'HTTP_TRANSACTION_READ_RESPONSE_HEADERS' and e.get('phase') == end]
+    headers = [e for e in linked if name(e) == 'HTTP_TRANSACTION_READ_RESPONSE_HEADERS'
+               and e.get('phase') in (end, none)]
     if (len(requests) == len(headers) == 1 and source(requests[0]) == source(headers[0])
             and headers[0].get('params', {}).get('net_error', 0) == 0):
         values['browser_request_to_response_headers_ms'] = interval(requests, headers)

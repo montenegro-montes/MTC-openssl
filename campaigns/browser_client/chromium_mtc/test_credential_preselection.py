@@ -171,6 +171,59 @@ class CredentialPreselectionTests(unittest.TestCase):
         validate.assert_called_once_with(Path('/selected/fixture'), 'ecdsa-p256', 'image')
         fallback.assert_not_called()
 
+    def test_openssl_batch_runs_every_check_in_one_ephemeral_container(self):
+        root = bv.REPO/'.mt-state/chromium-tmp'; root.mkdir(parents=True, exist_ok=True)
+        calls = []
+        def command(args, **kwargs):
+            calls.append(list(map(str, args)))
+            return SimpleNamespace(returncode=0, stdout='ok', stderr='')
+        with tempfile.TemporaryDirectory(dir=root) as directory, \
+             patch.object(bv, 'command', side_effect=command):
+            with bv.DockerOpenSSLBatch('image') as openssl:
+                for args in (['version'], ['x509', '-help'], ['verify', 'cert.pem']):
+                    self.assertEqual(openssl(directory, args, 'image').stdout, 'ok')
+                self.assertEqual(openssl.check_count, 3)
+        self.assertEqual(sum(call[:3] == ['docker', 'run', '-d'] for call in calls), 1)
+        self.assertEqual(sum(call[:2] == ['docker', 'exec'] for call in calls), 3)
+        self.assertEqual(sum(call[:3] == ['docker', 'rm', '-f'] for call in calls), 1)
+
+    def test_openssl_batch_identifies_intermediate_failure_and_code(self):
+        root = bv.REPO/'.mt-state/chromium-tmp'; root.mkdir(parents=True, exist_ok=True)
+        calls = []
+        def command(args, **kwargs):
+            args = list(map(str, args)); calls.append(args)
+            if args[:2] == ['docker', 'exec'] and 'verify' in args:
+                raise ValueError('Command failed (7): synthetic verify')
+            return SimpleNamespace(returncode=0, stdout='ok', stderr='')
+        with tempfile.TemporaryDirectory(dir=root) as directory, \
+             patch.object(bv, 'command', side_effect=command):
+            with self.assertRaisesRegex(
+                    ValueError, r'check #2 failed: verify cert.pem: Command failed \(7\)'):
+                with bv.DockerOpenSSLBatch('image') as openssl:
+                    openssl(directory, ['version'], 'image')
+                    openssl(directory, ['verify', 'cert.pem'], 'image')
+                    openssl(directory, ['x509', '-help'], 'image')
+        self.assertEqual(sum(call[:2] == ['docker', 'exec'] for call in calls), 2)
+        self.assertEqual(sum(call[:3] == ['docker', 'rm', '-f'] for call in calls), 1)
+
+    def test_openssl_batch_rejects_directory_outside_workspace(self):
+        def command(args, **kwargs):
+            return SimpleNamespace(returncode=0, stdout='ok', stderr='')
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(bv, 'command', side_effect=command):
+            with bv.DockerOpenSSLBatch('image') as openssl:
+                with self.assertRaisesRegex(ValueError, 'outside the isolated workspace'):
+                    openssl(directory, ['version'], 'image')
+
+    def test_individual_docker_openssl_path_is_unchanged(self):
+        result = SimpleNamespace(returncode=0, stdout='ok', stderr='')
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(bv, 'command', return_value=result) as command:
+            self.assertIs(bv.docker_openssl(directory, ['version'], 'image'), result)
+        invocation = command.call_args.args[0]
+        self.assertEqual(invocation[:3], ['docker', 'run', '--rm'])
+        self.assertEqual(invocation[-2:], ['image', 'version'])
+
 
 if __name__ == '__main__':
     unittest.main()

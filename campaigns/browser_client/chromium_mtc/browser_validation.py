@@ -189,6 +189,60 @@ def docker_openssl(directory, args, image='mt-tls-mtc:local'):
                     '--entrypoint', '/opt/mtc/openssl.sh', image, *args])
 
 
+class DockerOpenSSLBatch:
+    """One ephemeral container, preserving one checked OpenSSL process per call."""
+    def __init__(self, image='mt-tls-mtc:local'):
+        self.image = image
+        self.root = (REPO/'.mt-state/chromium-tmp').resolve()
+        self.name = 'mtc-openssl-batch-'+uuid.uuid4().hex[:16]
+        self.started = False
+        self.check_count = 0
+
+    def __enter__(self):
+        global DOCKER_RUN_COUNT
+        self.root.mkdir(parents=True, exist_ok=True)
+        DOCKER_RUN_COUNT += 1
+        command(['docker', 'run', '-d', '--rm', '--pull', 'never', '--network', 'none',
+                 '--name', self.name, '--user', f'{os.getuid()}:{os.getgid()}',
+                 '-e', 'LC_ALL=C', '-v', str(self.root)+':/workspace:ro',
+                 '--entrypoint', '/bin/sh', self.image, '-c',
+                 'while :; do sleep 3600; done'])
+        self.started = True
+        return self
+
+    def __call__(self, directory, args, image='mt-tls-mtc:local'):
+        require(self.started, 'OpenSSL batch container is not running')
+        require(image == self.image, 'OpenSSL batch image mismatch')
+        directory = Path(directory).resolve()
+        try:
+            relative = directory.relative_to(self.root)
+        except ValueError as error:
+            raise ValueError('OpenSSL batch directory is outside the isolated workspace') from error
+        require(relative.parts and '..' not in relative.parts,
+                'Malformed OpenSSL batch working directory')
+        self.check_count += 1
+        openssl_args = list(map(str, args))
+        invocation = ['docker', 'exec', '-e', 'LC_ALL=C', '-w',
+                      '/workspace/'+relative.as_posix(), self.name,
+                      '/opt/mtc/openssl.sh', *openssl_args]
+        try:
+            return command(invocation)
+        except (ValueError, OSError, subprocess.SubprocessError) as error:
+            raise ValueError(
+                f'OpenSSL batch check #{self.check_count} failed: '
+                f'{shlex.join(openssl_args)}: {error}') from error
+
+    def __exit__(self, exception_type, exception, traceback):
+        if not self.started:
+            return False
+        self.started = False
+        cleanup = command(['docker', 'rm', '-f', self.name], check=False)
+        if exception_type is None:
+            require(cleanup.returncode == 0,
+                    f'OpenSSL batch container cleanup failed ({cleanup.returncode}): {cleanup.stderr[-1500:]}')
+        return False
+
+
 def profile_options(profile):
     require(profile in PROFILES, 'Unsupported signature profile')
     if profile.startswith('ecdsa-'):
@@ -211,13 +265,14 @@ def check_public_profile(text, profile):
         require(bool(names) and all(normalized_algorithm(name) == profile for name in names), 'Public-key profile mismatch')
 
 
-def certificate_info(directory, name, profile, image, *, signature=True):
-    run = lambda args: docker_openssl(directory, args, image).stdout
+def certificate_info(directory, name, profile, image, *, signature=True,
+                     openssl=docker_openssl):
+    run = lambda args: openssl(directory, args, image).stdout
     text = run(['x509', '-in', name, '-noout', '-text'])
     public = run(['x509', '-in', name, '-pubkey', '-noout'])
     with docker_temporary_directory('browser-public-') as temp:
         Path(temp, 'public.pem').write_text(public)
-        check_public_profile(docker_openssl(temp, ['pkey', '-pubin', '-in', 'public.pem', '-text', '-noout'], image).stdout, profile)
+        check_public_profile(openssl(temp, ['pkey', '-pubin', '-in', 'public.pem', '-text', '-noout'], image).stdout, profile)
     if signature:
         expected = ('ecdsa-with-SHA'+{'ecdsa-p256':'256', 'ecdsa-p384':'384', 'ecdsa-p521':'512'}[profile]
                     if profile.startswith('ecdsa-') else 'ML-DSA-'+profile[5:])
@@ -239,25 +294,28 @@ def certificate_info(directory, name, profile, image, *, signature=True):
                 eku=extension('extendedKeyUsage'), san=extension('subjectAltName'))
 
 
-def web_leaf(cert_path, key_path, *, profile=PROFILE, image='mt-tls-mtc:local', signature=False):
+def web_leaf(cert_path, key_path, *, profile=PROFILE, image='mt-tls-mtc:local',
+             signature=False, openssl=docker_openssl):
     require(not Path(cert_path).is_symlink() and not Path(key_path).is_symlink(), 'Symlink credential rejected')
     with docker_temporary_directory('browser-leaf-') as temp:
         shutil.copyfile(cert_path, Path(temp)/'cert.pem')
         shutil.copyfile(key_path, Path(temp)/'key.pem'); (Path(temp)/'key.pem').chmod(0o600)
-        cert = certificate_info(temp, 'cert.pem', profile, image, signature=signature)
+        cert = certificate_info(temp, 'cert.pem', profile, image, signature=signature,
+                                openssl=openssl)
         sans = re.findall(r'DNS:([^,\s]+)', cert['san'])
         require(HOST in sans, 'Wrong SAN: browser hostname absent')
         require('CA:FALSE' in cert['constraints'] and 'CA:TRUE' not in cert['constraints'], 'CA leaf rejected')
         require('Digital Signature' in cert['usage'], 'Missing Digital Signature KU')
         require('TLS Web Server Authentication' in cert['eku'], 'Missing serverAuth EKU')
-        public = docker_openssl(temp, ['pkey', '-in', 'key.pem', '-pubout'], image).stdout
+        public = openssl(temp, ['pkey', '-in', 'key.pem', '-pubout'], image).stdout
         require(public.strip() == cert['public'].strip(), 'Certificate/key mismatch')
     return cert, dict(SAN=sans, KU=['Digital Signature'], EKU=['serverAuth'],
                       not_before=cert['not_before'], not_after=cert['not_after'],
                       hostname_validation=True, key_match=True)
 
 
-def validate_mtc(fixture, profile=PROFILE, image='mt-tls-mtc:local'):
+def validate_mtc(fixture, profile=PROFILE, image='mt-tls-mtc:local', *,
+                 openssl=docker_openssl):
     fixture = Path(fixture)
     manifest = read(fixture / 'manifest.json')
     require(manifest.get('server_hostname') == HOST, 'MTC manifest hostname mismatch')
@@ -270,7 +328,8 @@ def validate_mtc(fixture, profile=PROFILE, image='mt-tls-mtc:local'):
             meta.get('draft') == core.DRAFT and meta.get('merkle_hash') == 'SHA-256', 'MTC metadata mismatch')
     check_saved_hashes(directory, read(directory / 'fixture-sha256.json'))
     cert_path, key_path = directory / 'landmark-0000.pem', fixture / 'population' / profile / '0.key'
-    cert, leaf = web_leaf(cert_path, key_path, profile=profile, image=image)
+    cert, leaf = web_leaf(cert_path, key_path, profile=profile, image=image,
+                          openssl=openssl)
     raw = (directory / 'trust.bin').read_bytes()
     anchor = parse_landmark(raw)
     selected_tai = anchor['landmark']['selected_trust_anchor_id']
@@ -300,12 +359,12 @@ def validate_mtc(fixture, profile=PROFILE, image='mt-tls-mtc:local'):
         with docker_temporary_directory('browser-checkpoint-') as temp:
             for filename, data in [('public.der', spki), ('message.bin', message), ('signature.bin', signature)]:
                 Path(temp, filename).write_bytes(data)
-            public = docker_openssl(temp, ['pkey', '-pubin', '-inform', 'DER', '-in', 'public.der', '-text', '-noout'], image).stdout
+            public = openssl(temp, ['pkey', '-pubin', '-inform', 'DER', '-in', 'public.der', '-text', '-noout'], image).stdout
             check_public_profile(public, profile)
             digest = profile_options(profile)[1]
-            docker_openssl(temp, ['pkeyutl', '-verify', '-rawin', '-pubin', '-keyform', 'DER', '-inkey', 'public.der',
-                                  '-in', 'message.bin', '-sigfile', 'signature.bin',
-                                  *(['-digest', digest[0][1:]] if digest else [])], image)
+            openssl(temp, ['pkeyutl', '-verify', '-rawin', '-pubin', '-keyform', 'DER', '-inkey', 'public.der',
+                           '-in', 'message.bin', '-sigfile', 'signature.bin',
+                           *(['-digest', digest[0][1:]] if digest else [])], image)
         verified.add(ident)
     require(verified == {core.relid(name) for name, _ in signers}, 'Incomplete checkpoint authentication')
     der = certificate_der(cert_path.read_bytes())
@@ -515,11 +574,12 @@ def precheck_formal_x509_fixture(repo, profile, depth, fixture_set):
 
 
 def validate_x509(fixture, *, profile=PROFILE, depth=2, image='mt-tls-mtc:local',
-                  fixture_set=None):
+                  fixture_set=None, openssl=docker_openssl):
     require(profile in PROFILES and depth in (2, 3, 4, 5), 'Unsupported profile/depth')
     fixture = Path(fixture)
     cert_path, key_path, root_path = [fixture / n for n in ('server.pem', 'server.key', 'root.pem')]
-    cert, leaf = web_leaf(cert_path, key_path, profile=profile, image=image, signature=True)
+    cert, leaf = web_leaf(cert_path, key_path, profile=profile, image=image,
+                          signature=True, openssl=openssl)
     intermediate = fixture/'intermediates.pem'
     require(not root_path.is_symlink() and not intermediate.is_symlink(), 'Symlink chain rejected')
     chain = pem_certificates(intermediate.read_bytes()) if intermediate.is_file() and intermediate.stat().st_size else []
@@ -529,21 +589,22 @@ def validate_x509(fixture, *, profile=PROFILE, depth=2, image='mt-tls-mtc:local'
     with docker_temporary_directory('browser-chain-') as temp:
         for index, pem in enumerate(certificates):
             Path(temp, f'{index}.pem').write_bytes(pem)
-        infos = [cert, *(certificate_info(temp, f'{i}.pem', profile, image) for i in range(1, depth))]
+        infos = [cert, *(certificate_info(temp, f'{i}.pem', profile, image,
+                                          openssl=openssl) for i in range(1, depth))]
         require(infos[-1]['subject'] == infos[-1]['issuer'], 'Root is not self-issued')
         require(all('CA:TRUE' in c['constraints'] and 'Certificate Sign' in c['usage'] for c in infos[1:]), 'Invalid CA constraints/key usage')
         for i in range(depth-1):
             require(infos[i]['issuer'] == infos[i+1]['subject'], 'X509 chain ordering/depth mismatch')
-            docker_openssl(temp, ['verify', '-no-CAfile', '-no-CApath', '-no-CAstore', '-partial_chain',
-                                  '-trusted', f'{i+1}.pem', f'{i}.pem'], image)
+            openssl(temp, ['verify', '-no-CAfile', '-no-CApath', '-no-CAstore', '-partial_chain',
+                           '-trusted', f'{i+1}.pem', f'{i}.pem'], image)
         shutil.copyfile(root_path, Path(temp)/'root.pem')
         shutil.copyfile(cert_path, Path(temp)/'server.pem')
-        docker_openssl(temp, ['verify', '-no-CApath', '-no-CAstore', '-check_ss_sig', '-CAfile', 'root.pem', 'root.pem'], image)
+        openssl(temp, ['verify', '-no-CApath', '-no-CAstore', '-check_ss_sig', '-CAfile', 'root.pem', 'root.pem'], image)
         args = ['verify', '-no-CApath', '-no-CAstore', '-CAfile', 'root.pem', '-purpose', 'sslserver', '-verify_hostname', HOST]
         if chain:
             Path(temp, 'intermediates.pem').write_bytes(b''.join(chain))
             args += ['-untrusted', 'intermediates.pem']
-        docker_openssl(temp, [*args, 'server.pem'], image)
+        openssl(temp, [*args, 'server.pem'], image)
     manifest = fixture / 'manifest.json'
     complete = False
     manifest_data = {}

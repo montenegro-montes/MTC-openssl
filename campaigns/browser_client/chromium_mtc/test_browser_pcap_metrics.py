@@ -201,6 +201,22 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
         # The common PCAP duration is from a different clock and remains unchanged.
         self.assertAlmostEqual(result['tcp_handshake_ms'], .045)
 
+    def test_response_headers_phase_none_is_a_valid_completion(self):
+        target = 'https://' + pcap.bv.HOST + ':4433/'
+        net = timing_netlog(target)
+        net['constants']['logEventPhase']['PHASE_NONE'] = 0
+        net['events'][5]['phase'] = 0
+        result = pcap.browser_metric_values([connection()], dict(target_url=target), net)
+        self.assertEqual(result['browser_request_to_response_headers_ms'], 14)
+
+    def test_response_headers_phase_none_rejects_negative_interval(self):
+        target = 'https://' + pcap.bv.HOST + ':4433/'
+        net = timing_netlog(target)
+        net['constants']['logEventPhase']['PHASE_NONE'] = 0
+        net['events'][5].update(phase=0, time='100')
+        result = pcap.browser_metric_values([connection()], dict(target_url=target), net)
+        self.assertIsNone(result['browser_request_to_response_headers_ms'])
+
     def test_ambiguous_or_failed_netlog_completion_is_not_a_duration(self):
         target = 'https://' + pcap.bv.HOST + ':4433/'
         net = timing_netlog(target)
@@ -292,13 +308,25 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
                 reader = csv.DictReader(source)
                 self.assertEqual(reader.fieldnames,
                                  [*measurements.META, *measurements.METRICS,
-                                  *measurements.DECOMPOSITION, *measurements.COMPARISON])
+                                  *measurements.CSV_DECOMPOSITION, *measurements.CSV_COMPARISON])
                 saved_rows = list(reader)
             with (root/'pairs.csv').open(newline='') as source:
                 reader = csv.DictReader(source)
                 self.assertEqual(reader.fieldnames, list(measurements.PAIR_FIELDS))
                 saved_pairs = list(reader)
+            with (root/'warmups.csv').open(newline='') as source:
+                warmup_fields = csv.DictReader(source).fieldnames
             saved_summary = pcap.bv.read(root/'summary.json')
+        measurement_fields = [*measurements.META, *measurements.METRICS,
+                              *measurements.CSV_DECOMPOSITION, *measurements.CSV_COMPARISON]
+        for omitted in measurements.CSV_OMITTED:
+            self.assertNotIn(omitted, measurement_fields)
+            self.assertNotIn(omitted, warmup_fields)
+            for suffix in ('mtc', 'x509', 'delta'):
+                self.assertNotIn(f'{omitted}_{suffix}', measurements.PAIR_FIELDS)
+        retained = [field for field in (*measurements.DECOMPOSITION, *measurements.COMPARISON)
+                    if field not in measurements.CSV_OMITTED]
+        self.assertEqual([field for field in measurement_fields if field in retained], retained)
         self.assertEqual(saved_rows[2]['tcp_handshake_ms'], '')
         self.assertEqual(saved_pairs[1]['tcp_handshake_ms_mtc'], '')
         self.assertEqual(saved_pairs[1]['tcp_handshake_ms_delta'], '')

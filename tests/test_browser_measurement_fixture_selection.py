@@ -5,7 +5,7 @@ import csv
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -22,6 +22,12 @@ MEASUREMENTS_SPEC.loader.exec_module(measurements)
 
 
 class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
+    @staticmethod
+    def openssl_batch():
+        manager = MagicMock()
+        manager.return_value.__enter__.return_value = Mock(name='batched_openssl')
+        return manager
+
     def test_measurements_default_to_formal_x509_fixture_set(self):
         path = REPO/'campaigns/browser_client/chromium_mtc/browser_measurements.py'
         tree = ast.parse(path.read_text())
@@ -69,9 +75,11 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
 
     def test_policy_failure_precedes_measurement_setup(self):
         selected = dict(fixture='/formal/d3', root='/formal/d3/root.pem', root_sha256='a'*64)
+        batch = self.openssl_batch()
         with patch.object(measurements.bv, 'precheck_formal_x509_fixture',
                           return_value=Path('/formal/d3')), \
              patch.object(measurements.bv, 'validate_x509', return_value=selected), \
+             patch.object(measurements.bv, 'DockerOpenSSLBatch', batch), \
              patch.object(measurements, 'existing_mtc', return_value={'profile': 'ecdsa-p256'}), \
              patch.object(measurements.bv, 'chromium_ca_policy',
                           side_effect=ValueError('policy lacks selected root')) as policy:
@@ -86,9 +94,11 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
         metadata = dict(x509_trust_mode='chromium-ca-policy',
                         certificate_verification_bypass=False,
                         policy_root_der_sha256='b'*64)
+        batch = self.openssl_batch()
         with patch.object(measurements.bv, 'precheck_formal_x509_fixture',
                           return_value=Path('/formal/d3')) as precheck, \
              patch.object(measurements.bv, 'validate_x509', return_value=selected) as validate, \
+             patch.object(measurements.bv, 'DockerOpenSSLBatch', batch), \
              patch.object(measurements, 'existing_mtc', return_value={'profile': 'ecdsa-p256'}), \
              patch.object(measurements.bv, 'chromium_ca_policy', return_value=metadata):
             actual = measurements.profile_run_preconditions(
@@ -99,24 +109,30 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
             REPO, 'ecdsa-p256', 3, measurements.FORMAL_X509_FIXTURE_SET)
         validate.assert_called_once_with(
             Path('/formal/d3'), profile='ecdsa-p256', depth=3,
-            image='unused-image', fixture_set=measurements.FORMAL_X509_FIXTURE_SET)
+            image='unused-image', fixture_set=measurements.FORMAL_X509_FIXTURE_SET,
+            openssl=batch.return_value.__enter__.return_value)
 
     def test_existing_mtc_preselects_locally_and_validates_only_selected_fixture(self):
         selected = dict(fixture='/mtc/selected', anchor='/mtc/anchor.json',
                         anchor_sha256='a'*64, anchor_origin='reused')
         validated = dict(fixture='/mtc/selected', profile='mldsa44')
+        batch = self.openssl_batch()
         with patch.object(measurements.bv, 'preselect_mtc_fixture',
                           return_value=(selected, [])) as preselect, \
              patch.object(measurements.bv, 'validate_mtc', return_value=validated) as validate, \
+             patch.object(measurements.bv, 'DockerOpenSSLBatch', batch), \
              patch.object(measurements.bv, 'discover') as discover:
             actual = measurements.existing_mtc(REPO, 'image', 'mldsa44')
         preselect.assert_called_once_with(REPO, 'mldsa44')
-        validate.assert_called_once_with(Path('/mtc/selected'), 'mldsa44', 'image')
+        validate.assert_called_once_with(
+            Path('/mtc/selected'), 'mldsa44', 'image',
+            openssl=batch.return_value.__enter__.return_value)
         discover.assert_not_called()
         self.assertEqual(actual['anchor'], '/mtc/anchor.json')
 
     def test_all_profiles_validate_only_the_selected_mtc_and_x509(self):
         policy = {'policy_applied': True}
+        batch = self.openssl_batch()
         with patch.object(measurements, 'existing_mtc',
                           side_effect=lambda repo, image, profile: {'profile': profile}) as mtc, \
              patch.object(measurements.bv, 'precheck_formal_x509_fixture',
@@ -125,6 +141,7 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
              patch.object(measurements.bv, 'validate_x509',
                           side_effect=lambda path, **kwargs:
                           {'fixture': str(path), 'root': str(path/'root.pem')}) as x509, \
+             patch.object(measurements.bv, 'DockerOpenSSLBatch', batch), \
              patch.object(measurements.bv, 'chromium_ca_policy', return_value=policy):
             prepared = measurements.campaign_preconditions(
                 REPO, 'image', measurements.CAMPAIGN_PROFILES, 3,
@@ -149,9 +166,23 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
         self.assertEqual(measurements.CAMPAIGN_PROFILES,
                          ('ecdsa-p256', 'ecdsa-p384', 'mldsa44', 'mldsa65', 'mldsa87'))
         self.assertEqual(measurements.campaign_totals(measurements.CAMPAIGN_PROFILES, 3),
-                         {'pairs_per_profile': 3, 'total_pairs': 15, 'total_measurements': 30})
-        self.assertEqual(measurements.campaign_totals(measurements.CAMPAIGN_PROFILES, 30),
-                         {'pairs_per_profile': 30, 'total_pairs': 150, 'total_measurements': 300})
+                         {'pairs_per_profile': 3, 'total_pairs': 15, 'total_measurements': 30,
+                          'warmups_per_profile': 0, 'total_warmup_pairs': 0,
+                          'total_warmup_runs': 0})
+        self.assertEqual(measurements.campaign_totals(measurements.CAMPAIGN_PROFILES, 30, 5),
+                         {'pairs_per_profile': 30, 'total_pairs': 150, 'total_measurements': 300,
+                          'warmups_per_profile': 5, 'total_warmup_pairs': 25,
+                          'total_warmup_runs': 50})
+
+    def test_warmup_and_measured_phases_keep_balanced_pair_order(self):
+        self.assertEqual(measurements.campaign_phases(0, 30),
+                         (('warmup', 0), ('measured', 30)))
+        self.assertEqual(measurements.campaign_phases(5, 30),
+                         (('warmup', 5), ('measured', 30)))
+        self.assertEqual(measurements.order(1),
+                         ('mtc-positive', 'x509-positive'))
+        self.assertEqual(measurements.order(2),
+                         ('x509-positive', 'mtc-positive'))
 
     def test_fifth_profile_failure_aborts_global_precheck_without_generation(self):
         successes = [({'mtc': {}, 'x509': {}}, {})] * 4
@@ -201,13 +232,26 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
                        key_establishment='x25519-mlkem768', depth=3)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            measurements.save_outputs(root, summary, rows, paired_rows)
+            warmup = dict(rows[0], phase='warmup', pair=1, pair_index=1,
+                          execution_order=1, pair_complete=True)
+            warmup.update({key: 999 for key in measurements.METRICS})
+            measurements.save_outputs(root, summary, rows, paired_rows, [warmup])
             with (root/'measurements.csv').open(newline='') as stream:
                 saved_rows = list(csv.DictReader(stream))
             with (root/'pairs.csv').open(newline='') as stream:
                 saved_pairs = list(csv.DictReader(stream))
+            with (root/'warmups.csv').open(newline='') as stream:
+                saved_warmups = list(csv.DictReader(stream))
         self.assertEqual(len(saved_rows), 30)
         self.assertEqual(len(saved_pairs), 15)
+        self.assertEqual(len(saved_warmups), 1)
+        self.assertEqual(saved_warmups[0]['phase'], 'warmup')
+        self.assertEqual(summary['attempted_warmup_runs'], 1)
+        self.assertEqual(summary['warmup_results'][0]['status'], 'PASS')
+        self.assertEqual(summary['warmup_results'][0]['phase'], 'warmup')
+        self.assertEqual(
+            summary['descriptive_statistics']['ecdsa-p256']['mtc-positive']
+                  [measurements.METRICS[0]]['mean'], 1)
         self.assertEqual({row['signature_profile'] for row in saved_rows},
                          set(measurements.CAMPAIGN_PROFILES))
         self.assertEqual({(row['signature_profile'], row['pair']) for row in saved_pairs},
@@ -217,6 +261,62 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
     def test_direct_cli_profile_remains_single_profile(self):
         source = (REPO/'campaigns/browser_client/chromium_mtc/browser_measurements.py').read_text()
         self.assertIn("profiles = CAMPAIGN_PROFILES if args.all_profiles else (args.profile,)", source)
+
+    def test_measurement_input_check_reuses_chromium_hash(self):
+        inputs = {'/credentials/cert.pem': 'cert-hash',
+                  '/chromium': 'chromium-hash'}
+        with patch.object(measurements.bv, 'sha', return_value='cert-hash') as sha:
+            measurements.verify_measurement_inputs(inputs, '/chromium')
+        sha.assert_called_once_with('/credentials/cert.pem')
+
+    def test_chromium_reference_is_propagated_to_each_measurement(self):
+        browser = {'executable': '/chromium', 'sha256': 'a'*64}
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            measurements.record_chromium_reference(output, browser, 'mldsa65')
+            evidence = bv.read(output/'chromium-integrity.json')
+        self.assertEqual(evidence['sha256'], browser['sha256'])
+        self.assertEqual(evidence['signature_profile'], 'mldsa65')
+        self.assertIn('rechecked after profile', evidence['verification'])
+
+    def test_chromium_is_rehashed_once_after_profile(self):
+        browser = {'executable': '/chromium', 'sha256': 'a'*64}
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(measurements.bv, 'sha', return_value='a'*64) as sha:
+            measurements.verify_chromium_after_profile(
+                browser, Path(tmp), 'ecdsa-p384')
+            evidence = bv.read(Path(tmp)/'chromium-integrity.json')
+        sha.assert_called_once_with('/chromium')
+        self.assertEqual(evidence['status'], 'PASS')
+
+    def test_chromium_change_after_profile_is_recorded_and_rejected(self):
+        browser = {'executable': '/chromium', 'sha256': 'a'*64}
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(measurements.bv, 'sha', return_value='b'*64):
+            profile_root = Path(tmp)
+            with self.assertRaisesRegex(ValueError,
+                                        'integrity changed during profile=mldsa87'):
+                measurements.verify_chromium_after_profile(
+                    browser, profile_root, 'mldsa87')
+            evidence = bv.read(profile_root/'chromium-integrity.json')
+        self.assertEqual(evidence['status'], 'FAIL')
+        self.assertEqual(evidence['expected_sha256'], 'a'*64)
+        self.assertEqual(evidence['actual_sha256'], 'b'*64)
+
+    def test_warmup_failure_is_recorded_fail_closed_without_replacement(self):
+        row = {'status': 'PASS', 'reason': ''}
+        execution = dict(phase='warmup', profile='mldsa44', case='mtc-positive',
+                         pair_index=2, execution_order=3)
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)/'warmup'
+            measurements.record_measurement_error(
+                output, row, ValueError('warmup failed'), 'warmup', execution)
+            error = bv.read(output/'measurement-error.json')
+            metadata = bv.read(output/'measurement-metadata.json')
+        self.assertEqual(row['status'], 'INCONCLUSIVE')
+        self.assertEqual(error['phase'], 'warmup')
+        self.assertIn('never replaced', error['policy'])
+        self.assertEqual(metadata, execution)
 
     def test_chromium_ca_policy_requires_selected_root_and_records_der_hash(self):
         with tempfile.TemporaryDirectory() as tmp:
