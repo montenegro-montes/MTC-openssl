@@ -1,0 +1,433 @@
+diff --git a/net/BUILD.gn b/net/BUILD.gn
+index bc2d588da7..e8ac4de44b 100644
+--- a/net/BUILD.gn
++++ b/net/BUILD.gn
+@@ -2943,6 +2943,7 @@ target(_test_target_type, "net_unittests") {
+     "cert/known_roots_unittest.cc",
+     "cert/merkle_audit_proof_unittest.cc",
+     "cert/merkle_tree_leaf_unittest.cc",
++    "cert/mtc_plants06_lab_config_unittest.cc",
+     "cert/multi_log_ct_verifier_unittest.cc",
+     "cert/multi_threaded_cert_verifier_unittest.cc",
+     "cert/qwac_unittest.cc",
+diff --git a/net/cert/cert_verify_proc_builtin_unittest.cc b/net/cert/cert_verify_proc_builtin_unittest.cc
+index 92cc133d2d..512964ed11 100644
+--- a/net/cert/cert_verify_proc_builtin_unittest.cc
++++ b/net/cert/cert_verify_proc_builtin_unittest.cc
+@@ -1300,6 +1300,137 @@ TEST_F(CertVerifyProcBuiltinTest, StandaloneMtcVerification) {
+   }
+ }
+ 
++TEST_F(CertVerifyProcBuiltinTest, StandaloneMtcPlants06Verification) {
++  constexpr uint8_t kMtcCaId[] = {0x09, 0x08, 0x07};
++  constexpr uint16_t kLogNumber = 1;
++  net::MtcLogBuilder mtc_log(
++      kMtcCaId, kLogNumber, net::MtcLogBuilder::Format::kPlants06);
++  std::unique_ptr<net::CertBuilder> mtc_leaf =
++      std::move(net::CertBuilder::CreateSimpleChain(1u)[0]);
++  uint64_t leaf_index = mtc_log.AddEntry(*mtc_leaf);
++  const uint64_t serial =
++      (static_cast<uint64_t>(kLogNumber) << 48) + leaf_index;
++
++  InitializeVerifyProc(CreateParams(/*additional_trust_anchors=*/{}));
++
++  MtcLogBuilder::Cosigner ca_cosigner = {
++      base::ToVector(kMtcCaId), crypto::keypair::PrivateKey::GenerateEcP256(),
++      bssl::SignatureAlgorithm::kEcdsaSha256};
++  auto leaf_der =
++      mtc_log.CreateStandaloneCertificate(leaf_index, {&ca_cosigner});
++  ASSERT_TRUE(leaf_der);
++  scoped_refptr<X509Certificate> leaf =
++      X509Certificate::CreateFromBytes(*leaf_der);
++  ASSERT_TRUE(leaf);
++
++  SetMockIsKnownRoot(false);
++  SetMockIsKnownMtcAnchor(false);
++
++  bssl::TrustStoreInMemory trust_store;
++  auto mtc_anchor = std::make_shared<const bssl::MTCAnchor>(
++      bssl::MTCAnchor::kPlants06, ca_cosigner.id,
++      ca_cosigner.signature_algorithm,
++      x509_util::CreateCryptoBuffer(ca_cosigner.key.ToSubjectPublicKeyInfo()),
++      serial, serial, std::vector<bssl::LogTrustedSubtrees>());
++  ASSERT_TRUE(mtc_anchor->IsValid());
++  ASSERT_TRUE(trust_store.AddMTCTrustAnchor(mtc_anchor));
++  AddTrustStore(&trust_store);
++
++  CertVerifyResult verify_result;
++  NetLogSource verify_net_log_source;
++  TestCompletionCallback callback;
++  Verify(leaf.get(), "www.example.com", /*flags=*/0, &verify_result,
++         &verify_net_log_source, callback.callback());
++
++  int error = callback.WaitForResult();
++  EXPECT_THAT(error, IsOk());
++  ASSERT_TRUE(verify_result.mtc_verification_info.has_value());
++  EXPECT_EQ(bssl::MTCVerificationMode::kStandalone,
++            verify_result.mtc_verification_info->mode);
++
++  // A signature made by a different key with the CA's identity is rejected.
++  MtcLogBuilder::Cosigner wrong_key_cosigner = {
++      base::ToVector(kMtcCaId), crypto::keypair::PrivateKey::GenerateEcP256(),
++      bssl::SignatureAlgorithm::kEcdsaSha256};
++  auto invalid_signature_der =
++      mtc_log.CreateStandaloneCertificate(leaf_index, {&wrong_key_cosigner});
++  ASSERT_TRUE(invalid_signature_der);
++  scoped_refptr<X509Certificate> invalid_signature_leaf =
++      X509Certificate::CreateFromBytes(*invalid_signature_der);
++  ASSERT_TRUE(invalid_signature_leaf);
++  ASSERT_TRUE(invalid_signature_leaf->VerifyNameMatch("www.example.com"));
++  ASSERT_EQ(wrong_key_cosigner.id, ca_cosigner.id);
++  ASSERT_TRUE(mtc_anchor->IsSerialInRange(serial));
++  {
++    CertVerifyResult invalid_result;
++    NetLogSource invalid_net_log_source;
++    TestCompletionCallback invalid_callback;
++    Verify(invalid_signature_leaf.get(), "www.example.com", /*flags=*/0,
++           &invalid_result, &invalid_net_log_source,
++           invalid_callback.callback());
++    EXPECT_THAT(invalid_callback.WaitForResult(),
++                IsError(ERR_CERT_AUTHORITY_INVALID));
++    EXPECT_FALSE(invalid_result.mtc_verification_info.has_value());
++  }
++
++  // A Plants-06 anchor whose allowed serial range excludes the certificate is
++  // incompatible and must not authenticate it.
++  trust_store.Clear();
++  auto incompatible_anchor = std::make_shared<const bssl::MTCAnchor>(
++      bssl::MTCAnchor::kPlants06, ca_cosigner.id,
++      ca_cosigner.signature_algorithm,
++      x509_util::CreateCryptoBuffer(ca_cosigner.key.ToSubjectPublicKeyInfo()),
++      serial + 1, serial + 1, std::vector<bssl::LogTrustedSubtrees>());
++  ASSERT_TRUE(incompatible_anchor->IsValid());
++  ASSERT_FALSE(incompatible_anchor->IsSerialInRange(serial));
++  ASSERT_TRUE(leaf->VerifyNameMatch("www.example.com"));
++  ASSERT_TRUE(trust_store.AddMTCTrustAnchor(incompatible_anchor));
++  {
++    CertVerifyResult incompatible_result;
++    NetLogSource incompatible_net_log_source;
++    TestCompletionCallback incompatible_callback;
++    Verify(leaf.get(), "www.example.com", /*flags=*/0, &incompatible_result,
++           &incompatible_net_log_source, incompatible_callback.callback());
++    EXPECT_THAT(incompatible_callback.WaitForResult(),
++                IsError(ERR_CERT_AUTHORITY_INVALID));
++    EXPECT_FALSE(incompatible_result.mtc_verification_info.has_value());
++  }
++
++  // Altering authenticated TBSCertificate bytes invalidates the Merkle proof.
++  trust_store.Clear();
++  ASSERT_TRUE(trust_store.AddMTCTrustAnchor(mtc_anchor));
++  std::vector<uint8_t> altered_der = *leaf_der;
++  constexpr std::string_view kOriginalName = "www.example.com";
++  constexpr std::string_view kAlteredName = "vww.example.com";
++  size_t replacements = 0;
++  for (auto it = std::search(altered_der.begin(), altered_der.end(),
++                             kOriginalName.begin(), kOriginalName.end());
++       it != altered_der.end();
++       it = std::search(it, altered_der.end(), kOriginalName.begin(),
++                        kOriginalName.end())) {
++    std::copy(kAlteredName.begin(), kAlteredName.end(), it);
++    ++replacements;
++    it += kAlteredName.size();
++  }
++  ASSERT_GT(replacements, 0u);
++  scoped_refptr<X509Certificate> altered_leaf =
++      X509Certificate::CreateFromBytes(altered_der);
++  ASSERT_TRUE(altered_leaf);
++  ASSERT_NE(altered_der, *leaf_der);
++  ASSERT_TRUE(altered_leaf->VerifyNameMatch(kAlteredName));
++  {
++    CertVerifyResult altered_result;
++    NetLogSource altered_net_log_source;
++    TestCompletionCallback altered_callback;
++    Verify(altered_leaf.get(), std::string(kAlteredName), /*flags=*/0,
++           &altered_result, &altered_net_log_source,
++           altered_callback.callback());
++    EXPECT_THAT(altered_callback.WaitForResult(),
++                IsError(ERR_CERT_AUTHORITY_INVALID));
++    EXPECT_FALSE(altered_result.mtc_verification_info.has_value());
++  }
++}
++
+ #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+ TEST_F(CertVerifyProcBuiltinTest, StandaloneMtcCosignerPolicy) {
+   constexpr uint8_t kMtcCaId[] = {0x09, 0x08, 0x07};
+diff --git a/net/cert/mtc_plants06_lab_config.cc b/net/cert/mtc_plants06_lab_config.cc
+index e11f7965fe..be66428d0d 100644
+--- a/net/cert/mtc_plants06_lab_config.cc
++++ b/net/cert/mtc_plants06_lab_config.cc
+@@ -177,6 +177,22 @@ std::optional<MtcPlants06LabConfig> ParseConfig(std::string_view json) {
+ 
+   MtcPlants06LabConfig config;
+ 
++  const base::Value* trust_mode_value = root.Find("trust_mode");
++  if (trust_mode_value) {
++    if (!trust_mode_value->is_string()) {
++      LOG(ERROR) << "Invalid MTC Plants-06 trust mode type";
++      return std::nullopt;
++    }
++    if (trust_mode_value->GetString() == "landmark") {
++      config.trust_mode = MtcPlants06LabTrustMode::kLandmark;
++    } else if (trust_mode_value->GetString() == "standalone") {
++      config.trust_mode = MtcPlants06LabTrustMode::kStandalone;
++    } else {
++      LOG(ERROR) << "Unknown MTC Plants-06 trust mode";
++      return std::nullopt;
++    }
++  }
++
+   const std::string* ca_id_hex = root.FindString("ca_id_hex");
+   if (!ca_id_hex || !base::HexStringToBytes(*ca_id_hex, &config.ca_id) ||
+       config.ca_id.empty()) {
+@@ -234,6 +250,20 @@ std::optional<MtcPlants06LabConfig> ParseConfig(std::string_view json) {
+   }
+   config.log_number = static_cast<uint16_t>(*log_number);
+ 
++  const base::Value* landmark_value = root.Find("landmark");
++  if (config.trust_mode == MtcPlants06LabTrustMode::kStandalone) {
++    if (landmark_value) {
++      LOG(ERROR) << "Standalone MTC Plants-06 config must not contain landmark state";
++      return std::nullopt;
++    }
++    const std::string* merkle_hash = root.FindString("merkle_hash");
++    if (!merkle_hash || *merkle_hash != "SHA-256") {
++      LOG(ERROR) << "Unsupported MTC Plants-06 Merkle hash";
++      return std::nullopt;
++    }
++    return config;
++  }
++
+   const base::DictValue* landmark = root.FindDict("landmark");
+   if (!landmark) {
+     LOG(ERROR) << "Missing MTC Plants-06 landmark";
+@@ -372,6 +402,12 @@ LoadMtcPlants06LabConfigFromCommandLine(
+     return std::nullopt;
+   }
+ 
++  if (config->trust_mode == MtcPlants06LabTrustMode::kStandalone &&
++      (has_file || has_url || http_trusted_subtrees)) {
++    LOG(ERROR) << "Standalone MTC Plants-06 config rejects trusted-subtree overrides";
++    return std::nullopt;
++  }
++
+   if (has_url) {
+     if (!http_trusted_subtrees) {
+       LOG(ERROR) << "MTC Plants-06 HTTP trusted-subtree state is unavailable";
+diff --git a/net/cert/mtc_plants06_lab_config.h b/net/cert/mtc_plants06_lab_config.h
+index f8634d8933..3223222d50 100644
+--- a/net/cert/mtc_plants06_lab_config.h
++++ b/net/cert/mtc_plants06_lab_config.h
+@@ -28,6 +28,11 @@ enum class MtcPlants06LabSignatureAlgorithm {
+   kMldsa87,
+ };
+ 
++enum class MtcPlants06LabTrustMode {
++  kLandmark,
++  kStandalone,
++};
++
+ struct NET_EXPORT MtcPlants06LabTrustedSubtree {
+   uint64_t start = 0;
+   uint64_t end = 0;
+@@ -35,6 +40,9 @@ struct NET_EXPORT MtcPlants06LabTrustedSubtree {
+ };
+ 
+ struct NET_EXPORT MtcPlants06LabConfig {
++  MtcPlants06LabTrustMode trust_mode =
++      MtcPlants06LabTrustMode::kLandmark;
++
+   std::vector<uint8_t> ca_id;
+   std::vector<uint8_t> ca_spki_der;
+ 
+diff --git a/net/cert/mtc_plants06_lab_config_unittest.cc b/net/cert/mtc_plants06_lab_config_unittest.cc
+new file mode 100644
+index 0000000000..85aa3243c3
+--- /dev/null
++++ b/net/cert/mtc_plants06_lab_config_unittest.cc
+@@ -0,0 +1,186 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "net/cert/mtc_plants06_lab_config.h"
++
++#include <string>
++#include <string_view>
++
++#include "base/check.h"
++#include "base/command_line.h"
++#include "base/files/file_util.h"
++#include "base/files/scoped_temp_dir.h"
++#include "base/test/scoped_command_line.h"
++#include "net/base/switches.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace net {
++namespace {
++
++constexpr char kCommonConfig[] = R"({
++  "format": "chromium-mtc-plants06-lab",
++  "version": 1,
++  "spec": "plants-06",
++  "source_format": "MTB2",
++  "ca_id_hex": "0102",
++  "signers": [
++    {"id_hex": "0102", "spki_der_base64": "AA=="},
++    {}
++  ],
++  "signature_algorithm": "ecdsa-sha256",
++  "min_serial_hex": "0x0001000000000000",
++  "max_serial_hex": "0x0001000000000000",
++  "log_number": 1,
++  "merkle_hash": "SHA-256"%s
++})";
++
++std::string ConfigWith(std::string_view suffix) {
++  std::string config = kCommonConfig;
++  const size_t marker = config.find("%s");
++  CHECK_NE(marker, std::string::npos);
++  config.replace(marker, 2, suffix);
++  return config;
++}
++
++std::string Landmark(std::string_view trust_mode = {}) {
++  return ConfigWith(std::string(trust_mode) + R"(,
++  "landmark": {
++    "number": 1,
++    "tree_size": 1,
++    "trusted_subtrees": [
++      {"start": 0, "end": 1,
++       "hash": "0000000000000000000000000000000000000000000000000000000000000000"}
++    ]
++  })");
++}
++
++std::string Standalone() {
++  return ConfigWith(R"(,
++  "trust_mode": "standalone")");
++}
++
++void Replace(std::string& value,
++             std::string_view from,
++             std::string_view to) {
++  const size_t offset = value.find(from);
++  ASSERT_NE(offset, std::string::npos);
++  value.replace(offset, from.size(), to);
++}
++
++class MtcPlants06LabConfigTest : public testing::Test {
++ protected:
++  void SetUp() override { ASSERT_TRUE(temp_dir_.CreateUniqueTempDir()); }
++
++  std::optional<MtcPlants06LabConfig> Load(std::string_view json) {
++    const base::FilePath path = temp_dir_.GetPath().AppendASCII("config.json");
++    EXPECT_TRUE(base::WriteFile(path, json));
++    return LoadMtcPlants06LabConfig(path);
++  }
++
++  base::FilePath Write(std::string_view json) {
++    const base::FilePath path = temp_dir_.GetPath().AppendASCII("config.json");
++    EXPECT_TRUE(base::WriteFile(path, json));
++    return path;
++  }
++
++  base::ScopedTempDir temp_dir_;
++};
++
++TEST_F(MtcPlants06LabConfigTest, ParsesExplicitStandalone) {
++  auto config = Load(Standalone());
++  ASSERT_TRUE(config);
++  EXPECT_EQ(config->trust_mode, MtcPlants06LabTrustMode::kStandalone);
++  EXPECT_TRUE(config->trusted_subtrees.empty());
++  EXPECT_FALSE(config->ca_id.empty());
++  EXPECT_FALSE(config->ca_spki_der.empty());
++}
++
++TEST_F(MtcPlants06LabConfigTest, ParsesExplicitLandmark) {
++  auto config = Load(Landmark(R"(,
++  "trust_mode": "landmark")"));
++  ASSERT_TRUE(config);
++  EXPECT_EQ(config->trust_mode, MtcPlants06LabTrustMode::kLandmark);
++  EXPECT_EQ(config->trusted_subtrees.size(), 1u);
++}
++
++TEST_F(MtcPlants06LabConfigTest, LegacyConfigRemainsLandmark) {
++  auto config = Load(Landmark());
++  ASSERT_TRUE(config);
++  EXPECT_EQ(config->trust_mode, MtcPlants06LabTrustMode::kLandmark);
++  EXPECT_EQ(config->trusted_subtrees.size(), 1u);
++}
++
++TEST_F(MtcPlants06LabConfigTest, RejectsStandaloneWithLandmark) {
++  std::string config = Standalone();
++  Replace(config, R"("trust_mode": "standalone")",
++          R"("trust_mode": "standalone",
++  "landmark": {})");
++  EXPECT_FALSE(Load(config));
++}
++
++TEST_F(MtcPlants06LabConfigTest, RejectsStandaloneWithTrustedSubtreeOverride) {
++  const base::FilePath config_path = Write(Standalone());
++  const base::FilePath subtrees_path =
++      temp_dir_.GetPath().AppendASCII("trusted-subtrees.mts1");
++  ASSERT_TRUE(base::WriteFile(subtrees_path, "MTS1\0\0"));
++
++  {
++    base::test::ScopedCommandLine scoped_command_line;
++    base::CommandLine* command_line =
++        scoped_command_line.GetProcessCommandLine();
++    command_line->AppendSwitchPath(switches::kMtcPlants06Trust, config_path);
++    command_line->AppendSwitchPath(switches::kMtcPlants06TrustedSubtrees,
++                                   subtrees_path);
++    EXPECT_FALSE(LoadMtcPlants06LabConfigFromCommandLine());
++  }
++  {
++    base::test::ScopedCommandLine scoped_command_line;
++    base::CommandLine* command_line =
++        scoped_command_line.GetProcessCommandLine();
++    command_line->AppendSwitchPath(switches::kMtcPlants06Trust, config_path);
++    command_line->AppendSwitch(switches::kMtcPlants06TrustedSubtreesUrl);
++    const std::string http_trusted_subtrees("MTS1\0\0", 6);
++    EXPECT_FALSE(LoadMtcPlants06LabConfigFromCommandLine(
++        &http_trusted_subtrees));
++  }
++}
++
++TEST_F(MtcPlants06LabConfigTest, RejectsLandmarkWithoutSubtrees) {
++  std::string config = Landmark();
++  Replace(config, R"("trusted_subtrees": [
++      {"start": 0, "end": 1,
++       "hash": "0000000000000000000000000000000000000000000000000000000000000000"}
++    ])",
++          R"("trusted_subtrees": [])");
++  EXPECT_FALSE(Load(config));
++}
++
++TEST_F(MtcPlants06LabConfigTest, RejectsMissingModeAndLandmark) {
++  EXPECT_FALSE(Load(ConfigWith("")));
++}
++
++TEST_F(MtcPlants06LabConfigTest,
++       RejectsStandaloneMissingIdentityOrSerialRange) {
++  std::string missing_identity = Standalone();
++  Replace(missing_identity, R"("ca_id_hex": "0102",)", "");
++  EXPECT_FALSE(Load(missing_identity));
++
++  std::string missing_range = Standalone();
++  Replace(missing_range,
++          R"("max_serial_hex": "0x0001000000000000",)", "");
++  EXPECT_FALSE(Load(missing_range));
++}
++
++TEST_F(MtcPlants06LabConfigTest, RejectsUnknownTrustMode) {
++  std::string unknown = Standalone();
++  Replace(unknown, "standalone", "unknown");
++  EXPECT_FALSE(Load(unknown));
++
++  std::string wrong_type = Standalone();
++  Replace(wrong_type, R"("standalone")", "7");
++  EXPECT_FALSE(Load(wrong_type));
++}
++
++}  // namespace
++}  // namespace net
