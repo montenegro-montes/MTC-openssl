@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test entrypoint; installation and credential generation belong to mt-chromium-setup.
+# Test entrypoint; measurements may generate missing fixtures through prepare_credentials().
 set -euo pipefail
 REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 MENU_CALL_DIR=$PWD
@@ -7,62 +7,102 @@ cd "$REPO"
 STATE="$REPO/.mt-state/chromium-mtc"
 fail() { echo "ERROR: $*" >&2; exit 1; }
 source "$REPO/bin/browser_client/mt-chromium-menu.sh"
-browser_measurements_plan() {
- cat <<'PLAN'
-Supported browser matrix:
-5 profiles × 4 X.509 depths = 20 cells
-Profiles: ecdsa-p256 ecdsa-p384 mldsa44 mldsa65 mldsa87
-X.509 depths: 2 3 4 5
-Smoke:
-1 pair/cell = 20 pairs = 40 browser runs
-Formal:
-30 pairs/cell = 600 pairs = 1200 browser runs
-MTC remains N=16 landmark leaf 0 for every cell; it does not vary with depth.
-Fixture set: chromium-x509-depth-matrix-v1; externally installed Chromium CA policy.
-No fixture generation or policy installation. Each failed cell is recorded; remaining cells continue.
-P-521 remains capability-negative: Chromium does not advertise ecdsa_secp521r1_sha512 (0x0603)
-in its server-signature verification preferences, so it is excluded from this formal browser matrix.
-PLAN
-}
-
-browser_measurements_matrix() (
- local pairs=$1 root profile depth log status result_directory passed=0 failed=0
- [[ "$pairs" == 1 || "$pairs" == 30 ]] || fail 'Supported matrix requires 1 or 30 pairs/cell.'
- mkdir -p "$REPO/artifacts/results"
- root=$(mktemp -d "$REPO/artifacts/results/chromium-browser-matrix-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")
- printf 'profile\tdepth\tpairs\tstatus\tresult_directory\tlog\n' > "$root/index.tsv"
- browser_measurements_plan > "$root/plan.txt"
- printf 'Selected pairs/cell: %s\n' "$pairs" >> "$root/plan.txt"
- echo "Matrix directory: $root"
- for profile in ecdsa-p256 ecdsa-p384 mldsa44 mldsa65 mldsa87; do
-  for depth in 2 3 4 5; do
-   log="$root/$profile-d$depth.log"
-   printf 'Cell: %s D=%s pairs=%s\n' "$profile" "$depth" "$pairs"
-   # Reuse the measurement driver, but fail instead of generating missing/invalid fixtures.
-   if python3 -B - "$REPO" "$profile" "$depth" "$pairs" <<'PY' 2>&1 | tee "$log"
+browser_measurements_readiness() {
+ python3 -B - "$REPO" <<'PY'
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(sys.argv[1])/'campaigns/browser_client/chromium_mtc'))
-import browser_validation as validation
-import browser_measurements as measurements
-def no_generation(*args, **kwargs):
-    raise ValueError('Matrix requires existing valid fixtures; prepare them explicitly before retrying this cell')
-validation.generate_mtc = validation.generate_x509 = no_generation
-sys.argv = ['browser_measurements.py', 'run', '--profile', sys.argv[2], '--depth', sys.argv[3],
-            '--pairs', sys.argv[4], '--x509-fixture-set', 'chromium-x509-depth-matrix-v1',
-            '--x509-chromium-ca-policy']
-raise SystemExit(measurements.main())
+repo = Path(sys.argv[1])
+sys.path.insert(0, str(repo/'campaigns/browser_client/chromium_mtc'))
+import browser_pcap as pcap
+import browser_validation as bv
+
+ready = True
+try:
+    browser = bv.browser_executable()
+    print('Chromium: READY ('+browser['executable']+')')
+except (ValueError, OSError) as error:
+    ready = False
+    print('Chromium: NOT READY ('+str(error)+')')
+
+tools = pcap.requirements()
+capture_ready = bool(tools['interface'] and tools['tshark'] and
+                     (tools['dumpcap'] or tools['tcpdump']))
+ready &= capture_ready
+print('Capture: '+('READY' if capture_ready else 'NOT READY'))
+print('Fixtures: AUTO (valid fixtures are reused; missing fixtures are generated at run)')
+print('X.509 trust: CACertificates policy (automatic; certificate verification enabled)')
+print('Ready: '+('YES' if ready else 'NO'))
 PY
-   then status=PASS; passed=$((passed+1))
-   else status=FAIL; failed=$((failed+1))
-   fi
-   result_directory=$(sed -n 's/^Result directory: //p' "$log" | head -n 1)
-   printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$profile" "$depth" "$pairs" "$status" "$result_directory" "$log" >> "$root/index.tsv"
-  done
- done
- printf 'PASS %s/20\nFAIL %s/20\nIndex: %s/index.tsv\n' "$passed" "$failed" "$root"
- [[ "$failed" == 0 ]]
+}
+
+tests_menu_status() {
+ python3 -B - "$REPO" <<'PY'
+import sys
+from pathlib import Path
+repo = Path(sys.argv[1])
+sys.path.insert(0, str(repo/'campaigns/browser_client/chromium_mtc'))
+import browser_pcap as pcap
+import browser_validation as bv
+
+def brief(value):
+    return ' '.join(str(value).split())[:180]
+
+def latest(prefix):
+    paths = sorted((repo/'artifacts/results').glob(prefix+'*/summary.json'))
+    if not paths:
+        return 'NOT RUN', None
+    try:
+        data = bv.read(paths[-1])
+        passed = data.get('overall_pass') is True or data.get('status') == 'PASS'
+        if passed:
+            return 'PASS', None
+        reason = data.get('reason') or data.get('error')
+        if not reason and isinstance(data.get('reasons'), list):
+            reason = next((str(value) for value in data['reasons'] if value), None)
+        if not reason:
+            reason = next((str(case.get('reason')) for case in data.get('cases', [])
+                           if not case.get('pass') and case.get('reason')), None)
+        return 'FAIL', brief(reason or 'Latest recorded run did not pass')
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        return 'FAIL', brief(error)
+
+preflight = 'PASS' if (repo/'.mt-state/chromium-mtc/00.preflight.done').is_file() else 'NOT RUN'
+functional, functional_reason = latest('chromium-browser-validation-')
+pcap_status, pcap_reason = latest('chromium-browser-pcap-')
+measurements, measurements_reason = latest('chromium-browser-measurements-')
+
+tools = pcap.requirements()
+capture_ready = bool(tools['interface'] and tools['tshark'] and
+                     (tools['dumpcap'] or tools['tcpdump']))
+try:
+    bv.browser_executable()
+    chromium_ready = True
+except (ValueError, OSError):
+    chromium_ready = False
+
+rows = (
+    ('Preflight', preflight),
+    ('Functional validation', functional),
+    ('PCAP validation', pcap_status),
+    ('Browser measurements', measurements),
+    ('Capture backend', 'READY' if capture_ready else 'NOT READY'),
+    ('Chromium', 'READY' if chromium_ready else 'NOT READY'),
 )
+overall = (all(value == 'PASS' for value in
+               (preflight, functional, pcap_status, measurements))
+           and capture_ready and chromium_ready)
+print('Chromium / MTC — Tests status')
+for label, value in rows:
+    print(f'{label+":":<25}{value}')
+print(f'{"Overall:":<25}'+('READY' if overall else 'NOT READY'))
+for label, status, reason in (
+        ('Functional validation', functional, functional_reason),
+        ('PCAP validation', pcap_status, pcap_reason),
+        ('Browser measurements', measurements, measurements_reason)):
+    if status == 'FAIL':
+        print(f'{label} reason: {reason}')
+PY
+}
 
 preflight() {
  python3 -B - "$REPO" "$@" <<'PY'
@@ -188,6 +228,9 @@ PY
 campaign() {
  local module=$1
  shift
+ if [[ "$module" == browser_measurements && "${1:-}" == run ]]; then
+  set -- "$@" --x509-chromium-ca-policy
+ fi
  if [[ "$module" == browser_validation ]]; then
   if [[ "${1:-}" == run ]]; then
    selected_mtc_arguments "$@"
@@ -198,7 +241,9 @@ campaign() {
    set -- run "$@"
   fi
  fi
- # Test entrypoints cannot fall back to generating credentials.
+ # Functional validation and PCAP entrypoints cannot fall back to generating
+ # credentials. Measurements use prepare_credentials()' existing selective
+ # reuse/generation path so missing profile/depth fixtures can be prepared.
  python3 -B - "$REPO" "$module" "$@" <<'PY'
 import importlib, sys
 from pathlib import Path
@@ -206,7 +251,8 @@ sys.path.insert(0,str(Path(sys.argv[1])/'campaigns/browser_client/chromium_mtc')
 import browser_validation as bv
 def no_generation(*args, **kwargs):
     raise ValueError('Missing valid fixtures. Required setup: bin/browser_client/mt-chromium-setup browser-validation credentials [--profile PROFILE --depth DEPTH]')
-bv.generate_mtc=bv.generate_x509=no_generation
+if sys.argv[2] != 'browser_measurements':
+    bv.generate_mtc=bv.generate_x509=no_generation
 module=importlib.import_module(sys.argv[2])
 sys.argv=[module.__file__,*sys.argv[3:]]
 raise SystemExit(module.main())
@@ -230,7 +276,7 @@ MENU
   read -r -p 'Select an option: ' selection || exit 0
   case "$selection" in
    1) menu_invoke readonly preflight --capture;;
-   2) menu_invoke readonly status;;
+   2) menu_invoke readonly menu-status;;
    3) menu_submenu validation;;
    4) menu_submenu pcap;;
    5) menu_submenu measurements;;
@@ -242,18 +288,19 @@ MENU
 )
 case "${1:-help}" in
  help|--help|-h) cat <<'HELP'
-Usage: mt-chromium-tests menu|status|preflight [--profile PROFILE] [--depth D] [--capture]
+Usage: mt-chromium-tests menu|menu-status|status|preflight [--profile PROFILE] [--depth D] [--capture]
   browser-validation plan|status|run CASE [existing campaign options]
   browser-validation run-prevalidated-mtc mtc-positive --mtc-fixture PATH --mtc-validation FILE [options]
   browser-pcap plan|requirements|status|run CASE [existing campaign options]
-  browser-measurements plan|requirements|status|run [existing campaign options]
-  browser-measurements matrix-smoke|matrix
+  browser-measurements readiness|plan|requirements|status|run [existing campaign options]
   network-experiments (not implemented)
+KEM: x25519 or x25519-mlkem768. DEPTH: 2, 3, 4 or 5.
 Preflight is read-only. Defaults check the supported formal matrix (5 profiles, D=2..5).
-Missing fixtures must be prepared with mt-chromium-setup; tests never generate them.
+Browser measurements selectively generate missing fixtures. Other test workflows require explicit setup.
 HELP
  ;;
  menu) menu;;
+ menu-status) tests_menu_status;;
  preflight) shift; preflight "$@";;
  status)
   campaign browser_validation status
@@ -262,18 +309,15 @@ HELP
  browser-validation|browser-pcap|browser-measurements)
   namespace=$1; shift
   case "${1:-}" in
-   plan|requirements|status|run|run-prevalidated-mtc|matrix-smoke|matrix|--help|-h) ;;
+   readiness|plan|requirements|status|run|run-prevalidated-mtc|--help|-h) ;;
    *) fail 'Expected a test action first; configuration belongs to mt-chromium-setup browser-validation.';;
   esac
-  if [[ "$namespace" == browser-measurements ]]; then
-   case "${1:-}" in
-    plan|matrix-smoke|matrix)
-     [[ "$#" == 1 ]] || fail 'Usage: browser-measurements plan|matrix-smoke|matrix'
-     case "$1" in plan) browser_measurements_plan;; matrix-smoke) browser_measurements_matrix 1;; matrix) browser_measurements_matrix 30;; esac
-     exit $?;;
-   esac
-  fi
-  campaign "${namespace//-/_}" "$@";;
+  if [[ "$namespace" == browser-measurements && "${1:-}" == readiness ]]; then
+   [[ "$#" == 1 ]] || fail 'Usage: browser-measurements readiness'
+   browser_measurements_readiness
+  else
+   campaign "${namespace//-/_}" "$@"
+  fi;;
  network-experiments) echo 'This phase is not implemented yet.';;
  *) fail 'Unknown command; use help';;
 esac

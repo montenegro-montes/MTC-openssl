@@ -61,18 +61,18 @@ menu_submenu() {
    commands=(plan requirements status 'run mtc-positive' 'run mtc-no-trust' 'run mtc-bad-merkle' 'run mtc-bad-serial' 'run x509-positive' 'run all');;
   measurements)
    title='Browser measurements'; prefix=(browser-measurements)
-   labels=('Plan' 'Requirements / capture backend' 'Status' 'Run pilot (3 pairs)' 'Run supported matrix smoke (1 pair/cell)' 'Run supported matrix (30 pairs/cell)')
-   commands=(plan requirements status 'run --pairs 3' matrix-smoke matrix);;
+   labels=('Status' 'Run paired comparison')
+   commands=(readiness run);;
  esac
  while true; do
   printf '\n%s\n' "$title"
   for ((index=0; index<${#labels[@]}; index++)); do
    printf '%d. %s\n' "$((index+1))" "${labels[index]}"
   done
-  if [[ "$section" == measurements ]]; then printf '7. Back\n'; else printf '0. Back\n'; fi
+  if [[ "$section" == measurements ]]; then printf '3. Back\n'; else printf '0. Back\n'; fi
   read -r -p 'Select an option: ' selection || exit 0
   [[ "$selection" != 0 ]] || return 0
-  [[ "$section" != measurements || "$selection" != 7 ]] || return 0
+  [[ "$section" != measurements || "$selection" != 3 ]] || return 0
   [[ "$selection" =~ ^[1-9][0-9]?$ ]] || { echo 'Invalid option.'; continue; }
   (( selection <= ${#labels[@]} )) || { echo 'Invalid option.'; continue; }
   read -r -a args <<< "${commands[selection-1]}"
@@ -85,13 +85,41 @@ menu_submenu() {
    [[ -n "$root_path" ]] || { echo 'Root path is required.'; continue; }
    args+=(--root "$root_path")
   fi
+  if [[ "$section" == measurements && "${args[0]}" == run ]]; then
+   printf 'Key establishment:\n1. X25519 (default)\n2. X25519+ML-KEM768\n'
+   read -r -p 'Select [1-2, Enter=1]: ' kem_choice || return 0
+   case "${kem_choice:-1}" in
+    1) kem=x25519;;
+    2) kem=x25519-mlkem768;;
+    *) echo 'Invalid key-establishment option.'; continue;;
+   esac
+   printf 'X.509 depth:\n1. 2 (default)\n2. 3\n3. 4\n4. 5\n'
+   read -r -p 'Select [1-4, Enter=1]: ' depth_choice || return 0
+   case "${depth_choice:-1}" in
+    1) depth=2;;
+    2) depth=3;;
+    3) depth=4;;
+    4) depth=5;;
+    *) echo 'Invalid X.509-depth option.'; continue;;
+   esac
+   args+=(--key-establishment "$kem" --depth "$depth")
+   printf 'Number of pairs:\n1. 1\n2. 3 (default)\n3. 30\n'
+   read -r -p 'Select [1-3, Enter=2]: ' pairs_choice || return 0
+   case "${pairs_choice:-2}" in
+    1) pairs=1;;
+    2) pairs=3;;
+    3) pairs=30;;
+    *) echo 'Invalid number-of-pairs option.'; continue;;
+   esac
+   args+=(--pairs "$pairs" --all-profiles)
+  fi
   if [[ "${args[0]}" == sandbox-setup || "${args[0]}" == sandbox-status ]]; then
    prefix=()
   elif [[ "$section" == preparation ]]; then
    prefix=(prepare-build)
   fi
   mode=confirm
-  case "${args[0]}" in status|plan|trust-status|requirements|sandbox-status) mode=readonly;; esac
+  case "${args[0]}" in status|readiness|plan|trust-status|requirements|sandbox-status) mode=readonly;; esac
   menu_invoke "$mode" ${prefix[@]+"${prefix[@]}"} "${args[@]}"
  done
 }

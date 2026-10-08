@@ -501,8 +501,40 @@ The bad-Merkle anchor flips one byte in the trusted subtree covering leaf 0. The
 bad-serial anchor increments both range endpoints and their hexadecimal forms,
 preserving range length. Positive anchors remain byte-for-byte unchanged.
 
-All cases use TLS 1.3, X25519, TLS_AES_256_GCM_SHA384, no tickets, server-only
+All cases use TLS 1.3, TLS_AES_256_GCM_SHA384, no tickets, server-only
 validation and the same pinned OpenSSL image/server behavior on loopback 4433.
+Select `x25519` (default) or `x25519-mlkem768` with `--key-establishment`.
+The server allows only that group, and a successful automated run requires
+NetLog to report the matching negotiated group. Chromium still sends its
+compiled group list and key shares (hybrid and X25519); the selection constrains
+the negotiated group, not Chromium's ClientHello offer. That offer contributes
+to browser-side ClientHello size in both cases.
+
+For example, inspect a hybrid plan and start an explicitly sized paired run:
+
+```sh
+python3 campaigns/browser_client/chromium_mtc/browser_measurements.py plan \
+  --key-establishment x25519-mlkem768 --profile mldsa65 --pairs 1
+
+python3 campaigns/browser_client/chromium_mtc/browser_measurements.py run \
+  --key-establishment x25519-mlkem768 --profile mldsa65 --pairs 1
+```
+
+Use `--key-establishment x25519` to select X25519. The signature stays
+independently selectable with `--profile`; both paired cases use the same
+selected signature profile.
+
+The interactive wrapper asks for one KEM, one concrete X.509 depth and the
+number of pairs (1, 3 or 30), then invokes the same paired runner. Measurement
+runs automatically use Chromium's `CACertificates` policy mode for the selected
+fixture root; they do not require installing that root in the macOS trust store
+and do not disable certificate verification. For example:
+
+```sh
+bin/browser_client/mt-chromium-tests browser-measurements run \
+  --pairs 3 --key-establishment x25519-mlkem768 --depth 3
+```
+
 Each uses a fresh temporary Chromium profile, `--headless=new`, DOM dump and
 NetLog. A resolver rule maps only the canonical hostname to loopback without
 changing hostname verification or `/etc/hosts`. Certificate bypass flags are
@@ -631,3 +663,83 @@ unavailability can delay incorporation of newer landmarks or operational and
 revocation changes. An MTS1 supplied directly outside the `current` flow is
 prevalidated local configuration and therefore an administrative trust
 boundary.
+
+### PCAP metrics: s_client versus Chromium
+
+`browser_pcap.py` calls `campaigns/performance/handshake_performance/pcap_handshake.py` for each
+correlated `tcp.stream`; the reference analyzer is unchanged. Each case writes
+`connection-metrics.csv` with `case`, `classification`, `client_port`, the
+reference analyzer's complete schema in the same order, then whole-stream TCP
+packet, payload and wire totals. `browser_measurements.py` also appends the
+shared fields and browser timings to `measurements.csv`; numeric `pairs.csv`
+deltas exist only when both values are available. Existing results are not
+regenerated.
+
+Two measurement scopes must stay separate:
+
+- **Connection handshake:** the same TCP/TLS time boundaries and fields as
+  s_client. Logical `tls_*_handshake_bytes` count complete TLS records (including
+  record headers) once after TCP reassembly. `tls_*_handshake_wire_bytes` sum
+  `frame.len` of payload frames from ClientHello through client Finished,
+  including retransmissions. `tcp_handshake_wire_bytes` sums SYN, SYN/ACK and
+  the completing ACK. `connection_handshake_wire_bytes` sums their frame union,
+  counting an ACK carrying TLS only once. `tcp_syn_to_first_application_request_ms`
+  extends to the first identifiable HTTP request; it is not TLS-only latency.
+- **Browser navigation/session:** existing `tcp_payload_bytes_*` count the
+  entire correlated streams, including HTTP, shutdown and retransmissions, but
+  exclude headers. New `tcp_wire_bytes_*` count `frame.len` of every frame in
+  those streams, including ACK-only and closing frames. `url_linked_*` totals
+  isolate streams linked to the requested URL. Session totals additionally
+  include classified auxiliary/aborted connections. Connections without client
+  payload remain separately reported and are excluded from correlated totals.
+  This is loopback TCP port 4433 traffic, not all browser network traffic.
+
+Top-level shared fields refer to exactly one URL-linked connection. Multiple
+connections are **not** merged into a fictitious handshake or summed latency:
+consult `connections[].handshake_metrics` / `connection-metrics.csv` instead.
+Missing, ambiguous or undecodable handshake boundaries produce
+`analysis_status=ERROR`, an `analysis_error`, and null metrics (blank CSV),
+independently of the existing functional browser PASS. Certificate message sizes
+and retransmission counts retain the reference analyzer's semantics.
+
+Browser-only timing fields are milliseconds:
+
+- `browser_process_wall_ms`: monotonic process creation-to-exit time, including
+  startup, navigation, rendering, shutdown and timeout termination. It is not
+  equivalent to native connect/handshake latency.
+- `browser_ssl_connect_ms`: NetLog `SSL_CONNECT` BEGIN to successful END on the
+  correlated ClientHello's own source, including browser TLS processing and
+  certificate verification.
+- `browser_navigation_to_clienthello_ms`: target `URL_REQUEST_START_JOB` BEGIN
+  to the correlated ClientHello, only for a unique job/ClientHello dependency
+  graph; excludes process startup before that job.
+- `browser_request_to_response_headers_ms`: NetLog
+  `HTTP_TRANSACTION_SEND_REQUEST` BEGIN to
+  `HTTP_TRANSACTION_READ_RESPONSE_HEADERS` END on the same source, only in a
+  unique URL/ClientHello graph. Includes HTTP/server work, not TLS-only work.
+
+NetLog intervals use only its millisecond clock, never PCAP epoch subtraction.
+They are not an additive decomposition of process or handshake time. Missing or
+ambiguous intervals remain null; descriptive statistics report available `n`.
+
+Capture runs enable Chromium's `--ssl-key-log-file` only for the owned
+capture, and `tshark` uses those keys in its single TSV extraction. `tls.keys`
+is created with mode **0600** and contains session secrets: keep it private,
+do not publish it with a public dataset. The command, key-file hash, TSV,
+stderr and capture encapsulation types are retained for provenance. An old
+capture without keys can still have whole-stream totals, but will generally
+lack the shared encrypted-handshake metrics; packet order is not a substitute
+for decryption. Legacy optional decomposition columns are retained, not newly
+inferred from encrypted packet direction.
+
+For a defensible comparison, match TLS version/KEM/cipher, authentication,
+signature profile, X.509 depth, MTC mode and network/capture conditions.
+Use the same `--profile` and `--key-establishment` for each browser and s_client
+comparison. The KEM choice in this browser runner restricts the server's allowed
+group; Chromium continues to offer both compiled groups, while s_client is
+configured with only its selected group. Preserve that distinction when
+interpreting ClientHello byte-size differences. `frame.len` includes the
+captured link layer: loopback and container Ethernet captures need equivalent
+encapsulation or an explicitly justified adjustment. Neither syntax nor
+synthetic tests validate real Chromium decryption, captures or runtime
+comparability.

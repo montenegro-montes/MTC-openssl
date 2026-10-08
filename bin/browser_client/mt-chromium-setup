@@ -667,6 +667,47 @@ MENU
   esac
  done
 )
+
+browser_validation_credentials_all_profiles() {
+ local profiles_text profile result index=0 total_start=$SECONDS docker_total counter_file
+ local profiles=() passed=()
+ counter_file=$(mktemp "${TMPDIR:-/tmp}/chromium-credential-docker-count.XXXXXX")
+ profiles_text=$(python3 -B - "$REPO" <<'PY'
+import sys
+from pathlib import Path
+
+module_dir = Path(sys.argv[1]) / 'campaigns/browser_client/chromium_mtc'
+sys.path.insert(0, str(module_dir))
+from browser_measurements import CAMPAIGN_PROFILES
+
+print(' '.join(CAMPAIGN_PROFILES))
+PY
+ ) || fail 'Could not load browser-measurements campaign profiles.'
+ read -r -a profiles <<< "$profiles_text"
+ for profile in "${profiles[@]}"; do
+  index=$((index+1))
+  if python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_validation.py" \
+    credentials --profile "$profile" "$@" --depth 2 \
+    --x509-fixture-set chromium-x509-depth-matrix-v1 \
+    --x509-chromium-ca-policy --optimized-all-profiles \
+    --precheck-index "$index" --precheck-total "${#profiles[@]}" \
+    --docker-count-file "$counter_file"; then
+   passed+=("$profile")
+  else
+   result=$?
+   rm -f "$counter_file"
+   echo "ERROR: Chromium browser credentials failed for profile: $profile" >&2
+   return "$result"
+  fi
+ done
+ printf '\nChromium browser credentials\n\n'
+ for profile in "${passed[@]}"; do printf '%-12s PASS\n' "$profile"; done
+ docker_total=$(awk '{total += $1} END {print total + 0}' "$counter_file")
+ rm -f "$counter_file"
+ printf '\nElapsed: %ss\nDocker run invocations: %s\n' "$((SECONDS-total_start))" "$docker_total"
+ printf '\nOverall: PASS\n'
+}
+
 case "${1:-help}" in
  help|--help|-h) cat <<'HELP'
 Usage: mt-chromium-setup menu|doctor|init|status|plan|show STEP|run STEP|resume|cleanup
@@ -674,9 +715,11 @@ Usage: mt-chromium-setup menu|doctor|init|status|plan|show STEP|run STEP|resume|
   prepare-build plan|status|run STEP|install-deps [--dest PATH]
   build plan|status|run chromium [--dest PATH]
   sandbox-setup|sandbox-status
-  browser-validation credentials|cleanup|trust-status|trust-x509|untrust-x509 [OPTIONS]
+  browser-validation credentials [--profile PROFILE | --all-profiles] [OPTIONS]
+  browser-validation cleanup|trust-status|trust-x509|untrust-x509 [OPTIONS]
   trust-setup [--root PATH]
   x509-fixtures plan|generate --profile PROFILE --fixture-set NAME --output PATH
+  x509-fixtures generate-matrix --fixture-set chromium-x509-depth-matrix-v1 --output NEW_PATH
   ca-policy --matrix PATH --output PATH
 Step 20: run 20 --fixture PATH or run 20 --generate (explicit selection/generation).
 Trust operations require --root PATH. No automatic fixture selection.
@@ -688,6 +731,21 @@ HELP
    *) fail 'Use mt-chromium-tests browser-validation for test actions.';; esac
   shift
   if [[ "${1:-}" == credentials ]]; then
+   all_profiles=false
+   profile_requested=false
+   credentials_arguments=()
+   for argument in "${@:2}"; do
+    case "$argument" in
+     --all-profiles) all_profiles=true;;
+     --profile|--profile=*) profile_requested=true; credentials_arguments+=("$argument");;
+     *) credentials_arguments+=("$argument");;
+    esac
+   done
+   if [[ "$all_profiles" == true ]]; then
+    [[ "$profile_requested" == false ]] || fail '--profile and --all-profiles are mutually exclusive.'
+    browser_validation_credentials_all_profiles "${credentials_arguments[@]}"
+    exit $?
+   fi
    selected_mtc_arguments "$@"
    set -- "$@" "${MTC_ARGUMENTS[@]}"
   fi

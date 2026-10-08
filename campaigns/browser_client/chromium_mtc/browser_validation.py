@@ -4,12 +4,14 @@ import argparse
 import base64
 import copy
 from datetime import datetime, timedelta, timezone
+import getpass
 import hashlib
 import html
 import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import re
 import shlex
 import shutil
@@ -20,6 +22,9 @@ import sys
 import tempfile
 import time
 import uuid
+
+from cryptography import x509 as cryptography_x509
+from cryptography.hazmat.primitives.asymmetric import ec
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
@@ -33,9 +38,14 @@ PROFILE = 'ecdsa-p256'
 PROFILES = ('ecdsa-p256', 'ecdsa-p384', 'ecdsa-p521', 'mldsa44', 'mldsa65', 'mldsa87')
 # Compatibility context for existing PCAP callers; set only after fixture selection.
 REQUESTED = SELECTED = CA = None
+DOCKER_RUN_COUNT = 0
 CASES = ('mtc-positive', 'mtc-no-trust', 'mtc-bad-merkle', 'mtc-bad-serial', 'x509-positive')
 TLS = dict(version='TLS 1.3', group='X25519', cipher='TLS_AES_256_GCM_SHA384',
            tickets=False, client_authentication=False, port=4433)
+KEY_ESTABLISHMENTS = {
+    'x25519': dict(label='X25519', openssl_group='X25519', netlog_group=29),
+    'x25519-mlkem768': dict(label='X25519+ML-KEM768', openssl_group='X25519MLKEM768', netlog_group=0x11ec),
+}
 LABEL = 'mtc.browser-validation'
 PAGE_HTML = '''<!doctype html>
 <html>
@@ -56,7 +66,14 @@ def page_target(case, run_root):
     return 'browser-test.html?mtc_case='+case+'&run='+run_root.name
 
 
-def browser_page(case, run_root, credentials, browser_mode):
+def key_establishment_config(key_establishment):
+    require(key_establishment in KEY_ESTABLISHMENTS, 'Unsupported key-establishment group')
+    selected = KEY_ESTABLISHMENTS[key_establishment]
+    return dict(TLS, group=selected['openssl_group'], key_establishment=key_establishment,
+                key_establishment_label=selected['label'], netlog_group=selected['netlog_group'])
+
+
+def browser_page(case, run_root, credentials, browser_mode, key_establishment='x25519'):
     if case != 'mtc-positive' or browser_mode != 'headed':
         return PAGE_HTML
     mtc = credentials['mtc']
@@ -64,7 +81,8 @@ def browser_page(case, run_root, credentials, browser_mode):
         ('Case', case), ('Mode', 'Visible browser inspection'),
         ('Authentication configured', 'MTC; server-only'), ('Signature profile', mtc['profile']),
         ('TLS version configured', TLS['version']), ('Cipher suite configured', TLS['cipher']),
-        ('Group configured', TLS['group']), ('Session tickets configured', 'Disabled'),
+        ('Group restricted by server', key_establishment_config(key_establishment)['group']),
+        ('Session tickets configured', 'Disabled'),
         ('MTC tree size', mtc['tree_size']), ('MTC mode', mtc['mode']), ('MTC leaf', mtc['leaf']),
         ('CA ID', mtc['ca_id']), ('Requested TAI expected (0xca34)', mtc['requested_tai']),
         ('Selected TAI expected (0xca34)', mtc['selected_tai']),
@@ -163,6 +181,8 @@ def docker_temporary_directory(prefix):
 
 
 def docker_openssl(directory, args, image='mt-tls-mtc:local'):
+    global DOCKER_RUN_COUNT
+    DOCKER_RUN_COUNT += 1
     return command(['docker', 'run', '--rm', '--pull', 'never', '--network', 'none',
                     '--user', f'{os.getuid()}:{os.getgid()}', '-e', 'LC_ALL=C',
                     '-v', str(Path(directory).resolve())+':/work:ro', '-w', '/work',
@@ -393,6 +413,105 @@ def prevalidated_mtc(fixture, validation, profile=PROFILE):
                 verification_source='Selected successful functional validation and matching complete fixture hashes')
 
 
+def preselect_mtc_fixture(repo, profile):
+    candidates, audit = [], []
+    for fixture in sorted((repo/'artifacts/mtc').glob('*')):
+        if not (fixture/'manifest.json').is_file():
+            continue
+        record = dict(path=str(fixture))
+        try:
+            manifest = read(fixture/'manifest.json')
+            require(manifest.get('server_hostname') == HOST, 'MTC manifest hostname mismatch')
+            require(profile in manifest.get('profiles', []) and 16 in manifest.get('sizes', []),
+                    'MTC profile/tree size mismatch')
+            evidence_paths = sorted(fixture.parent.glob(fixture.name+'-validation*/validation.json'))
+            require(bool(evidence_paths), 'Missing complete MTC validation evidence')
+            locally_valid = []
+            for evidence in evidence_paths:
+                try:
+                    locally_valid.append(prevalidated_mtc(fixture, evidence, profile))
+                except Exception:
+                    continue
+            require(bool(locally_valid), 'No matching complete MTC validation evidence')
+            mtc = min(locally_valid, key=lambda item: item['validation_sha256'])
+            canonical = fixture.with_name(fixture.name+'-chromium-anchor.json')
+            require(canonical.is_file() and not canonical.is_symlink(),
+                    'Missing canonical Chromium MTC anchor')
+            require(read(canonical) == expected_anchor(mtc),
+                    'Canonical Chromium MTC anchor content/provenance mismatch')
+            mtc.update(anchor=str(canonical.resolve()), anchor_sha256=sha(canonical),
+                       anchor_origin='reused')
+            dedicated = manifest.get('profiles') == [profile]
+            identity = sha(fixture/'manifest.json')
+            candidates.append((not dedicated, identity, mtc))
+            record.update(valid=True, dedicated_profile=dedicated,
+                          content_identity=identity)
+        except Exception as error:
+            record.update(valid=False, reason=str(error) or type(error).__name__)
+        audit.append(record)
+    require(bool(candidates), f'No locally valid MTC fixture with canonical anchor for profile={profile}')
+    selected_key = min(item[:2] for item in candidates)
+    selected_candidates = [item[2] for item in candidates if item[:2] == selected_key]
+    require(len(selected_candidates) == 1,
+            f'Ambiguous content-identical MTC fixtures for profile={profile}')
+    selected = selected_candidates[0]
+    selected['origin'] = 'reused-prechecked'
+    for record in audit:
+        record['selected'] = record.get('valid', False) and Path(record['path']).resolve() == Path(selected['fixture'])
+    return selected, audit
+
+
+def precheck_formal_x509_fixture(repo, profile, depth, fixture_set):
+    require(fixture_set == 'chromium-x509-depth-matrix-v1' and depth == 2,
+            'Optimized credentials require the formal X509 D=2 matrix')
+    fixture = repo/'artifacts/x509'/fixture_set/profile/'d2'
+    require(fixture.is_dir() and not fixture.is_symlink(),
+            f'Missing formal X509 fixture: {fixture}')
+    files = [fixture/name for name in ('manifest.json', 'server.pem', 'server.key', 'root.pem')]
+    require(all(path.is_file() and not path.is_symlink() for path in files),
+            'Formal X509 fixture files missing or unsafe')
+    require(not any(path.is_symlink() for path in fixture.rglob('*')),
+            'Symlink in formal X509 fixture')
+    manifest = read(fixture/'manifest.json')
+    require(manifest.get('fixture_set') == fixture_set and
+            manifest.get('profile') == profile and manifest.get('family_id') == profile and
+            manifest.get('depth') == depth and manifest.get('hostname') == HOST,
+            'Formal X509 fixture identity/profile/depth mismatch')
+    saved = manifest.get('files_sha256')
+    check_saved_hashes(fixture, saved)
+    actual = hashes(fixture)
+    actual.pop('manifest.json', None)
+    require(actual == saved, 'Formal X509 fixture hash inventory differs from manifest')
+    require(saved.get('server.key') == manifest.get('server_key_sha256'),
+            'Formal X509 server key provenance mismatch')
+    require(certificate_sha256((fixture/'root.pem').read_bytes()) == manifest.get('root_der_sha256'),
+            'Formal X509 root provenance mismatch')
+    certificate = cryptography_x509.load_pem_x509_certificate((fixture/'server.pem').read_bytes())
+    if profile.startswith('ecdsa-'):
+        public = certificate.public_key()
+        curves = {'ecdsa-p256': 'secp256r1', 'ecdsa-p384': 'secp384r1',
+                  'ecdsa-p521': 'secp521r1'}
+        signatures = {'ecdsa-p256': '1.2.840.10045.4.3.2',
+                      'ecdsa-p384': '1.2.840.10045.4.3.3',
+                      'ecdsa-p521': '1.2.840.10045.4.3.4'}
+        require(isinstance(public, ec.EllipticCurvePublicKey) and
+                public.curve.name == curves[profile] and
+                certificate.signature_algorithm_oid.dotted_string == signatures[profile],
+                'Formal X509 cryptographic profile mismatch')
+    else:
+        oid = {'mldsa44': '2.16.840.1.101.3.4.3.17',
+               'mldsa65': '2.16.840.1.101.3.4.3.18',
+               'mldsa87': '2.16.840.1.101.3.4.3.19'}[profile]
+        public_key_oid = getattr(certificate, 'public_key_algorithm_oid', None)
+        require((public_key_oid is None or public_key_oid.dotted_string == oid) and
+                certificate.signature_algorithm_oid.dotted_string == oid,
+                'Formal X509 cryptographic profile mismatch')
+        # Older cryptography releases do not expose the ML-DSA SubjectPublicKeyInfo
+        # OID. validate_x509() immediately performs the authoritative public-key
+        # profile check with OpenSSL; the manifest alone is never trusted.
+    return fixture
+
+
 def validate_x509(fixture, *, profile=PROFILE, depth=2, image='mt-tls-mtc:local',
                   fixture_set=None):
     require(profile in PROFILES and depth in (2, 3, 4, 5), 'Unsupported profile/depth')
@@ -497,6 +616,10 @@ def expected_anchor(mtc):
 
 def choose_anchor(mtc, output):
     expected = expected_anchor(mtc); fixture = Path(mtc['fixture'])
+    canonical = fixture.with_name(fixture.name + '-chromium-anchor.json')
+    if canonical.exists() or canonical.is_symlink():
+        require(not canonical.is_symlink() and canonical.is_file() and read(canonical) == expected,
+                'Canonical Chromium anchor content/provenance mismatch')
     candidates = sorted(set(fixture.parent.glob(fixture.name + '*chromium*.json')) | set(fixture.glob('*chromium*.json')))
     audit = []
     for p in candidates:
@@ -513,6 +636,21 @@ def choose_anchor(mtc, output):
         require(not anchor.exists(), 'Anchor output exists')
         command([sys.executable, HERE/'export_chromium_anchor.py', '--trust', mtc['trust'], '--output', anchor])
         require(read(anchor) == expected, 'Exported anchor mismatch')
+        descriptor, temporary = tempfile.mkstemp(prefix='.chromium-anchor-', dir=fixture.parent)
+        try:
+            with os.fdopen(descriptor, 'wb') as destination:
+                destination.write(anchor.read_bytes())
+                destination.flush()
+                os.fsync(destination.fileno())
+            try:
+                os.link(temporary, canonical)
+            except FileExistsError:
+                require(not canonical.is_symlink() and canonical.is_file() and read(canonical) == expected,
+                        'Canonical Chromium anchor content/provenance mismatch')
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+        require(read(canonical) == expected, 'Persisted Chromium anchor mismatch')
+        anchor = canonical
     return dict(anchor=str(anchor.resolve()), anchor_sha256=sha(anchor), anchor_origin=origin, anchor_candidates=audit)
 
 
@@ -582,6 +720,60 @@ def x509_paths(repo):
 
 def certificate_sha256(pem):
     return hashlib.sha256(certificate_der(pem)).hexdigest()
+
+
+def chromium_ca_policy(root, documents=None):
+    root = Path(root)
+    expected_der_sha256 = certificate_sha256(root.read_bytes())
+    system = platform.system()
+    if documents is None:
+        documents = []
+        if system == 'Darwin':
+            paths = (Path('/Library/Managed Preferences/org.chromium.Chromium.plist'),
+                     Path('/Library/Managed Preferences')/getpass.getuser()/'org.chromium.Chromium.plist')
+            documents = [(path, plistlib.loads(path.read_bytes())) for path in paths if path.is_file()]
+        elif system == 'Linux':
+            paths = sorted(Path('/etc/chromium/policies/managed').glob('*.json'))
+            documents = [(path, json.loads(path.read_text())) for path in paths]
+        else:
+            raise ValueError('Chromium CACertificates policy is unsupported on '+system)
+    values = [(path, data['CACertificates']) for path, data in documents
+              if isinstance(data, dict) and 'CACertificates' in data]
+    require(values, 'Chromium CACertificates policy is not installed')
+    decoded = []
+    for path, entries in values:
+        require(isinstance(entries, list), 'Invalid CACertificates policy in '+str(path))
+        try:
+            hashes = tuple(sorted(hashlib.sha256(base64.b64decode(entry, validate=True)).hexdigest()
+                                  for entry in entries))
+        except (TypeError, ValueError) as error:
+            raise ValueError('Invalid CACertificates value in '+str(path)) from error
+        decoded.append((path, hashes))
+    require(len({hashes for _, hashes in decoded}) == 1,
+            'Conflicting CACertificates policies; effective root set is ambiguous')
+    require(expected_der_sha256 in decoded[0][1],
+            'CACertificates policy does not contain the selected fixture root')
+    return dict(x509_trust_mode='chromium-ca-policy', certificate_verification_bypass=False,
+                platform_trust_store=False, policy_name='CACertificates',
+                policy_root_der_sha256=expected_der_sha256,
+                policy_sources=[str(path) for path, _ in decoded], policy_applied=True)
+
+
+def chromium_ca_policy_report(root, required=False):
+    if required:
+        return dict(chromium_ca_policy(root), status='TRUSTED')
+    try:
+        report = dict(chromium_ca_policy(root), status='TRUSTED')
+    except (ValueError, OSError) as error:
+        report = dict(status='UNTRUSTED_OR_UNAVAILABLE', policy_applied=False,
+                      policy_name='CACertificates', certificate_verification_bypass=False,
+                      error=str(error))
+    return report
+
+
+def print_credentials_trust(system_trust, policy):
+    print('X509 system root trust:         ' + system_trust['status'])
+    print('Chromium CACertificates policy: ' + policy['status'])
 
 
 def nss_database():
@@ -751,23 +943,43 @@ def root_trust(x):
 
 
 def prepare_credentials(repo, output, image, profile=PROFILE, depth=2,
-                        x509_fixture_set=None, mtc_fixture=None, mtc_validation=None):
+                        x509_fixture_set=None, mtc_fixture=None, mtc_validation=None,
+                        optimized_all_profiles=False, progress=None):
     require(profile in PROFILES and depth in (2, 3, 4, 5), "Unsupported profile/depth")
     require((mtc_fixture is None) == (mtc_validation is None), 'Supply both --mtc-fixture and --mtc-validation')
-    if mtc_fixture is not None:
+    if optimized_all_profiles:
+        require(mtc_fixture is None, 'Optimized credentials select MTC fixtures locally')
+        mtc, ma = preselect_mtc_fixture(repo, profile)
+        write(output/'mtc-discovery.json', ma)
+        if progress: progress('validating MTC')
+        selected_path = Path(mtc['fixture'])
+        validated = validate_mtc(selected_path, profile, image)
+        validated.update(anchor=mtc['anchor'], anchor_sha256=mtc['anchor_sha256'],
+                         anchor_origin=mtc['anchor_origin'], origin='reused-prechecked')
+        mtc = validated
+    elif mtc_fixture is not None:
         mtc = prevalidated_mtc(mtc_fixture, mtc_validation, profile)
         ma = [dict(path=mtc['fixture'], valid=True, origin=mtc['origin'], validation_evidence=mtc['validation_evidence'])]
         write(output/'mtc-discovery.json', ma)
     else:
         mtc_paths = [p.parent for p in (repo/'artifacts/mtc').glob('*/manifest.json')]
         mtc, ma = select_or_generate(mtc_paths, lambda p: validate_mtc(p, profile, image), lambda: generate_mtc(repo, output, image, profile), output/'mtc-discovery.json')
-    mtc.update(choose_anchor(mtc, output))
+    if not optimized_all_profiles:
+        mtc.update(choose_anchor(mtc, output))
     global CA, SELECTED, REQUESTED
     CA, SELECTED, REQUESTED = mtc['ca_id'], mtc['selected_tai'], mtc['requested_tai']
     x509_validator = lambda p: validate_x509(
         p, profile=profile, depth=depth, image=image,
         fixture_set=x509_fixture_set)
-    if x509_fixture_set is None:
+    if optimized_all_profiles:
+        fixture = precheck_formal_x509_fixture(repo, profile, depth, x509_fixture_set)
+        xa = [dict(path=str(fixture.resolve()), valid=True, selected=True,
+                   reason='Exact formal matrix profile/D=2 fixture passed local integrity precheck')]
+        write(output/'x509-discovery.json', xa)
+        if progress: progress('validating X509')
+        x = x509_validator(fixture)
+        x['origin'] = 'reused-formal-fixture-set'
+    elif x509_fixture_set is None:
         x, xa = select_or_generate(
             x509_paths(repo), x509_validator,
             lambda: generate_x509(repo, profile, depth, image),
@@ -935,7 +1147,8 @@ def encrypted_extensions_selected(events, selected_tai=None):
     return False
 
 
-def classify(case, case_dir, url, process, *, positive_control=False, requested_tai=None, selected_tai=None, trusted_subtrees_url=None):
+def classify(case, case_dir, url, process, *, positive_control=False, requested_tai=None,
+             selected_tai=None, trusted_subtrees_url=None, expected_group=29):
     requested_tai = requested_tai if requested_tai is not None else REQUESTED
     selected_tai = selected_tai if selected_tai is not None else SELECTED
     require(requested_tai is not None and selected_tai is not None, 'MTC fixture identity not selected')
@@ -964,12 +1177,17 @@ def classify(case, case_dir, url, process, *, positive_control=False, requested_
     result['requested_tai_observed'] = any(requested_tai in str(p) for p in requests)
     result['selected_tai_observed'] = encrypted_extensions_selected(events, selected_tai)
     ssl_connections = [p for name, p, _, _ in events if name == 'SSL_CONNECT' and p.get('version')]
+    negotiated_groups = sorted({p.get('key_exchange_group') for p in ssl_connections
+                                if isinstance(p.get('key_exchange_group'), int)})
     negotiated = any(p.get('version') == 'TLS 1.3' and p.get('cipher_suite') == 0x1302 and
-                     p.get('key_exchange_group') == 29 and p.get('is_resumed') is False for p in ssl_connections)
+                     p.get('key_exchange_group') == expected_group and p.get('is_resumed') is False
+                     for p in ssl_connections)
     http = any(name == 'HTTP_TRANSACTION_READ_RESPONSE_HEADERS' and re.search(r'HTTP/\S+ 200', str(p)) for name, p, _, _ in events)
     dom = '<h1>MTC browser test</h1>' in stdout and '<p id="result">TLS browser validation page</p>' in stdout
     result['application_data_observed'] = http and dom
     result['negotiated_canonical_tls'] = negotiated
+    result['configured_key_exchange_group'] = expected_group
+    result['observed_key_exchange_groups'] = negotiated_groups
     result['target_url'] = url
     received = [p.get('type') for name, p, _, _ in events if name == 'SSL_HANDSHAKE_MESSAGE_RECEIVED']
     sent = [p.get('type') for name, p, _, _ in events if name == 'SSL_HANDSHAKE_MESSAGE_SENT']
@@ -1056,11 +1274,13 @@ def classify(case, case_dir, url, process, *, positive_control=False, requested_
 
 class Server:
     """Same pinned s_server/loopback/readiness pattern as interoperability stage 60."""
-    def __init__(self, credentials, case, output, run_root, browser_mode='headless'):
+    def __init__(self, credentials, case, output, run_root, browser_mode='headless',
+                 key_establishment='x25519'):
         self.name = 'mtc-browser-'+uuid.uuid4().hex[:16]
         self.output, self.run_root = output, run_root
         self.credentials, self.case = credentials, case
         self.browser_mode = browser_mode
+        self.key_establishment = key_establishment_config(key_establishment)
         self.created = False
 
     def start(self):
@@ -1070,7 +1290,8 @@ class Server:
         fixture = Path(selected['fixture'])
         webroot = self.output/'www'
         webroot.mkdir()
-        body = browser_page(self.case, self.run_root, self.credentials, self.browser_mode).encode('utf-8')
+        body = browser_page(self.case, self.run_root, self.credentials, self.browser_mode,
+                            self.key_establishment['key_establishment']).encode('utf-8')
         (webroot/'page.html').write_bytes(body)
         # -HTTP serves a complete response file, including our explicit MIME type.
         response = ('HTTP/1.0 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n'
@@ -1078,7 +1299,8 @@ class Server:
         # Support literal request-target filenames as well as query-stripping versions.
         for name in ('browser-test.html', page_target(self.case, self.run_root)):
             (webroot/name).write_bytes(response)
-        args = ['/opt/mtc/openssl.sh', 's_server', '-accept', '4433', '-tls1_3', '-groups', 'X25519',
+        args = ['/opt/mtc/openssl.sh', 's_server', '-accept', '4433', '-tls1_3',
+                '-groups', self.key_establishment['group'],
                 '-ciphersuites', TLS['cipher'], '-num_tickets', '0', '-HTTP', '-state', '-msg',
                 '-cert', '/fixtures/'+str(Path(selected['cert']).relative_to(fixture)),
                 '-key', '/fixtures/'+str(Path(selected['key']).relative_to(fixture))]
@@ -1127,6 +1349,7 @@ def run_browser(cmd, output, timeout):
     check_hostname()
     # Only this child process group is signalled; no PID-name matching.
     with (output/'chromium.stdout.log').open('xb') as stdout, (output/'chromium.stderr.log').open('xb') as stderr:
+        started = time.monotonic()
         child = subprocess.Popen(cmd, stdout=stdout, stderr=stderr, start_new_session=True)
         write(output/'browser-process.json', dict(pid=child.pid, process_group=child.pid, command=cmd))
         result = None
@@ -1143,6 +1366,8 @@ def run_browser(cmd, output, timeout):
             except subprocess.TimeoutExpired:
                 os.killpg(child.pid, signal.SIGKILL)
                 child.wait(timeout=5)
+        write(output/'browser-timing.json', dict(pid=child.pid,
+              browser_process_wall_ms=(time.monotonic()-started)*1000))
     return result
 
 
@@ -1161,7 +1386,9 @@ def x509_spki_pin(selected, image):
         return pin
 
 
-def run_case(case, credentials, browser, output, run_root, timeout, positive_control, browser_mode='headless', capture=None, x509_spki=None, trusted_subtrees=None, trusted_subtrees_url=None):
+def run_case(case, credentials, browser, output, run_root, timeout, positive_control,
+             browser_mode='headless', capture=None, x509_spki=None, trusted_subtrees=None,
+             trusted_subtrees_url=None, key_establishment='x25519'):
     require(x509_spki is None or (case == 'x509-positive' and capture is None),
             'SPKI capability bypass is only for standalone x509-positive')
     output.mkdir()
@@ -1173,7 +1400,9 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
             anchor = output/'derived-anchor.json'
             write(anchor, mutate_anchor(read(credentials['mtc']['anchor']), case))
     url = 'https://'+HOST+':4433/'+page_target(case, run_root)
-    server = Server(credentials, case, output, run_root, browser_mode=browser_mode)
+    selected_group = key_establishment_config(key_establishment)
+    server = Server(credentials, case, output, run_root, browser_mode=browser_mode,
+                    key_establishment=key_establishment)
     try:
         if capture is not None:
             require(browser_mode == 'headless', 'PCAP validation requires headless mode')
@@ -1196,6 +1425,8 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
             )
             if x509_spki is not None:
                 cmd.insert(-1, '--ignore-certificate-errors-spki-list='+x509_spki)
+            if capture is not None:
+                cmd.insert(-1, '--ssl-key-log-file='+str(capture.keylog_path.resolve()))
             write(output/'chromium-command.json', dict(command=cmd, timeout_seconds=timeout))
             exit_code = run_browser(cmd, output, timeout)
         # Flush server logs after browser exits; preserve files before removing container.
@@ -1205,9 +1436,16 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
         result = classify(case, output, url, exit_code, positive_control=positive_control,
                           requested_tai=credentials['mtc']['requested_tai'],
                           selected_tai=credentials['mtc']['selected_tai'],
-                          trusted_subtrees_url=trusted_subtrees_url)
+                          trusted_subtrees_url=trusted_subtrees_url,
+                          expected_group=selected_group['netlog_group'])
+        result.update(key_establishment=key_establishment,
+                      key_establishment_label=selected_group['key_establishment_label'],
+                      tls_group=selected_group['group'],
+                      signature_profile=credentials['mtc']['profile'])
         if x509_spki is not None:
             result.update(x509_trust_mode='spki-capability-bypass', normal_trusted_x509_baseline=False)
+        if capture is not None:
+            result['browser_process_wall_ms'] = read(output/'browser-timing.json').get('browser_process_wall_ms')
         if browser_mode == 'headed':
             # Keep the automated classifier intact; inspection lacks NetLog and DOM evidence.
             result.update(browser_mode='headed', observed_outcome='INSPECTION', **{'pass': False},
@@ -1222,10 +1460,12 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
             server.stop()
 
 
-def blocked_summary(output, reason, browser=None):
+def blocked_summary(output, reason, browser=None, key_establishment='x25519'):
+    selected_group = key_establishment_config(key_establishment)
     credentials = read(output/'credentials.json') if (output/'credentials.json').is_file() else None
     return dict(overall_pass=False, status='BLOCKED', timestamp=datetime.now(timezone.utc).isoformat(),
-                hostname=HOST, tls=TLS, chromium=browser, credentials=credentials, reason=reason,
+                hostname=HOST, tls=selected_group, key_establishment=key_establishment,
+                chromium=browser, credentials=credentials, reason=reason,
                 cases=[dict(name=c, expected_outcome='accept' if c.endswith('positive') else 'reject',
                             observed_outcome='INCONCLUSIVE', **{'pass': False}, reason='Not executed: '+reason,
                             server_authentication_flight_observed=None, server_finished_observed=None,
@@ -1270,6 +1510,8 @@ def main(argv=None):
     parser.add_argument('case', nargs='?', choices=(*CASES, 'all'))
     parser.add_argument('--root', type=Path, help='Exact PEM root required for trust-status/trust-x509/untrust-x509; no fixture discovery')
     parser.add_argument('--profile', choices=PROFILES, default=PROFILE)
+    parser.add_argument('--key-establishment', choices=tuple(KEY_ESTABLISHMENTS), default='x25519',
+                        help='Group restricted at the server and verified in NetLog (default: x25519)')
     parser.add_argument('--depth', type=int, choices=(2, 3, 4, 5), default=2)
     parser.add_argument('--mtc-fixture', type=Path, help='Explicit prevalidated MTC fixture; requires --mtc-validation')
     parser.add_argument('--mtc-validation', type=Path, help='Existing validation.json for the selected MTC fixture')
@@ -1287,6 +1529,10 @@ def main(argv=None):
                         help='headless: automated validation (default); headed: bounded visual inspection, never automated PASS')
     parser.add_argument('--timeout', type=int, default=60)
     parser.add_argument('--image', default='mt-tls-mtc:local', help='Existing image used only for generation fallback')
+    parser.add_argument('--optimized-all-profiles', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--precheck-index', type=int, help=argparse.SUPPRESS)
+    parser.add_argument('--precheck-total', type=int, help=argparse.SUPPRESS)
+    parser.add_argument('--docker-count-file', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     require((args.mtc_fixture is None) == (args.mtc_validation is None), 'Supply both --mtc-fixture and --mtc-validation')
     require(args.mtc_fixture is None or args.action in ('run', 'credentials'), 'Explicit MTC evidence requires run or credentials')
@@ -1301,24 +1547,31 @@ def main(argv=None):
             '--mtc-trusted-subtrees and --mtc-trusted-subtrees-url are mutually exclusive')
     trust_operation = args.action in ('trust-status', 'trust-x509', 'untrust-x509')
     require((args.root is not None) == trust_operation, '--root PATH is required only for trust-status/trust-x509/untrust-x509')
-    require(not args.x509_fixture_set or args.action == 'run',
-            '--x509-fixture-set requires run')
+    require(not args.x509_fixture_set or args.action in ('run', 'credentials'),
+            '--x509-fixture-set requires run or credentials')
     require(not args.x509_spki_capability or (args.action == 'run' and args.case == 'x509-positive'),
             '--x509-spki-capability requires run x509-positive')
-    require(not args.x509_chromium_ca_policy or (args.action == 'run' and args.case == 'x509-positive'),
-            '--x509-chromium-ca-policy requires run x509-positive')
+    require(not args.x509_chromium_ca_policy or args.action == 'credentials' or
+            (args.action == 'run' and args.case == 'x509-positive'),
+            '--x509-chromium-ca-policy requires credentials or run x509-positive')
     require(not (args.x509_spki_capability and args.x509_chromium_ca_policy),
             'SPKI capability bypass and Chromium CA policy modes are mutually exclusive')
     require(5 <= args.timeout <= 300, 'Timeout must be between 5 and 300 seconds')
     require((args.action == 'run') == bool(args.case), 'run requires CASE; other actions take no case')
     require(not (args.case == 'all' and args.browser_mode == 'headed'), 'Run all requires headless automated validation')
+    require(not args.optimized_all_profiles or
+            (args.action == 'credentials' and args.precheck_index and args.precheck_total and
+             args.docker_count_file is not None),
+            'Optimized all-profile credentials require bounded progress/count metadata')
     if args.action in ('trust-status', 'trust-x509', 'untrust-x509'):
         return trust_action(args.action, args.root, args.image)
     if args.action == 'plan':
         print('PRINT ONLY: discover -> strictly validate -> reuse; generate only if no valid candidate.')
         print('Search: artifacts/mtc, artifacts/x509, artifacts/cert-chain-scaling')
+        selected_group = key_establishment_config(args.key_establishment)
         print('Identity: '+HOST+'; '+args.profile+'; X509 D='+str(args.depth)+'; MTC N=16 landmark leaf 0')
-        print('Cases: '+', '.join(CASES)); print('TLS: '+json.dumps(TLS))
+        print('Key establishment: '+selected_group['key_establishment_label']+' ('+selected_group['group']+')')
+        print('Cases: '+', '.join(CASES)); print('TLS: '+json.dumps(selected_group))
         if args.browser_mode == 'headless':
             print('Existing patched Chromium only. Each case: fresh profile, bounded headless run, NetLog/server/DOM evidence.')
         else:
@@ -1344,23 +1597,51 @@ def main(argv=None):
     except FileExistsError: raise ValueError('Browser validation locked; inspect active run before retrying')
     output = None
     browser = None
+    started = time.monotonic()
+    progress_prefix = (f'[PRECHECK] {args.precheck_index}/{args.precheck_total} {args.profile}'
+                       if args.optimized_all_profiles else None)
+    def credential_progress(stage):
+        if progress_prefix:
+            print(f'{progress_prefix}: {stage}...', flush=True)
     try:
         output = new_result(REPO); print('Result directory: '+str(output), flush=True)
+        credential_progress('selecting fixtures')
         credentials = prepare_credentials(
             REPO, output, args.image, args.profile, args.depth,
-            args.x509_fixture_set, args.mtc_fixture, args.mtc_validation)
+            args.x509_fixture_set, args.mtc_fixture, args.mtc_validation,
+            optimized_all_profiles=args.optimized_all_profiles,
+            progress=credential_progress)
+        if args.action == 'credentials':
+            credential_progress('checking CACertificates')
+            policy_metadata = chromium_ca_policy_report(
+                credentials['x509']['root'], required=args.x509_chromium_ca_policy)
+            write(output/'chromium-ca-policy.json', policy_metadata)
+        else:
+            policy_metadata = (chromium_ca_policy(credentials['x509']['root'])
+                               if args.x509_chromium_ca_policy else None)
         trust = credentials['x509']['root_trust']
         print('MTC '+credentials['mtc']['origin']+': '+credentials['mtc']['fixture'])
         print('X509 '+credentials['x509']['origin']+': '+credentials['x509']['fixture'])
-        print('X509 root trust: '+trust['status'])
+        if args.action == 'credentials':
+            print_credentials_trust(trust, policy_metadata)
+        else:
+            print('X509 root trust: '+trust['status'])
         if (args.action == 'run' and args.case in ('x509-positive', 'all')
                 and not args.x509_spki_capability
                 and not args.x509_chromium_ca_policy
                 and trust['status'] != 'TRUSTED'):
             print('Explicit manual action (not executed):\n'+trust['manual_command'])
-            write(output/'summary.json', blocked_summary(output, 'X509 root trust not established'))
+            write(output/'summary.json', blocked_summary(output, 'X509 root trust not established',
+                                                         key_establishment=args.key_establishment))
             return 2
-        if args.action == 'credentials': return 0
+        if args.action == 'credentials':
+            if args.docker_count_file is not None:
+                with args.docker_count_file.open('a') as counter:
+                    counter.write(str(DOCKER_RUN_COUNT)+'\n')
+            if progress_prefix:
+                print(f'{progress_prefix}: PASS ({time.monotonic()-started:.1f}s; '
+                      f'docker runs={DOCKER_RUN_COUNT})', flush=True)
+            return 0
         if args.mtc_trusted_subtrees is not None:
             anchor_config = read(credentials['mtc']['anchor'])
             validate_mts1(args.mtc_trusted_subtrees, anchor_config['log_number'])
@@ -1372,21 +1653,18 @@ def main(argv=None):
             except OSError: raise ValueError('Port 4433 occupied. Stop its owner explicitly; this workflow will not replace it.')
         cases = CASES if args.case == 'all' else (('mtc-positive', args.case) if args.case in CASES[1:4] else (args.case,))
         results = []; positive_pass = False
+        selected_group = key_establishment_config(args.key_establishment)
         summary = dict(overall_pass=False, timestamp=datetime.now(timezone.utc).isoformat(), chromium=browser,
-                       hostname=HOST, tls=TLS, credentials=credentials, cases=results)
+                       hostname=HOST, tls=selected_group, key_establishment=args.key_establishment,
+                       credentials=credentials, cases=results)
         if args.x509_spki_capability:
             summary.update(x509_trust_mode='spki-capability-bypass',
                            normal_trusted_x509_baseline=False,
                            certificate_verification_bypass=True,
                            leaf_spki_sha256_base64=spki)
         elif args.x509_chromium_ca_policy:
-            summary.update(x509_trust_mode='chromium-ca-policy',
-                           certificate_verification_bypass=False,
-                           platform_trust_store=False,
-                           policy_name='CACertificates',
-                           fixture_root_pem_sha256=credentials['x509']['root_sha256'],
-                           policy_root_der_sha256=certificate_sha256(
-                               Path(credentials['x509']['root']).read_bytes()))
+            summary.update(policy_metadata,
+                           fixture_root_pem_sha256=credentials['x509']['root_sha256'])
         if args.browser_mode == 'headed':
             summary.update(browser_mode='headed', validation_mode='visual_inspection')
             print(f'Visible inspection only; each owned browser closes after at most {args.timeout} seconds. No automated PASS.', flush=True)
@@ -1399,9 +1677,11 @@ def main(argv=None):
                 result = run_case(case, credentials, browser, output/case, output, args.timeout, positive_pass,
                                   browser_mode=args.browser_mode, x509_spki=spki,
                                   trusted_subtrees=args.mtc_trusted_subtrees,
-                                  trusted_subtrees_url=args.mtc_trusted_subtrees_url)
+                                  trusted_subtrees_url=args.mtc_trusted_subtrees_url,
+                                  key_establishment=args.key_establishment)
             except Exception as e:
-                result = next(r for r in blocked_summary(output, str(e), browser)['cases'] if r['name'] == case)
+                result = next(r for r in blocked_summary(output, str(e), browser,
+                    key_establishment=args.key_establishment)['cases'] if r['name'] == case)
                 result['reason'] = 'Execution incomplete: '+str(e)
                 (output/case).mkdir(exist_ok=True)
             if args.x509_spki_capability:
@@ -1409,13 +1689,8 @@ def main(argv=None):
                               normal_trusted_x509_baseline=False,
                               certificate_verification_bypass=True)
             elif args.x509_chromium_ca_policy:
-                result.update(x509_trust_mode='chromium-ca-policy',
-                              certificate_verification_bypass=False,
-                              platform_trust_store=False,
-                              policy_name='CACertificates',
-                              fixture_root_pem_sha256=credentials['x509']['root_sha256'],
-                              policy_root_der_sha256=certificate_sha256(
-                                  Path(credentials['x509']['root']).read_bytes()))
+                result.update(policy_metadata,
+                              fixture_root_pem_sha256=credentials['x509']['root_sha256'])
             write(output/case/'result.json', result); results.append(result)
             if case == 'mtc-positive': positive_pass = result['pass']
             print(case+': '+result['observed_outcome']+' — '+result['reason'], flush=True)
@@ -1426,7 +1701,7 @@ def main(argv=None):
         return 0 if summary['overall_pass'] else 1
     except Exception as e:
         if output and not (output/'summary.json').exists():
-            failure = blocked_summary(output, str(e), browser)
+            failure = blocked_summary(output, str(e), browser, key_establishment=args.key_establishment)
             if args.x509_spki_capability:
                 failure.update(x509_trust_mode='spki-capability-bypass', normal_trusted_x509_baseline=False)
             write(output/'summary.json', failure)

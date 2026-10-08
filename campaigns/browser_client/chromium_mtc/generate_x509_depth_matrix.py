@@ -23,6 +23,7 @@ import browser_validation as bv
 
 
 DEPTHS = (2, 3, 4, 5)
+FORMAL_FIXTURE_SET = "chromium-x509-depth-matrix-v1"
 
 
 def write_json(path, value):
@@ -330,9 +331,89 @@ def generate_family(output, fixture_set, profile, image):
         )
 
 
+def build_matrix_manifest(output, fixture_set):
+    bv.require(fixture_set == FORMAL_FIXTURE_SET, "Unexpected fixture_set")
+    matrix_path = output / "matrix.json"
+    bv.require(not matrix_path.exists(), "Matrix manifest already exists: " + str(matrix_path))
+    families = {}
+    root_hashes = set()
+    spki_hashes = set()
+    cell_count = 0
+    for profile in bv.PROFILES:
+        family_path = output / profile / "family-manifest.json"
+        bv.require(family_path.is_file(), "Missing family manifest: " + str(family_path))
+        family = json.loads(family_path.read_text())
+        bv.require(family.get("fixture_set") == fixture_set, profile + ": fixture_set mismatch")
+        bv.require(family.get("family_id") == profile and family.get("profile") == profile,
+                   profile + ": family identity mismatch")
+        bv.require(family.get("hostname") == bv.HOST, profile + ": hostname mismatch")
+        bv.require(family.get("depths") == list(DEPTHS), profile + ": depth set mismatch")
+        bv.require(family.get("shared_root") is True and family.get("shared_server_key") is True,
+                   profile + ": family sharing invariant missing")
+        cells = family.get("cells")
+        bv.require(isinstance(cells, list) and len(cells) == len(DEPTHS),
+                   profile + ": expected four cells")
+        by_depth = {cell.get("depth"): cell for cell in cells if isinstance(cell, dict)}
+        bv.require(set(by_depth) == set(DEPTHS), profile + ": invalid or duplicate cell depths")
+        for depth in DEPTHS:
+            cell = by_depth[depth]
+            expected_fixture = f"{profile}/d{depth}"
+            bv.require(cell.get("fixture") == expected_fixture,
+                       f"{profile} D={depth}: fixture path mismatch")
+            cell_path = output / expected_fixture / "manifest.json"
+            bv.require(cell_path.is_file(), "Missing cell manifest: " + str(cell_path))
+            cell_manifest = json.loads(cell_path.read_text())
+            for key, expected in (
+                    ("fixture_set", fixture_set), ("family_id", profile),
+                    ("profile", profile), ("depth", depth), ("hostname", bv.HOST),
+                    ("root_der_sha256", family.get("root_der_sha256")),
+                    ("server_key_sha256", family.get("server_key_sha256")),
+                    ("server_spki_sha256", family.get("server_spki_sha256"))):
+                bv.require(cell_manifest.get(key) == expected,
+                           f"{profile} D={depth}: {key} mismatch")
+            for key in ("root_der_sha256", "server_key_sha256", "server_spki_sha256"):
+                bv.require(cell.get(key) == family.get(key),
+                           f"{profile} D={depth}: family {key} mismatch")
+            bv.require(cell.get("certificate_sha256") ==
+                       cell_manifest.get("files_sha256", {}).get("server.pem"),
+                       f"{profile} D={depth}: certificate hash mismatch")
+            bv.require(cell.get("intermediate_count") == depth - 2,
+                       f"{profile} D={depth}: intermediate count mismatch")
+        root_hashes.add(family["root_der_sha256"])
+        spki_hashes.add(family["server_spki_sha256"])
+        cell_count += len(cells)
+        families[profile] = dict(family,
+            family_manifest_sha256=bv.sha(family_path))
+    bv.require(cell_count == 24, "Expected 24 X509 cells")
+    bv.require(len(root_hashes) == 6, "Expected 6 unique roots")
+    bv.require(len(spki_hashes) == 6, "Expected 6 unique server SPKIs")
+    matrix = {
+        "fixture_set": fixture_set,
+        "hostname": bv.HOST,
+        "profiles": list(bv.PROFILES),
+        "depths": list(DEPTHS),
+        "cell_count": cell_count,
+        "unique_root_count": len(root_hashes),
+        "unique_server_spki_count": len(spki_hashes),
+        "families": families,
+    }
+    with matrix_path.open("x") as stream:
+        stream.write(json.dumps(matrix, indent=2, sort_keys=True) + "\n")
+    return matrix_path
+
+
+def generate_matrix(output, fixture_set, image):
+    bv.require(fixture_set == FORMAL_FIXTURE_SET, "Unexpected fixture_set")
+    bv.require(not output.exists(), "Matrix output already exists: " + str(output))
+    for profile in bv.PROFILES:
+        generate_family(output, fixture_set, profile, image)
+    matrix_path = build_matrix_manifest(output, fixture_set)
+    print("Generated formal matrix:", matrix_path)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("plan", "generate"))
+    parser.add_argument("action", choices=("plan", "generate", "generate-matrix"))
     parser.add_argument("--profile", choices=bv.PROFILES)
     parser.add_argument("--fixture-set")
     parser.add_argument("--output", type=Path)
@@ -351,10 +432,15 @@ def main():
         print("D5=root->I1->I2->I3->server")
         return 0
 
-    bv.require(args.profile is not None, "generate requires --profile")
     bv.require(args.fixture_set, "generate requires --fixture-set")
     bv.require(args.output is not None, "generate requires --output")
 
+    if args.action == "generate-matrix":
+        bv.require(args.profile is None, "generate-matrix does not accept --profile")
+        generate_matrix(args.output, args.fixture_set, args.image)
+        return 0
+
+    bv.require(args.profile is not None, "generate requires --profile")
     generate_family(
         args.output,
         args.fixture_set,
