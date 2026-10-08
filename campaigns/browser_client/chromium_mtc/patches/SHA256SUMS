@@ -1,1 +1,13 @@
 1a73969cdd9b34c43f55fd2986e1ad0c8e14113fee165737ba60446c10ff7856  0011-chromium-plants06-private-anchor-policy.patch
+a6ee2dc1eac2575f3bf775a38474eed1fb752d35dda7255e16455fb8d015b516  boringssl/0001-Add-experimental-Plants-05-landmark-verification.patch
+8dd223147180579b1f458214156f97b3edfddb4be72e269bce95100f79011328  boringssl/0002-Update-MTC-verification-for-draft-06-encoding.patch
+902629636bac8ae994cfc1f5e3c6b4d5893904a0e185eafaf2943a0d81f81505  chromium/0001-Add-Plants-05-MTC-interoperability-test.patch
+8c11a99d8e615793ab1362b39304ef53b4d040dba798ce82cc987d50a63d9bc3  chromium/0002-Point-Chromium-at-Plants-05-BoringSSL.patch
+78e5973f37010a48b1915642db896e495190ffd619c3513fadf4100145dd4b6e  chromium/0003-Add-dynamic-Plants-05-browser-trust-configuration.patch
+2c4026c02596277a2bad8230a3d8eb435254b953a549f57e0b4e8a3b1395e3fd  chromium/0004-Add-trusted-subtree-loading-for-MTC-browser-tests.patch
+33165e8897b2e01aefbdf2875e6dafb7579ae5479d743a61989cb385e8dbbd67  chromium/0005-Update-BoringSSL-MTC-verification-for-draft-06.patch
+a7b800bc9ddeb715c6abb4980a2cfa2be8e4bdbd871b06954f0228cbe7ead137  chromium/0006-Propagate-verified-MTC-metadata-to-PageInfo.patch
+a357790dfa84011068d6c4a628a38d4363c71d946c719d9bd133e07cf5de1e54  chromium/0007-Accept-MTB2-MTC-lab-configuration.patch
+2b793352a375f44aa8bf47d4bf4218c1fcb705da2276156fb7abf655d4dcd8a1  chromium/0008-Propagate-MTC-verification-metadata-through-Mojo-to-.patch
+c8b20098b55a07ff5cad05c602a0b24c352477273f135be9ff42c1c8b23e8d70  chromium/0009-Add-Plants-06-RP-HTTP-trusted-subtrees.patch
+ca289d64085b44b57d8be4d7ccea578e86159a9d8bfb9b7d365972687eb4c863  chromium/0010-Add-Plants-06-standalone-trust-configuration-and-tests.patch
