@@ -1,0 +1,226 @@
+From 245d572cd707e9762a992f69bcddf7453074f4ff Mon Sep 17 00:00:00 2001
+From: Jose Antonio Montenegro Montes <jmmontes@uma.es>
+Date: Thu, 8 Oct 2026 17:50:28 +0200
+Subject: [PATCH] Classify experimental Plants-06 MTC anchors as private
+
+---
+ net/cert/internal/system_trust_store.cc       |   2 +-
+ net/cert/internal/trust_store_chrome.cc       |   9 ++
+ net/cert/internal/trust_store_chrome.h        |   5 +
+ .../internal/trust_store_chrome_unittest.cc   | 123 ++++++++++++++++++
+ 4 files changed, 138 insertions(+), 1 deletion(-)
+
+diff --git a/net/cert/internal/system_trust_store.cc b/net/cert/internal/system_trust_store.cc
+index ea8271f8ff..d09e9695e3 100644
+--- a/net/cert/internal/system_trust_store.cc
++++ b/net/cert/internal/system_trust_store.cc
+@@ -150,7 +150,7 @@ class SystemTrustStoreChromeWithUnOwnedSystemStore : public SystemTrustStore {
+   }
+ 
+   bool IsKnownMtcAnchor(const bssl::MTCAnchor* anchor) const override {
+-    return trust_store_chrome_->ContainsMTCAnchor(anchor);
++    return trust_store_chrome_->IsPublicMtcAnchor(anchor);
+   }
+ 
+   bool IsLocallyTrustedRoot(
+diff --git a/net/cert/internal/trust_store_chrome.cc b/net/cert/internal/trust_store_chrome.cc
+index 8f735451b2..713d294cbe 100644
+--- a/net/cert/internal/trust_store_chrome.cc
++++ b/net/cert/internal/trust_store_chrome.cc
+@@ -553,6 +553,9 @@ TrustStoreChrome::TrustStoreChrome(
+ 
+           if (!mtc_anchor->IsValid()) {
+             LOG(ERROR) << "Invalid MTC Plants-06 lab trust anchor";
++          } else if (GetMTCAnchorData(config->ca_id) != nullptr) {
++            LOG(ERROR)
++                << "MTC Plants-06 lab CA ID conflicts with public trust anchor";
+           } else if (!trust_store_.AddMTCTrustAnchor(std::move(mtc_anchor))) {
+             LOG(ERROR) << "Unable to install MTC Plants-06 lab trust anchor";
+           }
+@@ -688,6 +691,12 @@ bool TrustStoreChrome::ContainsMTCAnchor(const bssl::MTCAnchor* anchor) const {
+   return trust_store_.ContainsMTCAnchor(anchor);
+ }
+ 
++bool TrustStoreChrome::IsPublicMtcAnchor(
++    const bssl::MTCAnchor* anchor) const {
++  return trust_store_.ContainsMTCAnchor(anchor) &&
++         GetMTCAnchorData(anchor->ca_id()) != nullptr;
++}
++
+ std::optional<int32_t> TrustStoreChrome::GetCrsRootIdForMTC(
+     const bssl::MTCAnchor* mtc_anchor) const {
+   const MtcAnchorExtraData* anchor_data = GetMTCAnchorData(mtc_anchor->ca_id());
+diff --git a/net/cert/internal/trust_store_chrome.h b/net/cert/internal/trust_store_chrome.h
+index af7c029ce3..9a69b229a3 100644
+--- a/net/cert/internal/trust_store_chrome.h
++++ b/net/cert/internal/trust_store_chrome.h
+@@ -464,6 +464,11 @@ class NET_EXPORT TrustStoreChrome : public bssl::TrustStore {
+   bool Contains(const bssl::ParsedCertificate* cert) const;
+   bool ContainsMTCAnchor(const bssl::MTCAnchor* anchor) const;
+ 
++  // Returns true only for MTC anchors originating from the public
++  // Chrome Root Store signer set. Locally configured Plants-06 lab
++  // anchors must not be classified as publicly trusted anchors.
++  bool IsPublicMtcAnchor(const bssl::MTCAnchor* anchor) const;
++
+   // Returns the crs_root_id for `path`, or nullopt if unknown.
+   std::optional<int32_t> GetCrsRootIdForCert(
+       const bssl::CertPathBuilderResultPath* path) const;
+diff --git a/net/cert/internal/trust_store_chrome_unittest.cc b/net/cert/internal/trust_store_chrome_unittest.cc
+index 8af28d7998..13e574c7aa 100644
+--- a/net/cert/internal/trust_store_chrome_unittest.cc
++++ b/net/cert/internal/trust_store_chrome_unittest.cc
+@@ -8,13 +8,18 @@
+ #include "base/containers/fixed_flat_map.h"
+ #include "base/containers/span.h"
+ #include "base/containers/to_vector.h"
++#include "base/files/file_util.h"
++#include "base/files/scoped_temp_dir.h"
+ #include "base/strings/string_number_conversions.h"
++#include "base/strings/stringprintf.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/string_view_util.h"
++#include "base/test/scoped_command_line.h"
+ #include "base/test/scoped_feature_list.h"
+ #include "base/test/values_test_util.h"
+ #include "crypto/sha2.h"
+ #include "net/base/features.h"
++#include "net/base/switches.h"
+ #include "net/cert/root_store_proto_lite/root_store.pb.h"
+ #include "net/cert/root_store_proto_lite/signer_set.pb.h"
+ #include "net/cert/x509_certificate.h"
+@@ -994,6 +999,103 @@ MakeTestMtcAnchorAndLeaf(MtcLogBuilder& mtc_log_builder) {
+           std::move(mtc_leaf)};
+ }
+ 
++base::FilePath WriteStandalonePlants06LabConfig(
++    const base::ScopedTempDir& temp_dir,
++    std::string_view ca_id_hex) {
++  const base::FilePath path = temp_dir.GetPath().AppendASCII("trust.json");
++  const std::string ca_id(ca_id_hex);
++  const std::string config = base::StringPrintf(R"({
++    "format": "chromium-mtc-plants06-lab",
++    "version": 1,
++    "spec": "plants-06",
++    "source_format": "MTB2",
++    "ca_id_hex": "%s",
++    "signers": [
++      {"id_hex": "%s", "spki_der_base64": "AA=="},
++      {}
++    ],
++    "signature_algorithm": "mldsa44",
++    "min_serial_hex": "0x0",
++    "max_serial_hex": "0x0",
++    "log_number": 1,
++    "merkle_hash": "SHA-256",
++    "trust_mode": "standalone"
++  })", ca_id.c_str(), ca_id.c_str());
++  EXPECT_TRUE(base::WriteFile(path, config));
++  return path;
++}
++
++TEST(TrustStoreChromeTestNoFixture, Plants06LabAnchorIsPrivate) {
++  base::test::ScopedFeatureList feature_list;
++  feature_list.InitWithFeatures(
++      {features::kVerifyMTCs, features::kMtcPlants06Lab}, {});
++  base::ScopedTempDir temp_dir;
++  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
++  base::test::ScopedCommandLine scoped_command_line;
++  scoped_command_line.GetProcessCommandLine()->AppendSwitchPath(
++      switches::kMtcPlants06Trust,
++      WriteStandalonePlants06LabConfig(temp_dir, "2a"));
++
++  ChromeRootStoreData root_store_data = ChromeRootStoreData::CreateForTesting(
++      kChromeRootCertList, kEutlRootCertList, /*version=*/1);
++  TrustStoreChrome trust_store_chrome(&root_store_data, nullptr);
++
++  constexpr uint8_t kLabCaId[] = {0x2a};
++  auto lab_anchor = std::make_shared<const bssl::MTCAnchor>(
++      bssl::MTCAnchor::kPlants06, kLabCaId,
++      bssl::SignatureAlgorithm::kMldsa44,
++      x509_util::CreateCryptoBuffer(std::string_view("\0", 1)),
++      /*min_serial=*/0, /*max_serial=*/0,
++      std::vector<bssl::LogTrustedSubtrees>{{1, {}}});
++  ASSERT_TRUE(lab_anchor->IsValid());
++  EXPECT_TRUE(trust_store_chrome.ContainsMTCAnchor(lab_anchor.get()));
++  EXPECT_FALSE(trust_store_chrome.IsPublicMtcAnchor(lab_anchor.get()));
++  EXPECT_EQ(nullptr, trust_store_chrome.GetMTCAnchorData(kLabCaId));
++}
++
++TEST(TrustStoreChromeTestNoFixture,
++     Plants06LabCaIdCollisionPreservesPublicAnchor) {
++  base::test::ScopedFeatureList feature_list;
++  feature_list.InitWithFeatures(
++      {features::kVerifyMTCs, features::kMtcPlants06Lab}, {});
++  base::ScopedTempDir temp_dir;
++  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
++  base::test::ScopedCommandLine scoped_command_line;
++  scoped_command_line.GetProcessCommandLine()->AppendSwitchPath(
++      switches::kMtcPlants06Trust,
++      WriteStandalonePlants06LabConfig(temp_dir, "2a"));
++
++  constexpr uint8_t kPublicCaId[] = {0x2a};
++  chrome_root_store::SignerSet signer_set;
++  signer_set.mutable_timestamp()->set_seconds(1);
++  AddSignerSetIssuer(signer_set, kPublicCaId, "public operator", 42);
++  std::optional<ChromeRootStoreSignerSet> parsed_set =
++      ChromeRootStoreSignerSet::CreateFromProto(signer_set);
++  ASSERT_TRUE(parsed_set);
++  ChromeRootStoreData root_store_data = ChromeRootStoreData::CreateForTesting(
++      kChromeRootCertList, kEutlRootCertList, /*version=*/1);
++  root_store_data.SetSignerSet(*parsed_set);
++
++  MtcLogBuilder public_log(kPublicCaId, /*log_number=*/1);
++  auto [public_anchor, public_leaf] = MakeTestMtcAnchorAndLeaf(public_log);
++  TrustStoreChrome trust_store_chrome(&root_store_data, nullptr);
++
++  std::shared_ptr<const bssl::MTCAnchor> stored_anchor =
++      trust_store_chrome.GetTrustedMTCIssuerOf(public_leaf.get());
++  ASSERT_TRUE(stored_anchor);
++  EXPECT_EQ(bssl::MTCAnchor::kPlants04, stored_anchor->spec_version());
++  EXPECT_EQ(bssl::SignatureAlgorithm::kMldsa44,
++            stored_anchor->ca_signature_algorithm());
++  EXPECT_EQ("fakekey",
++            x509_util::CryptoBufferAsStringPiece(stored_anchor->ca_key()));
++  EXPECT_TRUE(trust_store_chrome.ContainsMTCAnchor(public_anchor.get()));
++  EXPECT_TRUE(trust_store_chrome.IsPublicMtcAnchor(public_anchor.get()));
++  const auto* public_data =
++      trust_store_chrome.GetMTCAnchorData(kPublicCaId);
++  ASSERT_TRUE(public_data);
++  EXPECT_EQ(42, public_data->signer_config.crs_root_id);
++}
++
+ TEST(TrustStoreChromeTestNoFixture, LoadMtcTrustAnchors) {
+   for (bool use_test_roots : {false, true}) {
+     SCOPED_TRACE(use_test_roots);
+@@ -1942,6 +2044,27 @@ class TrustStoreChromeMtcCosignerPolicyTest : public ::testing::Test {
+   base::test::ScopedFeatureList feature_list_;
+ };
+ 
++TEST_F(TrustStoreChromeMtcCosignerPolicyTest,
++       PublicMtcAnchorClassificationPreservesCosignerPolicy) {
++  std::unique_ptr<TrustStoreChrome> trust_store_chrome =
++      CreateTrustStoreChromeWithSignerSetProto();
++  std::shared_ptr<const bssl::ParsedCertificate> leaf =
++      CreateCa1LeafCert(now_);
++  ASSERT_TRUE(leaf);
++  std::shared_ptr<const bssl::MTCAnchor> anchor =
++      trust_store_chrome->GetTrustedMTCIssuerOf(leaf.get());
++  ASSERT_TRUE(anchor);
++
++  EXPECT_TRUE(trust_store_chrome->ContainsMTCAnchor(anchor.get()));
++  EXPECT_TRUE(trust_store_chrome->IsPublicMtcAnchor(anchor.get()));
++
++  NetLogWithSource net_log = NetLogWithSource::Make(NetLogSourceType::NONE);
++  EXPECT_TRUE(trust_store_chrome->IsMtcCosignerPolicySatisfied(
++      *leaf, now_, anchor.get(), {base::ToVector(kMirrorId2)}, net_log));
++  EXPECT_FALSE(trust_store_chrome->IsMtcCosignerPolicySatisfied(
++      *leaf, now_, anchor.get(), {base::ToVector(kMirrorId1)}, net_log));
++}
++
+ TEST_F(TrustStoreChromeMtcCosignerPolicyTest, SimpleTests) {
+   std::unique_ptr<TrustStoreChrome> trust_store_chrome =
+       CreateTrustStoreChromeWithSignerSetProto();
+-- 
+2.50.1 (Apple Git-155)
+
