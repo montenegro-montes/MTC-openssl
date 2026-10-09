@@ -771,6 +771,20 @@ lack the shared encrypted-handshake metrics; packet order is not a substitute
 for decryption. Legacy optional decomposition columns are retained, not newly
 inferred from encrypted packet direction.
 
+The shared handshake analyzer also reports the complete TLS `Certificate` and
+`CertificateVerify` messages by direction, the signature vector inside
+`CertificateVerify`, and authentication bytes. Authentication bytes are
+`Certificate_bytes + CertificateVerify_bytes`; they exclude TLS record and
+network framing. A TLS 1.3 `CertificateVerify` message is eight bytes larger
+than its signature vector (four-byte handshake header, two-byte
+`SignatureScheme`, and two-byte vector length). For MTC, `MTCProof` and its
+Merkle inclusion path are already contained in `Certificate` and are reported
+only as a decomposition, never added a second time. X.509 SCT-list bytes follow
+the same rule. Zero denotes an applicable observed absence, such as no SCT in
+an analyzable X.509 certificate; null denotes a non-applicable or unavailable
+component. The generated campaign README remains the authoritative
+field-by-field data dictionary.
+
 For a defensible comparison, match TLS version/KEM/cipher, authentication,
 signature profile, X.509 depth, MTC mode and network/capture conditions.
 Use the same `--profile` and `--key-establishment` for each browser and s_client

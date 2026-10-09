@@ -35,8 +35,9 @@ COMPARISON_DEFINITIONS = {
         'TCP SYN/SYN-ACK/ACK, TLS ClientHello through client Finished, and first HTTP request. '
         'Logical TLS bytes deduplicate retransmissions; wire bytes use frame.len. '
         'connection_handshake_wire_bytes counts the union of TCP and TLS frames once.',
-    'availability': 'Handshake analysis is fail-closed, requires decrypted Finished/Certificate and HTTP, '
-        'and reports analysis_status/error independently of functional browser PASS. '
+    'availability': 'Handshake analysis is fail-closed and requires decrypted Finished/Certificate. HTTP is optional: '
+        'when no unique request is identifiable, only tcp_syn_to_first_application_request_ms is null. '
+        'It reports analysis_status/error independently of functional browser PASS. '
         'Top-level handshake values require exactly one URL-linked connection; otherwise null. '
         'Per-connection values remain in connections and connection-metrics.csv. Latencies are never summed.',
     'tcp_wire_bytes': 'Whole captured stream frame.len including ACK-only frames, HTTP, closing frames '
@@ -94,9 +95,25 @@ def connection_decomposition(segments, isn, handshake_bytes):
     return values
 
 
-def handshake_metrics(rows, client_random):
+def credential_kind(browser_result):
+    """Map the authenticated browser scenario to the shared analyzer vocabulary."""
+    scenario = browser_result.get('measurement_scenario')
+    if scenario in ('x509', 'mtc-landmark', 'mtc-standalone'):
+        return scenario
+    if browser_result.get('name') == 'x509-positive':
+        return 'x509'
+    if str(browser_result.get('name', '')).startswith('mtc-'):
+        mode = browser_result.get('mtc_trust_mode')
+        bv.require(mode in ('landmark', 'standalone'),
+                   'MTC trust mode unavailable for PCAP authentication analysis')
+        return 'mtc-' + mode
+    raise ValueError('Unsupported browser scenario for PCAP authentication analysis')
+
+
+def handshake_metrics(rows, client_random, kind='auto'):
     """Use the s_client analyzer unchanged, then check browser correlation identity."""
-    values = ph.analyze_safe(rows)
+    values = ph.analyze_safe(rows, expect_client_certificate=False,
+                             credential_kind=kind)
     if values['client_random'] != client_random:
         values = dict.fromkeys(HANDSHAKE_FIELDS)
         values.update(analysis_status='ERROR', analysis_error='PCAP/NetLog client_random mismatch')
@@ -595,7 +612,8 @@ def analyze(output, capture, browser_result):
                          rejected_after_server_auth=all(rejected_after),
                          requested_tai_observed=all(item['requested_tai_observed'] for item in items),
                          classification=classifications[0] if len(set(classifications)) == 1 else 'other_correlated')
-            entry['handshake_metrics'] = handshake_metrics(pcap_rows, entry['client_random'])
+            entry['handshake_metrics'] = handshake_metrics(
+                pcap_rows, entry['client_random'], credential_kind(browser_result))
             if (entry['classification'] == 'url_linked' and len(items) == 1
                     and randoms[0] in completed and browser_result['pass']
                     and result['name'] in ('mtc-positive', 'x509-positive')):

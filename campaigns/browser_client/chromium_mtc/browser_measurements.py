@@ -25,7 +25,10 @@ METRICS = (*PRIMARY, *SECONDARY)
 DECOMPOSITION = tuple('url_linked_'+name for name in pcap.DECOMPOSITION)
 COMPARISON = pcap.COMPARISON_FIELDS
 COMPARISON_NUMERIC = tuple(key for key in COMPARISON
-                           if key not in ('tcp_stream', 'client_random', 'analysis_status', 'analysis_error'))
+                           if key not in ('authentication_components_status',
+                                          'authentication_components_error',
+                                          'tcp_stream', 'client_random',
+                                          'analysis_status', 'analysis_error'))
 CSV_OMITTED = {
     'url_linked_server_initial_flight_tcp_payload_bytes',
     'url_linked_client_post_server_flight_tls_payload_bytes',
@@ -81,7 +84,7 @@ HANDSHAKE_DEFINITIONS = {
     'tcp_handshake_ms': ('number', 'ms', 'First SYN to the unique ACK completing the TCP three-way handshake.'),
     'tcp_syn_to_clienthello_ms': ('number', 'ms', 'First SYN to the correlated TLS ClientHello.'),
     'tls_clienthello_to_client_finished_ms': ('number', 'ms', 'ClientHello to client Finished, using capture timestamps.'),
-    'tcp_syn_to_first_application_request_ms': ('number', 'ms', 'First SYN to the first identifiable HTTP request.'),
+    'tcp_syn_to_first_application_request_ms': ('number or null', 'ms', 'First SYN to the first identifiable HTTP request. Null when no unique HTTP request is identified; this does not invalidate other handshake metrics.'),
     'tls_client_handshake_bytes': ('integer', 'bytes', 'Logical complete TLS records sent by the client from ClientHello through client Finished, reassembled once.'),
     'tls_server_handshake_bytes': ('integer', 'bytes', 'Logical complete TLS records sent by the server in the same interval, reassembled once.'),
     'tls_handshake_bytes': ('integer', 'bytes', 'Sum of logical client and server handshake-record bytes.'),
@@ -95,6 +98,23 @@ HANDSHAKE_DEFINITIONS = {
     'tls_handshake_packets': ('integer', 'frames', 'Total payload frames in the analyzed TLS handshake interval.'),
     'tls_client_certificate_bytes': ('integer', 'bytes', 'Complete client TLS Certificate handshake message (four-byte handshake header included); zero when absent.'),
     'tls_server_certificate_bytes': ('integer', 'bytes', 'Complete server TLS Certificate handshake message (four-byte handshake header included); not CertificateVerify.'),
+    'tls_client_certificate_verify_bytes': ('integer', 'bytes', 'Complete client CertificateVerify handshake message. It is zero when client authentication is not used and equals the encoded signature-vector length plus eight bytes: four-byte handshake header, two-byte SignatureScheme and two-byte vector length.'),
+    'tls_server_certificate_verify_bytes': ('integer', 'bytes', 'Complete server CertificateVerify handshake message: signature bytes plus eight bytes of TLS 1.3 handshake and field framing.'),
+    'tls_client_certificate_verify_signature_bytes': ('integer', 'bytes', 'Client CertificateVerify signature vector contents only; excludes its two-byte length, SignatureScheme and handshake header. Zero when client authentication is not used.'),
+    'tls_server_certificate_verify_signature_bytes': ('integer', 'bytes', 'Server CertificateVerify signature vector contents only; excludes all TLS framing.'),
+    'tls_client_mtc_proof_bytes': ('integer or null', 'bytes', 'Complete canonical client MTCProof carried inside Certificate. Null when client MTC authentication is not applicable or the DER component is unavailable; it must not be added again to authentication bytes.'),
+    'tls_server_mtc_proof_bytes': ('integer or null', 'bytes', 'Complete canonical server MTCProof carried inside Certificate. Null outside MTC or when exact DER extraction is unavailable; it must not be added again to authentication bytes.'),
+    'tls_client_mtc_merkle_path_bytes': ('integer or null', 'bytes', 'Client MTCProof inclusion-path bytes after canonical Plants-06 parsing; included within MTCProof and Certificate.'),
+    'tls_server_mtc_merkle_path_bytes': ('integer or null', 'bytes', 'Server MTCProof inclusion-path bytes after canonical Plants-06 parsing; included within MTCProof and Certificate.'),
+    'tls_client_mtc_merkle_path_hashes': ('integer or null', 'hashes', 'Number of 32-byte hashes in the client MTC inclusion path.'),
+    'tls_server_mtc_merkle_path_hashes': ('integer or null', 'hashes', 'Number of 32-byte hashes in the server MTC inclusion path.'),
+    'tls_client_sct_bytes': ('integer or null', 'bytes', 'Exact client X.509 SCT-list extnValue bytes. Zero means an analyzable certificate with no SCT; null means not applicable or unavailable.'),
+    'tls_server_sct_bytes': ('integer or null', 'bytes', 'Exact server X.509 SCT-list extnValue bytes. Zero means the analyzed X.509 chain has no SCT; null means MTC or unavailable DER.'),
+    'tls_client_authentication_bytes': ('integer', 'bytes', 'Client Certificate bytes plus client CertificateVerify bytes. It excludes TLS record framing and does not add MTCProof or SCT separately because they are already inside Certificate.'),
+    'tls_server_authentication_bytes': ('integer', 'bytes', 'Server Certificate bytes plus server CertificateVerify bytes. It excludes TLS record framing and does not add MTCProof or SCT separately because they are already inside Certificate.'),
+    'tls_authentication_bytes': ('integer', 'bytes', 'Sum of client and server authentication bytes: Certificate plus CertificateVerify in each direction, without TLS record overhead.'),
+    'authentication_components_status': ('string', 'none', 'OK when requested credential-specific components were extracted; UNAVAILABLE when the handshake metrics remain valid but exact DER component extraction was unavailable.'),
+    'authentication_components_error': ('string', 'none', 'Reason credential-specific components are unavailable; blank on component status OK. It is never treated as a numeric metric.'),
     'tcp_stream': ('integer', 'none', 'tshark tcp.stream identifier for the uniquely correlated connection.'),
     'client_random': ('64 lowercase hex characters', 'none', 'TLS ClientHello random used to correlate PCAP, NetLog, and server evidence.'),
     'analysis_status': ('string', 'none', 'OK only when fail-closed handshake extraction succeeds; otherwise ERROR.'),

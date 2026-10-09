@@ -27,6 +27,22 @@ def connection(rows=None, random=shared.RANDOM, stream=0):
                 **{field: 0 for field in pcap.METRICS})
 
 
+def synthetic_certificate(proof=b'proof', sct=None):
+    validity = shared.p.core.seq(
+        shared.p.core.der(24, b'20200101000000Z'),
+        shared.p.core.der(24, b'20990101000000Z'))
+    fields = [shared.p.core.der(0xa0, shared.p.core.integer(2)),
+              shared.p.core.integer(1 << 48), shared.p.core.ALG,
+              shared.p.core.name('32473.101'), validity,
+              shared.p.core.seq(), shared.p.core.seq()]
+    if sct is not None:
+        extension = shared.p.core.seq(
+            shared.p.core.oid('1.3.6.1.4.1.11129.2.4.2'),
+            shared.p.core.der(4, sct))
+        fields.append(shared.p.core.der(0xa3, shared.p.core.seq(extension)))
+    return shared.p.core.certificate(shared.p.core.seq(*fields), proof)
+
+
 def client_hello(random=shared.RANDOM, requested_tai=None):
     hostname = pcap.bv.HOST.encode('ascii')
     name = b'\0' + len(hostname).to_bytes(2, 'big') + hostname
@@ -111,7 +127,7 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
             row.update({'ip.src': '127.0.0.1', 'ip.dst': '127.0.0.1', 'tcp.flags.fin': '0',
                         'tcp.flags.reset': '0', 'frame.encap_type': '0'})
             row['tcp.seq_raw'] = str(int(row['tcp.seq'])+(1000 if row['tcp.dstport'] == '4433' else 2000))
-        expected = shared.p.analyze_safe(rows)
+        expected = shared.p.analyze_safe(rows, credential_kind='x509')
         self.assertEqual(expected['analysis_status'], 'OK')
         def extraction(cmd, stdout, stderr, timeout):
             fields = [cmd[i+1] for i, value in enumerate(cmd) if value == '-e']
@@ -142,6 +158,64 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
         result = pcap.handshake_metrics(rows, shared.RANDOM)
         self.assertEqual(result, shared.p.analyze_safe(rows))
         self.assertEqual(tuple(result), shared.p.METRIC_FIELDS)
+
+    def test_browser_scenarios_select_the_exact_shared_credential_kind(self):
+        cases = (
+            (dict(name='x509-positive'), 'x509'),
+            (dict(name='mtc-positive', mtc_trust_mode='landmark'), 'mtc-landmark'),
+            (dict(name='mtc-positive', mtc_trust_mode='standalone'), 'mtc-standalone'),
+            (dict(name='mtc-positive', mtc_trust_mode='landmark',
+                  measurement_scenario='mtc-standalone'), 'mtc-standalone'),
+        )
+        for browser_result, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(pcap.credential_kind(browser_result), expected)
+                with patch.object(pcap.ph, 'analyze_safe', return_value={
+                        field: (shared.RANDOM if field == 'client_random' else None)
+                        for field in pcap.HANDSHAKE_FIELDS}) as analyze:
+                    pcap.handshake_metrics([], shared.RANDOM, expected)
+                analyze.assert_called_once_with(
+                    [], expect_client_certificate=False,
+                    credential_kind=expected)
+
+    def test_mtc_modes_extract_proof_and_merkle_path_through_browser_adapter(self):
+        for mode, signatures in (
+                ('landmark', ()),
+                ('standalone', (('32473.101', b'signature'),))):
+            with self.subTest(mode=mode):
+                proof = shared.p.core.proof(
+                    0, 16, (b'a' * 32, b'b' * 32), signatures)
+                der = synthetic_certificate(proof)
+                rows = shared.fixture()
+                rows[4]['tls.handshake.certificate'] = der.hex()
+                result = pcap.handshake_metrics(
+                    rows, shared.RANDOM, 'mtc-' + mode)
+                self.assertEqual(result['analysis_status'], 'OK')
+                self.assertEqual(result['tls_server_mtc_proof_bytes'], len(proof))
+                self.assertEqual(result['tls_server_mtc_merkle_path_bytes'], 64)
+                self.assertEqual(result['tls_server_mtc_merkle_path_hashes'], 2)
+                self.assertEqual(result['authentication_components_status'], 'OK')
+
+    def test_x509_sct_present_absent_and_certificate_verify_are_extracted(self):
+        for sct, expected in ((None, 0), (b'\x00\x03abc', 5)):
+            with self.subTest(sct=sct):
+                rows = shared.fixture()
+                rows[4]['tls.handshake.certificate'] = synthetic_certificate(
+                    sct=sct).hex()
+                result = pcap.handshake_metrics(rows, shared.RANDOM, 'x509')
+                self.assertEqual(result['tls_server_sct_bytes'], expected)
+                self.assertEqual(result['tls_server_certificate_verify_bytes'], 64)
+                self.assertEqual(
+                    result['tls_server_certificate_verify_signature_bytes'], 56)
+                self.assertEqual(result['tls_server_authentication_bytes'], 368)
+
+    def test_missing_structured_der_marks_only_components_unavailable(self):
+        result = pcap.handshake_metrics(
+            shared.fixture(), shared.RANDOM, 'mtc-landmark')
+        self.assertEqual(result['analysis_status'], 'OK')
+        self.assertEqual(result['authentication_components_status'], 'UNAVAILABLE')
+        self.assertIsNone(result['tls_server_mtc_proof_bytes'])
+        self.assertTrue(result['authentication_components_error'])
 
     def test_ack_with_clienthello_has_no_double_counted_wire_frame(self):
         rows = [row for row in shared.fixture() if row['frame.number'] != '3']
@@ -423,6 +497,30 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
         self.assertEqual(paired['metric_mtc_standalone_vs_x509_delta'], 5)
         self.assertEqual(
             paired['metric_mtc_landmark_vs_mtc_standalone_delta'], -2)
+
+    def test_authentication_status_fields_are_never_numeric_or_paired(self):
+        for field in ('authentication_components_status',
+                      'authentication_components_error'):
+            self.assertIn(field, measurements.COMPARISON)
+            self.assertNotIn(field, measurements.COMPARISON_NUMERIC)
+            self.assertNotIn(field, measurements.CSV_COMPARISON_NUMERIC)
+            self.assertFalse(any(name.startswith(field + '_')
+                                 for name in measurements.PAIR_FIELDS))
+
+    def test_authentication_data_dictionary_is_complete(self):
+        fields = [field for field in shared.p.METRIC_FIELDS
+                  if ('certificate_verify' in field or 'mtc_' in field
+                      or 'sct_' in field or 'authentication_' in field)]
+        for field in fields:
+            with self.subTest(field=field):
+                value_type, unit, definition = measurements.metric_definition(field)
+                self.assertTrue(value_type)
+                self.assertTrue(unit)
+                self.assertTrue(definition)
+        self.assertIn('eight bytes', measurements.metric_definition(
+            'tls_server_certificate_verify_bytes')[2])
+        self.assertIn('already inside Certificate', measurements.metric_definition(
+            'tls_server_authentication_bytes')[2])
 
     def test_scenario_credentials_never_fall_back_between_modes(self):
         credentials = {
