@@ -525,15 +525,26 @@ independently selectable with `--profile`; both paired cases use the same
 selected signature profile.
 
 The interactive wrapper asks for one KEM, one concrete X.509 depth and the
-number of pairs (1, 3 or 30), then invokes the same paired runner. Measurement
+number of rounds (1, 30 or 100), then invokes the same paired runner for the
+`ecdsa-p256` profile. Every round contains `x509`, `mtc-landmark` and
+`mtc-standalone`; their order follows a deterministic three-round rotation.
+Warmups use the same rotation and remain excluded from measured statistics.
+Measurement
 runs automatically use Chromium's `CACertificates` policy mode for the selected
 fixture root; they do not require installing that root in the macOS trust store
 and do not disable certificate verification. For example:
 
 ```sh
 bin/browser_client/mt-chromium-tests browser-measurements run \
-  --pairs 3 --key-establishment x25519-mlkem768 --depth 3
+  --warmups 5 --pairs 30 --key-establishment x25519-mlkem768 \
+  --profile ecdsa-p256 --depth 3
 ```
+
+`pairs.csv` retains the historical `_mtc`, `_x509` and `_delta` columns with
+their original landmark-minus-X.509 meaning. It also records explicit values
+and deltas for landmark versus X.509, standalone versus X.509, and landmark
+versus standalone. A round enters paired outputs and statistics only after all
+three scenarios pass.
 
 Each uses a fresh temporary Chromium profile, `--headless=new`, DOM dump and
 NetLog. A resolver rule maps only the canonical hostname to loopback without
@@ -566,6 +577,34 @@ certificate rejection evidence with no client Finished or accepted HTTP; an
 earlier negotiation failure or incomplete evidence remains INCONCLUSIVE.
 Headless suitability is established only by a successful real positive case,
 not by `--headless` being accepted on the command line.
+
+The explicit Plants-06 landmark/standalone functional checks are reuse-only and
+positive-only. Each requires an explicit fixture whose existing validation
+contains a successful `ecdsa-p256`, N=16 cell for the selected mode. Landmark
+uses `landmark-0000.pem` and its trusted subtrees; standalone uses
+`standalone-0000.pem` and an anchor without `landmark` or trusted subtrees:
+
+```sh
+bin/browser_client/mt-chromium-tests browser-validation \
+  run-prevalidated-mtc mtc-positive \
+  --mtc-trust-mode standalone \
+  --profile ecdsa-p256 \
+  --key-establishment x25519-mlkem768 \
+  --mtc-fixture artifacts/mtc/chromium-interop-plants06-20261006T070034Z-40065 \
+  --mtc-validation artifacts/mtc/chromium-interop-plants06-20261006T070034Z-40065-validation/validation.json
+```
+
+Select landmark with the same fixture/evidence pair by replacing the option
+with `--mtc-trust-mode landmark`. Read-only preflight accepts the same selector:
+
+```sh
+bin/browser_client/mt-chromium-tests preflight \
+  --profile ecdsa-p256 --mtc-trust-mode landmark
+```
+
+PASS still requires the authenticated TLS 1.3 server flight, client Finished,
+the expected requested/selected standalone CA identity, the selected hybrid
+group, HTTP 200 and the expected DOM. HTTP 200 alone is insufficient.
 
 Containers carry a per-run ownership label and use `--pull never`. Normal case
 cleanup terminates only the launched browser process group, removes its temporary
@@ -743,3 +782,24 @@ captured link layer: loopback and container Ethernet captures need equivalent
 encapsulation or an explicitly justified adjustment. Neither syntax nor
 synthetic tests validate real Chromium decryption, captures or runtime
 comparability.
+
+### Offline credential-size audit
+
+`credential_size_analysis.py` audits the existing formal X.509 fixture and the
+selected N=16 landmark/standalone fixtures for all five measurement profiles.
+It never generates credentials. The component partition uses the existing
+Plants-06 and DER parsers; anchors are reported as out-of-band provisioning
+bytes. An optional measurements CSV reconciles fixture DER with the complete
+TLS 1.3 Certificate handshake message, including its framing but excluding the
+separate CertificateVerify signature:
+
+```sh
+python3 campaigns/browser_client/chromium_mtc/credential_size_analysis.py \
+  --depth 3 \
+  --measurements artifacts/results/chromium-browser-measurements-RUN/measurements.csv
+```
+
+The command creates a new `artifacts/results/chromium-credential-size-*`
+directory containing `credential-components.csv`,
+`credential-components.json`, and `summary.md`. Missing or ambiguous capture
+evidence remains `unavailable`; it is never estimated.

@@ -5,7 +5,7 @@ import unittest
 import core
 from config_formats import (MCA2Authority, MCP2Checkpoint, MTB2Bundle,
                             encode_mtb2)
-from export_chromium_anchor import parse_landmark
+from export_chromium_anchor import parse_landmark, parse_standalone
 
 
 def bundle(*, log=2, landmark=(1 << 32), signatures=None):
@@ -48,6 +48,19 @@ class TypedChromiumAnchorTests(unittest.TestCase):
         anchor = parse_landmark(bundle(signatures=(
             ('32473.101', b'not-valid'), ('32473.201', b'not-valid'))))
         self.assertGreater(anchor['landmark']['checkpoint_signatures_bytes'], 0)
+
+    def test_standalone_omits_landmark_and_trusted_subtrees(self):
+        anchor = parse_standalone(bundle())
+        self.assertEqual(anchor['trust_mode'], 'standalone')
+        self.assertNotIn('landmark', anchor)
+        self.assertNotIn('trusted_subtrees', anchor)
+        self.assertEqual(anchor['ca_id'], '32473.101')
+        self.assertEqual(len(anchor['signers']), 2)
+
+    def test_standalone_does_not_require_signaling_landmark(self):
+        anchor = parse_standalone(bundle(landmark=None))
+        self.assertEqual(anchor['trust_mode'], 'standalone')
+        self.assertNotIn('landmark', anchor)
 
 
 if __name__ == '__main__':

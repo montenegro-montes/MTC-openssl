@@ -73,11 +73,29 @@ class AnchorPersistenceTests(unittest.TestCase):
         export.assert_not_called()
         self.assertEqual(bv.read(self.canonical), wrong)
 
+    def test_standalone_uses_separate_canonical_anchor(self):
+        self.mtc['mode'] = 'standalone'
+        standalone = self.fixture.with_name(
+            self.fixture.name + '-chromium-anchor-standalone.json')
+        result, export = self.choose()
+        self.assertEqual(result['anchor'], str(standalone.resolve()))
+        self.assertEqual(bv.read(standalone), self.expected)
+        self.assertIn('--trust-mode', export.call_args.args[0])
+        self.assertIn('standalone', export.call_args.args[0])
+        self.assertFalse(self.canonical.exists())
+
     def test_measurements_discovers_canonical_after_result_directory_is_removed(self):
         self.choose()
         shutil.rmtree(self.output)
-        with patch.object(measurements.bv, 'discover', return_value=(self.mtc.copy(), [])), \
-             patch.object(measurements.bv, 'expected_anchor', return_value=self.expected):
+        selected = dict(self.mtc, anchor=str(self.canonical.resolve()),
+                        anchor_sha256=bv.sha(self.canonical),
+                        anchor_origin='reused')
+        validated = dict(self.mtc, mode='landmark')
+        with patch.object(measurements.bv, 'preselect_mtc_fixture',
+                          return_value=(selected, [])), \
+             patch.object(measurements.bv, 'validate_mtc',
+                          return_value=validated), \
+             patch.object(measurements.bv, 'DockerOpenSSLBatch'):
             selected = measurements.existing_mtc(self.repo, 'unused-image', 'ecdsa-p256')
         self.assertEqual(selected['anchor'], str(self.canonical.resolve()))
 
@@ -85,9 +103,12 @@ class AnchorPersistenceTests(unittest.TestCase):
         decoy = self.repo / 'artifacts/results/old-run/chromium-anchor.json'
         decoy.parent.mkdir(parents=True)
         bv.write(decoy, self.expected)
-        with patch.object(measurements.bv, 'discover', return_value=(self.mtc.copy(), [])), \
-             patch.object(measurements.bv, 'expected_anchor', return_value=self.expected):
-            with self.assertRaisesRegex(ValueError, 'missing exact reusable'):
+        local = dict(self.mtc, validation_sha256='a'*64, mode='landmark')
+        with patch.object(measurements.bv, 'prevalidated_mtc',
+                          return_value=local), \
+             patch.object(measurements.bv, 'expected_anchor',
+                          return_value=self.expected):
+            with self.assertRaisesRegex(ValueError, 'missing valid MTC'):
                 measurements.existing_mtc(self.repo, 'unused-image', 'ecdsa-p256')
 
 

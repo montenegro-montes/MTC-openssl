@@ -30,6 +30,10 @@ class PrevalidatedMtcTests(unittest.TestCase):
         tbs = c.seq(c.der(0xa0,c.integer(2)), c.integer(1<<48), c.ALG,
                     c.name('32473.101'), validity, c.seq(), c.seq())
         (self.directory/'landmark-0000.pem').write_bytes(c.pem(c.seq(tbs,c.ALG,c.der(3,b'\0'))))
+        proof = (c.vec(b'') + c.uint(0, 6) + c.uint(16, 6)
+                 + c.vec(b'\0' * 32) + c.vec(b'signature', 3))
+        (self.directory/'standalone-0000.pem').write_bytes(
+            c.pem(c.seq(tbs, c.ALG, c.der(3, b'\0'+proof))))
         (self.directory/'trust.bin').write_bytes(b'test-trust')
         self.save(self.directory/'fixture-sha256.json', bv.hashes(self.directory))
         self.validation = self.root/'validation.json'
@@ -39,11 +43,14 @@ class PrevalidatedMtcTests(unittest.TestCase):
                                          success=True, fixture_hash=bv.sha(self.directory/'manifest.json'),
                                          image_id=self.image, draft=c.DRAFT)])
         self.save(self.validation, self.evidence)
-        self.enterContext(patch.object(bv, 'parse_landmark', return_value=dict(
+        anchor = dict(
             ca_id='32473.101', log_number=1,
             min_serial=1<<48, max_serial=(1<<48)+15,
             landmark=dict(tree_size=16, requested_trust_anchor_id='32473.101.2.1.1',
-                          selected_trust_anchor_id='32473.101.1.1.1'))))
+                          selected_trust_anchor_id='32473.101.1.1.1'))
+        self.enterContext(patch.object(bv, 'parse_landmark', return_value=anchor))
+        self.enterContext(patch.object(bv, 'parse_standalone', return_value={
+            key: value for key, value in anchor.items() if key != 'landmark'}))
         self.crypto = self.enterContext(patch.object(bv, 'validate_mtc', side_effect=AssertionError('crypto called')))
         self.discovery = self.enterContext(patch.object(bv, 'discover', side_effect=AssertionError('discovery called')))
         self.enterContext(patch.object(bv, 'docker_openssl', side_effect=AssertionError('Docker called')))
@@ -61,6 +68,32 @@ class PrevalidatedMtcTests(unittest.TestCase):
         self.assertEqual(result['validation_sha256'], bv.sha(self.validation))
         self.crypto.assert_not_called()
         self.discovery.assert_not_called()
+
+    def test_explicit_landmark_selects_landmark_credential(self):
+        result = bv.prevalidated_mtc(
+            self.fixture, self.validation, trust_mode='landmark')
+        self.assertEqual(result['mode'], 'landmark')
+        self.assertEqual(Path(result['cert']).name, 'landmark-0000.pem')
+        self.assertEqual(result['requested_tai'], '32473.101.2.1.1')
+        self.assertEqual(result['selected_tai'], '32473.101.1.1.1')
+
+    def test_invalid_trust_mode_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'Unsupported MTC trust mode'):
+            bv.prevalidated_mtc(
+                self.fixture, self.validation, trust_mode='invalid')
+
+    def test_landmark_rejects_incompatible_trust_anchor(self):
+        incompatible = dict(
+            ca_id='32473.999', log_number=1,
+            min_serial=1 << 48, max_serial=(1 << 48) + 15,
+            landmark=dict(
+                tree_size=16,
+                requested_trust_anchor_id='32473.999.2.1.1',
+                selected_trust_anchor_id='32473.999.1.1.1'))
+        with patch.object(bv, 'parse_landmark', return_value=incompatible):
+            with self.assertRaisesRegex(ValueError, 'trust identity mismatch'):
+                bv.prevalidated_mtc(
+                    self.fixture, self.validation, trust_mode='landmark')
 
     def test_missing_validation(self):
         self.validation.unlink()
@@ -93,13 +126,34 @@ class PrevalidatedMtcTests(unittest.TestCase):
         self.assertEqual(anchor.call_args.args[0]['origin'], 'reused-prevalidated')
 
     def test_standalone_uses_existing_selection(self):
-        with patch.object(bv, 'select_or_generate', side_effect=RuntimeError('existing-selection')) as select:
-            with self.assertRaisesRegex(RuntimeError, 'existing-selection'):
-                bv.prepare_credentials(self.root, self.root, 'image')
-            self.assertEqual(select.call_count, 1)
-            validator = select.call_args.args[1]
-            with self.assertRaisesRegex(AssertionError, 'crypto called'):
-                validator(self.fixture)
+        self.evidence['cells'].append(dict(
+            profile=bv.PROFILE, tree_size=16, mtc_mode='standalone',
+            success=True, fixture_hash=bv.sha(self.directory/'manifest.json'),
+            image_id=self.image, draft=bv.core.DRAFT))
+        self.evidence['fixture_hashes'] = bv.hashes(self.fixture)
+        self.save(self.validation, self.evidence)
+        result = bv.prevalidated_mtc(
+            self.fixture, self.validation, trust_mode='standalone')
+        self.assertEqual(result['mode'], 'standalone')
+        self.assertEqual(Path(result['cert']).name, 'standalone-0000.pem')
+        self.assertEqual(result['requested_tai'], '32473.101.2.1.0')
+        self.assertEqual(result['selected_tai'], '32473.101')
+
+    def test_requested_tai_matching_is_exact_not_a_ca_id_prefix(self):
+        requests = [{'trust_anchor_ids': '32473.101.2.1.0'}]
+        self.assertTrue(bv.requested_tai_observed(
+            requests, '32473.101.2.1.0'))
+        self.assertFalse(bv.requested_tai_observed(requests, '32473.101'))
+
+    def test_standalone_rejects_landmark_only_validation(self):
+        with self.assertRaisesRegex(ValueError, 'standalone cell'):
+            bv.prevalidated_mtc(
+                self.fixture, self.validation, trust_mode='standalone')
+
+    def test_standalone_prepare_is_reuse_only(self):
+        with self.assertRaisesRegex(ValueError, 'reuse-only'):
+            bv.prepare_credentials(
+                self.root, self.root, 'image', mtc_trust_mode='standalone')
 
 
 if __name__ == '__main__':

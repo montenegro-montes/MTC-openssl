@@ -42,7 +42,8 @@ class CredentialPreselectionTests(unittest.TestCase):
             (fixture/'server.pem').write_bytes(b'corrupt')
         return fixture
 
-    def mtc(self, name, profile='ecdsa-p256', anchor=None):
+    def mtc(self, name, profile='ecdsa-p256', anchor=None,
+            trust_mode='landmark'):
         fixture = self.repo/'artifacts/mtc'/name
         fixture.mkdir()
         bv.write(fixture/'manifest.json', dict(
@@ -51,7 +52,10 @@ class CredentialPreselectionTests(unittest.TestCase):
         evidence = fixture.with_name(fixture.name+'-validation')/'validation.json'
         evidence.parent.mkdir()
         bv.write(evidence, {'passed': True})
-        canonical = fixture.with_name(fixture.name+'-chromium-anchor.json')
+        suffix = ('-chromium-anchor-standalone.json'
+                  if trust_mode == 'standalone'
+                  else '-chromium-anchor.json')
+        canonical = fixture.with_name(fixture.name+suffix)
         if anchor is not None:
             bv.write(canonical, anchor)
         return fixture, evidence
@@ -127,9 +131,10 @@ class CredentialPreselectionTests(unittest.TestCase):
         fixtures = [self.mtc('z-later-looking', anchor=expected),
                     self.mtc('a-earlier-looking', anchor=expected)]
 
-        def local(fixture, validation, profile):
+        def local(fixture, validation, profile, trust_mode='landmark'):
             return dict(fixture=str(Path(fixture).resolve()), trust='trust.bin',
-                        validation_sha256=bv.sha(validation), profile=profile)
+                        validation_sha256=bv.sha(validation), profile=profile,
+                        mode=trust_mode)
 
         with patch.object(bv, 'prevalidated_mtc', side_effect=local), \
              patch.object(bv, 'expected_anchor', return_value=expected), \
@@ -143,15 +148,134 @@ class CredentialPreselectionTests(unittest.TestCase):
     def test_missing_or_incompatible_canonical_anchor_is_rejected(self):
         self.mtc('missing-anchor')
         self.mtc('wrong-anchor', anchor={'wrong': True})
-        local = lambda fixture, validation, profile: dict(
+        local = lambda fixture, validation, profile, trust_mode='landmark': dict(
             fixture=str(Path(fixture).resolve()), trust='trust.bin',
-            validation_sha256=bv.sha(validation), profile=profile)
+            validation_sha256=bv.sha(validation), profile=profile,
+            mode=trust_mode)
         with patch.object(bv, 'prevalidated_mtc', side_effect=local), \
              patch.object(bv, 'expected_anchor', return_value={'anchor': 'exact'}), \
              patch.object(bv, 'docker_openssl') as docker:
             with self.assertRaisesRegex(ValueError, 'No locally valid MTC fixture'):
                 bv.preselect_mtc_fixture(self.repo, 'ecdsa-p256')
         docker.assert_not_called()
+
+    def test_landmark_and_standalone_use_distinct_validated_anchors(self):
+        expected = {'anchor': 'exact'}
+        fixture, evidence = self.mtc(
+            'both-modes', anchor=expected, trust_mode='standalone')
+        bv.write(fixture.with_name(fixture.name+'-chromium-anchor.json'), expected)
+
+        def local(path, validation, profile, trust_mode='landmark'):
+            self.assertEqual(Path(path), fixture)
+            self.assertEqual(Path(validation), evidence)
+            return dict(fixture=str(fixture.resolve()), trust='trust.bin',
+                        validation_sha256=bv.sha(validation), profile=profile,
+                        mode=trust_mode)
+
+        with patch.object(bv, 'prevalidated_mtc', side_effect=local), \
+             patch.object(bv, 'expected_anchor', return_value=expected):
+            landmark, _ = bv.preselect_mtc_fixture(
+                self.repo, 'ecdsa-p256', 'landmark')
+            standalone, _ = bv.preselect_mtc_fixture(
+                self.repo, 'ecdsa-p256', 'standalone')
+        self.assertEqual(landmark['mode'], 'landmark')
+        self.assertEqual(standalone['mode'], 'standalone')
+        self.assertTrue(landmark['anchor'].endswith('-chromium-anchor.json'))
+        self.assertTrue(standalone['anchor'].endswith(
+            '-chromium-anchor-standalone.json'))
+
+    def test_setup_selection_allows_only_a_missing_canonical_anchor(self):
+        expected = {'anchor': 'exact'}
+        fixture, _ = self.mtc('standalone-needs-anchor')
+
+        def local(path, validation, profile, trust_mode='landmark'):
+            return dict(fixture=str(Path(path).resolve()), trust='trust.bin',
+                        validation_sha256=bv.sha(validation), profile=profile,
+                        mode=trust_mode)
+
+        with patch.object(bv, 'prevalidated_mtc', side_effect=local), \
+             patch.object(bv, 'expected_anchor', return_value=expected):
+            selected, audit = bv.preselect_mtc_fixture(
+                self.repo, 'ecdsa-p256', 'standalone',
+                require_anchor=False)
+        self.assertEqual(Path(selected['fixture']), fixture.resolve())
+        self.assertNotIn('anchor', selected)
+        self.assertEqual(audit[0]['anchor_status'], 'MISSING')
+
+    def test_setup_selection_rejects_conflicting_anchor(self):
+        self.mtc('standalone-conflict', anchor={'wrong': True},
+                 trust_mode='standalone')
+        local = lambda fixture, validation, profile, trust_mode='landmark': dict(
+            fixture=str(Path(fixture).resolve()), trust='trust.bin',
+            validation_sha256=bv.sha(validation), profile=profile,
+            mode=trust_mode)
+        with patch.object(bv, 'prevalidated_mtc', side_effect=local), \
+             patch.object(bv, 'expected_anchor', return_value={'anchor': 'exact'}):
+            with self.assertRaisesRegex(
+                    ValueError, 'content/provenance mismatch'):
+                bv.preselect_mtc_fixture(
+                    self.repo, 'ecdsa-p256', 'standalone',
+                    require_anchor=False)
+
+    def test_measurement_selection_still_requires_canonical_anchor(self):
+        self.mtc('standalone-no-anchor')
+        local = lambda fixture, validation, profile, trust_mode='landmark': dict(
+            fixture=str(Path(fixture).resolve()), trust='trust.bin',
+            validation_sha256=bv.sha(validation), profile=profile,
+            mode=trust_mode)
+        with patch.object(bv, 'prevalidated_mtc', side_effect=local), \
+             patch.object(bv, 'expected_anchor', return_value={'anchor': 'exact'}):
+            with self.assertRaisesRegex(ValueError,
+                                        'Missing canonical Chromium MTC anchor'):
+                bv.preselect_mtc_fixture(
+                    self.repo, 'ecdsa-p256', 'standalone')
+
+    def test_optimized_setup_allows_standalone_without_explicit_fixture(self):
+        self.assertTrue(bv.standalone_operation_allowed(
+            'credentials', None, None, True))
+        self.assertFalse(bv.standalone_operation_allowed(
+            'run', 'mtc-positive', None, False))
+        self.assertFalse(bv.standalone_operation_allowed(
+            'run', 'mtc-bad-merkle', self.repo/'fixture', False))
+
+    def test_optimized_setup_exports_only_missing_standalone_anchor(self):
+        output = self.repo/'output'; output.mkdir()
+        fixture = self.repo/'artifacts/mtc/standalone'; fixture.mkdir()
+        validation = fixture.with_name(
+            fixture.name+'-validation')/'validation.json'
+        validation.parent.mkdir(); bv.write(validation, {'passed': True})
+        mtc = dict(fixture=str(fixture),
+                   validation_evidence=str(validation), mode='standalone',
+                   ca_id='32473.101', requested_tai='32473.101.2.1.0',
+                   selected_tai='32473.101')
+        root = self.repo/'root.pem'; root.write_text('root')
+        x509 = dict(root=str(root), root_sha256=bv.sha(root),
+                    fixture=str(self.repo/'x509'))
+        anchor = self.repo/'canonical-standalone.json'
+        anchor.write_text('{}')
+        anchor_data = dict(anchor=str(anchor), anchor_sha256=bv.sha(anchor),
+                           anchor_origin='generated')
+        with patch.object(bv, 'preselect_mtc_fixture',
+                          return_value=(mtc.copy(), [])) as select, \
+             patch.object(bv, 'prevalidated_mtc',
+                          return_value=mtc.copy()), \
+             patch.object(bv, 'choose_anchor',
+                          return_value=anchor_data) as choose, \
+             patch.object(bv, 'generate_mtc') as generate, \
+             patch.object(bv, 'precheck_formal_x509_fixture',
+                          return_value=self.repo/'x509'), \
+             patch.object(bv, 'validate_x509', return_value=x509), \
+             patch.object(bv, 'root_trust', return_value={'status': 'TEST'}):
+            result = bv.prepare_credentials(
+                self.repo, output, 'image', profile='ecdsa-p384', depth=2,
+                x509_fixture_set='chromium-x509-depth-matrix-v1',
+                optimized_all_profiles=True,
+                mtc_trust_mode='standalone')
+        select.assert_called_once_with(
+            self.repo, 'ecdsa-p384', 'standalone', require_anchor=False)
+        choose.assert_called_once()
+        generate.assert_not_called()
+        self.assertEqual(result['mtc']['anchor'], str(anchor))
 
     def test_selected_mtc_crypto_failure_has_no_fallback(self):
         output = self.repo/'output'; output.mkdir()

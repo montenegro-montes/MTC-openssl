@@ -28,6 +28,99 @@ menu_browser_mode() {
  done
 }
 
+menu_mtc_case() {
+ local browser_case=$1 selection trust_mode
+ shift
+ local extra_args=("$@")
+ if [[ " ${extra_args[*]} " == *' --mtc-trusted-subtrees-url '* ]]; then
+  echo 'RP HTTP supplies landmark trusted subtrees; standalone is not supported by this workflow.'
+  menu_browser_mode "$browser_case" --mtc-trust-mode landmark "${extra_args[@]}"
+  return 0
+ fi
+ while true; do
+  printf '\nMTC trust mode\n1. Landmark (default)\n2. Standalone\n3. Back\n'
+  read -r -p 'Select [1-3, Enter=1]: ' selection || return 0
+  case "${selection:-1}" in
+   1) trust_mode=landmark;;
+   2) trust_mode=standalone;;
+   3) return 0;;
+   *) echo 'Invalid option.'; continue;;
+  esac
+  if [[ "$trust_mode" == standalone && "$browser_case" == mtc-bad-merkle ]]; then
+   echo 'Standalone mtc-bad-merkle is not implemented: this case mutates landmark trusted subtrees.'
+   echo 'No command was executed.'
+   return 0
+  fi
+  menu_browser_mode "$browser_case" --mtc-trust-mode "$trust_mode" "${extra_args[@]}"
+  return 0
+ done
+}
+
+menu_validation_all() {
+ local selection
+ printf '\nMTC trust mode for Run all\n1. Landmark (default)\n2. Standalone\n3. Both modes\n4. Back\n'
+ read -r -p 'Select [1-4, Enter=1]: ' selection || return 0
+ case "${selection:-1}" in
+  1) menu_invoke confirm browser-validation run all --mtc-trust-mode landmark;;
+  2|3)
+   echo 'Run all is currently complete only for landmark.'
+   echo 'Standalone mtc-bad-merkle has no trusted-subtree anchor to mutate; no incomplete Run all was started.';;
+  4) return 0;;
+  *) echo 'Invalid option.';;
+ esac
+}
+
+menu_measurement_summary() {
+ local kem=$1 depth=$2 pairs=$3 warmups=$4
+ printf '\nProfiles: ALL (5)\n'
+ printf 'Scenarios: 3\n'
+ printf 'Key establishment: %s\n' "$kem"
+ printf 'X.509 depth: %s\n' "$depth"
+ printf 'Measured pairs per profile: %s\n' "$pairs"
+ printf 'Warmup pairs per profile: %s\n' "$warmups"
+ printf 'Total measured runs: %s × %s × %s = %s\n\n' \
+  5 3 "$pairs" "$((5*3*pairs))"
+ printf 'Total warmup runs: %s × %s × %s = %s\n' \
+  5 3 "$warmups" "$((5*3*warmups))"
+ printf 'Total TLS runs: %s\n\n' "$((5*3*(pairs+warmups)))"
+}
+
+menu_measurements_run_prepared() {
+ local depth=$1 answer result
+ shift
+ printf 'Preparation command: '; printf '%q ' \
+  "$REPO/bin/browser_client/mt-chromium-setup" browser-validation credentials \
+  --all-profiles --depth "$depth"; printf '\n'
+ printf 'Campaign command: '; printf '%q ' "$0" browser-measurements "$@"; printf '\n'
+ read -r -p 'Prepare credentials, then run the campaign? [y/N] ' answer || return 0
+ case "$answer" in y|Y) ;; *) echo 'Cancelled.'; return 0;; esac
+ if (cd "$MENU_CALL_DIR" && "$REPO/bin/browser_client/mt-chromium-setup" \
+      browser-validation credentials --all-profiles --depth "$depth"); then
+  :
+ else
+  result=$?
+  printf 'Credential preparation failed with status %s; campaign not started.\n' "$result"
+  return "$result"
+ fi
+ (cd "$MENU_CALL_DIR" && "$0" browser-measurements "$@")
+}
+
+menu_preflight() {
+ local selection
+ while true; do
+  printf '\nPreflight\n1. Development (read-only)\n2. Development + capture permissions check\n3. Strict (read-only)\n4. Strict + capture permissions check\n0. Back\n'
+  read -r -p 'Select an option: ' selection || return 0
+  case "$selection" in
+   1) menu_invoke readonly preflight; return 0;;
+   2) menu_invoke readonly preflight --check-capture; return 0;;
+   3) menu_invoke readonly preflight --strict; return 0;;
+   4) menu_invoke readonly preflight --strict --check-capture; return 0;;
+   0) return 0;;
+   *) echo 'Invalid option.';;
+  esac
+ done
+}
+
 menu_submenu() {
  local section=$1 title selection index mode root_path
  local labels=() commands=() prefix=() args=()
@@ -61,7 +154,7 @@ menu_submenu() {
    commands=(plan requirements status 'run mtc-positive' 'run mtc-no-trust' 'run mtc-bad-merkle' 'run mtc-bad-serial' 'run x509-positive' 'run all');;
   measurements)
    title='Browser measurements'; prefix=(browser-measurements)
-   labels=('Status' 'Run paired comparison')
+   labels=('Status' 'Run paired comparison (ALL profiles)')
    commands=(readiness run);;
  esac
  while true; do
@@ -76,8 +169,14 @@ menu_submenu() {
   [[ "$selection" =~ ^[1-9][0-9]?$ ]] || { echo 'Invalid option.'; continue; }
   (( selection <= ${#labels[@]} )) || { echo 'Invalid option.'; continue; }
   read -r -a args <<< "${commands[selection-1]}"
-  if [[ "$section" == validation && "${args[0]}" == run && "${args[1]}" != all ]]; then
-   menu_browser_mode "${args[@]:1}"
+  if [[ "$section" == validation && "${args[0]}" == run ]]; then
+   if [[ "${args[1]}" == all ]]; then
+    menu_validation_all
+   elif [[ "${args[1]}" == x509-positive ]]; then
+    menu_browser_mode "${args[@]:1}"
+   else
+    menu_mtc_case "${args[@]:1}"
+   fi
    continue
   fi
   if [[ "$section" == trust ]]; then
@@ -103,15 +202,19 @@ menu_submenu() {
     *) echo 'Invalid X.509-depth option.'; continue;;
    esac
    args+=(--key-establishment "$kem" --depth "$depth")
-   printf 'Number of pairs:\n1. 1\n2. 3 (default)\n3. 30\n'
+   printf 'Number of pairs:\n1. 1\n2. 30 (default)\n3. 100\n'
    read -r -p 'Select [1-3, Enter=2]: ' pairs_choice || return 0
    case "${pairs_choice:-2}" in
     1) pairs=1;;
-    2) pairs=3;;
-    3) pairs=30;;
+    2) pairs=30;;
+    3) pairs=100;;
     *) echo 'Invalid number-of-pairs option.'; continue;;
    esac
-   args+=(--pairs "$pairs" --all-profiles)
+   if (( pairs == 1 )); then warmups=1; else warmups=5; fi
+   menu_measurement_summary "$kem" "$depth" "$pairs" "$warmups"
+   args+=(--pairs "$pairs" --warmups "$warmups" --all-profiles)
+   menu_measurements_run_prepared "$depth" "${args[@]}"
+   continue
   fi
   if [[ "${args[0]}" == sandbox-setup || "${args[0]}" == sandbox-status ]]; then
    prefix=()
@@ -125,6 +228,35 @@ menu_submenu() {
 }
 
 selected_mtc_arguments() {
+ local trust_mode=landmark profile=ecdsa-p256 argument previous selected fixture validation
+ previous=''
+ for argument in "$@"; do
+  case "$argument" in
+   --mtc-trust-mode=*) trust_mode=${argument#*=};;
+   --profile=*) profile=${argument#*=};;
+  esac
+  [[ "$previous" != --mtc-trust-mode ]] || trust_mode=$argument
+  [[ "$previous" != --profile ]] || profile=$argument
+  previous=$argument
+ done
+ if [[ "$trust_mode" == standalone ]]; then
+  selected=$(python3 -B - "$REPO" "$profile" <<'PY'
+import sys
+from pathlib import Path
+repo, profile = Path(sys.argv[1]), sys.argv[2]
+sys.path.insert(0, str(repo/'campaigns/browser_client/chromium_mtc'))
+import browser_validation as bv
+selected, _ = bv.preselect_mtc_fixture(repo, profile, 'standalone')
+print(selected['fixture']+'\t'+selected['validation_evidence'])
+PY
+  ) || fail "No compatible prevalidated standalone fixture for profile $profile. Prepare it with: bin/browser_client/mt-chromium-setup browser-validation credentials --profile $profile --mtc-trust-mode standalone"
+  fixture=${selected%%$'\t'*}
+  validation=${selected#*$'\t'}
+  [[ "$fixture" != "$selected" && -d "$fixture" && -f "$validation" ]] ||
+   fail 'Standalone fixture selection returned incomplete evidence.'
+  MTC_ARGUMENTS=(--mtc-fixture "$fixture" --mtc-validation "$validation")
+  return 0
+ fi
  [[ -f "$STATE/paths.env" ]] || fail 'Required setup: mt-chromium-setup init, then run 20 and run 30.'
  source "$STATE/paths.env"
  [[ -n "${FIXTURE:-}" && -d "$FIXTURE" && -n "${VALIDATION:-}" && -f "$VALIDATION" ]] ||

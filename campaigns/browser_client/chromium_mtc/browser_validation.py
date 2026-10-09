@@ -30,7 +30,7 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 sys.path.insert(0, str(HERE))
-from export_chromium_anchor import parse_landmark, core
+from export_chromium_anchor import parse_landmark, parse_standalone, core
 from config_formats import decode_mtb2
 
 HOST = 'server.mtc.example.com'
@@ -406,7 +406,10 @@ def validate_mtc(fixture, profile=PROFILE, image='mt-tls-mtc:local', *,
                 cert_sha256=sha(cert_path), key_sha256=sha(key_path), trust_sha256=sha(directory/'trust.bin'), **leaf)
 
 
-def prevalidated_mtc(fixture, validation, profile=PROFILE):
+def prevalidated_mtc(fixture, validation, profile=PROFILE,
+                     trust_mode='landmark'):
+    require(trust_mode in ('landmark', 'standalone'),
+            'Unsupported MTC trust mode')
     fixture, validation = Path(fixture).absolute(), Path(validation).absolute()
     for path in (fixture, validation):
         require(not any(p.is_symlink() for p in (path, *path.parents)), 'Symlink fixture/evidence path rejected')
@@ -430,8 +433,10 @@ def prevalidated_mtc(fixture, validation, profile=PROFILE):
             and meta.get('draft') == core.DRAFT and meta.get('merkle_hash') == 'SHA-256', 'MTC metadata mismatch')
     check_saved_hashes(directory, read(directory/'fixture-sha256.json'))
     cells = [c for c in evidence.get('cells', []) if c.get('profile') == profile
-             and c.get('tree_size') == 16 and c.get('mtc_mode') == 'landmark' and c.get('success') is True]
-    require(bool(cells), 'Selected validation lacks a successful profile/N=16/landmark cell')
+             and c.get('tree_size') == 16 and c.get('mtc_mode') == trust_mode
+             and c.get('success') is True]
+    require(bool(cells), 'Selected validation lacks a successful profile/N=16/'
+            + trust_mode + ' cell')
     image = evidence.get('provenance', {}).get('image_id')
     require(isinstance(image, str) and re.fullmatch(r'sha256:[0-9a-f]{64}', image), 'Missing pinned MTC image')
     for cell in cells:
@@ -443,26 +448,45 @@ def prevalidated_mtc(fixture, validation, profile=PROFILE):
                 require(recorded[field] == evidence.get('provenance', {}).get(field), 'MTC provenance mismatch: '+field)
     ca_id = meta.get('ca_id')
     require(isinstance(ca_id, str) and bool(ca_id), 'Missing MTC CA identity')
-    cert_path, key_path, trust = directory/'landmark-0000.pem', fixture/'population'/profile/'0.key', directory/'trust.bin'
+    cert_path = directory/(trust_mode+'-0000.pem')
+    key_path, trust = fixture/'population'/profile/'0.key', directory/'trust.bin'
     require(all(p.is_file() for p in (cert_path, key_path, trust)), 'Missing selected MTC credential/trust')
-    anchor = parse_landmark(trust.read_bytes())
-    requested = anchor['landmark']['requested_trust_anchor_id']
-    selected = anchor['landmark']['selected_trust_anchor_id']
-    require(anchor['ca_id'] == ca_id and anchor['landmark']['tree_size'] == 16
+    anchor = (parse_landmark(trust.read_bytes()) if trust_mode == 'landmark'
+              else parse_standalone(trust.read_bytes()))
+    requested = (anchor['landmark']['requested_trust_anchor_id']
+                 if trust_mode == 'landmark'
+                 else f"{ca_id}.2.{anchor['log_number']}.0")
+    selected = (anchor['landmark']['selected_trust_anchor_id']
+                if trust_mode == 'landmark' else ca_id)
+    require(anchor['ca_id'] == ca_id
             and anchor['min_serial'] == anchor['log_number'] << 48
-            and anchor['max_serial'] == (anchor['log_number'] << 48)+15
-            and anchor['landmark']['requested_trust_anchor_id'] == requested
-            and anchor['landmark']['selected_trust_anchor_id'] == selected, 'MTC trust identity mismatch')
+            and anchor['max_serial'] == (anchor['log_number'] << 48)+15,
+            'MTC trust identity mismatch')
+    if trust_mode == 'landmark':
+        require(anchor['landmark']['tree_size'] == 16
+                and anchor['landmark']['requested_trust_anchor_id'] == requested
+                and anchor['landmark']['selected_trust_anchor_id'] == selected,
+                'MTC landmark identity mismatch')
     outer, tbs = core.certificate_parts(certificate_der(cert_path.read_bytes()))
     require(int.from_bytes(tbs[1][1], 'big') == anchor['log_number'] << 48
             and outer[1][2] == core.ALG
             and tbs[2][2] == core.ALG and tbs[3][2] == core.name(ca_id), 'MTC leaf 0 algorithm/issuer mismatch')
+    require(outer[2][1][0] == 0, 'Invalid MTC proof bit string')
+    if trust_mode == 'standalone':
+        proof = outer[2][1][1:]
+        _, pos = take_vector(proof, 0)
+        _, pos = take_number(proof, pos, 6)
+        _, pos = take_number(proof, pos, 6)
+        path, pos = take_vector(proof, pos)
+        signatures, pos = take_vector(proof, pos, 3)
+        require(pos == len(proof) and len(path) % 32 == 0 and signatures,
+                'Malformed or unsigned standalone MTC proof')
     dates = core.items(tbs[4][1])
     require(len(dates) == 2 and all(t[0] in (23, 24) for t in dates), 'Invalid certificate validity')
     before, after = [datetime.strptime(t[1].decode(), '%y%m%d%H%M%SZ' if t[0] == 23 else '%Y%m%d%H%M%SZ').replace(tzinfo=timezone.utc) for t in dates]
     require(before <= datetime.now(timezone.utc) <= after, 'Expired/not-yet-valid certificate')
     return dict(fixture=str(fixture.resolve()), cert=str(cert_path.resolve()), key=str(key_path.resolve()),
-                trust=str(trust.resolve()), profile=profile, tree_size=16, mode='landmark', leaf=0, hostname=HOST,
+                trust=str(trust.resolve()), profile=profile, tree_size=16, mode=trust_mode, leaf=0, hostname=HOST,
                 validation_evidence=str(validation.resolve()), validation_sha256=sha(validation),
                 complete_evidence=True, fixture_hash_status='MATCH', origin='reused-prevalidated',
                 ca_id=ca_id, requested_tai=requested, selected_tai=selected, image_id=image,
@@ -472,7 +496,10 @@ def prevalidated_mtc(fixture, validation, profile=PROFILE):
                 verification_source='Selected successful functional validation and matching complete fixture hashes')
 
 
-def preselect_mtc_fixture(repo, profile):
+def preselect_mtc_fixture(repo, profile, trust_mode='landmark',
+                          require_anchor=True):
+    require(trust_mode in ('landmark', 'standalone'),
+            'Unsupported MTC trust mode')
     candidates, audit = [], []
     for fixture in sorted((repo/'artifacts/mtc').glob('*')):
         if not (fixture/'manifest.json').is_file():
@@ -488,18 +515,29 @@ def preselect_mtc_fixture(repo, profile):
             locally_valid = []
             for evidence in evidence_paths:
                 try:
-                    locally_valid.append(prevalidated_mtc(fixture, evidence, profile))
+                    locally_valid.append(prevalidated_mtc(
+                        fixture, evidence, profile, trust_mode))
                 except Exception:
                     continue
             require(bool(locally_valid), 'No matching complete MTC validation evidence')
             mtc = min(locally_valid, key=lambda item: item['validation_sha256'])
-            canonical = fixture.with_name(fixture.name+'-chromium-anchor.json')
-            require(canonical.is_file() and not canonical.is_symlink(),
-                    'Missing canonical Chromium MTC anchor')
-            require(read(canonical) == expected_anchor(mtc),
-                    'Canonical Chromium MTC anchor content/provenance mismatch')
-            mtc.update(anchor=str(canonical.resolve()), anchor_sha256=sha(canonical),
-                       anchor_origin='reused')
+            suffix = ('-chromium-anchor-standalone.json'
+                      if trust_mode == 'standalone'
+                      else '-chromium-anchor.json')
+            canonical = fixture.with_name(fixture.name+suffix)
+            if canonical.exists() or canonical.is_symlink():
+                require(canonical.is_file() and not canonical.is_symlink(),
+                        'Unsafe canonical Chromium MTC anchor')
+                require(read(canonical) == expected_anchor(mtc),
+                        'Canonical Chromium MTC anchor content/provenance mismatch')
+                mtc.update(anchor=str(canonical.resolve()),
+                           anchor_sha256=sha(canonical),
+                           anchor_origin='reused')
+                record['anchor_status'] = 'MATCH'
+            else:
+                require(not require_anchor,
+                        'Missing canonical Chromium MTC anchor')
+                record['anchor_status'] = 'MISSING'
             dedicated = manifest.get('profiles') == [profile]
             identity = sha(fixture/'manifest.json')
             candidates.append((not dedicated, identity, mtc))
@@ -508,7 +546,19 @@ def preselect_mtc_fixture(repo, profile):
         except Exception as error:
             record.update(valid=False, reason=str(error) or type(error).__name__)
         audit.append(record)
-    require(bool(candidates), f'No locally valid MTC fixture with canonical anchor for profile={profile}')
+    if not candidates:
+        prioritized = sorted(
+            audit, key=lambda item: (
+                'canonical' not in item.get('reason', '').lower(),
+                'validation' not in item.get('reason', '').lower(),
+                item['path']))
+        diagnostics = '; '.join(
+            Path(item['path']).name+': '+item.get('reason', 'incompatible')
+            for item in prioritized[:8])
+        anchor_text = ' with canonical anchor' if require_anchor else ''
+        require(False, 'No locally valid MTC fixture'+anchor_text+
+                f' for profile={profile}, trust_mode={trust_mode}. '
+                +(diagnostics or 'No fixture manifests found'))
     selected_key = min(item[:2] for item in candidates)
     selected_candidates = [item[2] for item in candidates if item[:2] == selected_key]
     require(len(selected_candidates) == 1,
@@ -665,11 +715,15 @@ def select_or_generate(paths, validator, generator, audit_path=None):
 
 
 def expected_anchor(mtc):
-    raw = Path(mtc['trust']).read_bytes(); expected = parse_landmark(raw)
-    require(expected['ca_id'] == mtc['ca_id']
-            and expected['landmark']['requested_trust_anchor_id'] == mtc['requested_tai']
-            and expected['landmark']['selected_trust_anchor_id'] == mtc['selected_tai'],
+    raw = Path(mtc['trust']).read_bytes()
+    expected = (parse_standalone(raw) if mtc.get('mode') == 'standalone'
+                else parse_landmark(raw))
+    require(expected['ca_id'] == mtc['ca_id'],
             'Anchor identity differs from selected fixture manifest')
+    if mtc.get('mode') != 'standalone':
+        require(expected['landmark']['requested_trust_anchor_id'] == mtc['requested_tai']
+                and expected['landmark']['selected_trust_anchor_id'] == mtc['selected_tai'],
+                'Anchor identity differs from selected fixture manifest')
     expected['source'] = dict(trust_file='trust.bin', trust_file_bytes=len(raw), trust_file_sha256=hashlib.sha256(raw).hexdigest())
     meta = read(Path(mtc['trust']).with_name('manifest.json'))
     for key in ('profile', 'draft', 'trust_anchor_draft', 'implementation_algorithm', 'merkle_hash'):
@@ -679,7 +733,10 @@ def expected_anchor(mtc):
 
 def choose_anchor(mtc, output):
     expected = expected_anchor(mtc); fixture = Path(mtc['fixture'])
-    canonical = fixture.with_name(fixture.name + '-chromium-anchor.json')
+    suffix = ('-chromium-anchor-standalone.json'
+              if mtc.get('mode') == 'standalone'
+              else '-chromium-anchor.json')
+    canonical = fixture.with_name(fixture.name + suffix)
     if canonical.exists() or canonical.is_symlink():
         require(not canonical.is_symlink() and canonical.is_file() and read(canonical) == expected,
                 'Canonical Chromium anchor content/provenance mismatch')
@@ -697,7 +754,8 @@ def choose_anchor(mtc, output):
     else:
         anchor, origin = output / 'chromium-anchor.json', 'generated'
         require(not anchor.exists(), 'Anchor output exists')
-        command([sys.executable, HERE/'export_chromium_anchor.py', '--trust', mtc['trust'], '--output', anchor])
+        command([sys.executable, HERE/'export_chromium_anchor.py', '--trust', mtc['trust'],
+                 '--output', anchor, '--trust-mode', mtc.get('mode', 'landmark')])
         require(read(anchor) == expected, 'Exported anchor mismatch')
         descriptor, temporary = tempfile.mkstemp(prefix='.chromium-anchor-', dir=fixture.parent)
         try:
@@ -1007,27 +1065,52 @@ def root_trust(x):
 
 def prepare_credentials(repo, output, image, profile=PROFILE, depth=2,
                         x509_fixture_set=None, mtc_fixture=None, mtc_validation=None,
-                        optimized_all_profiles=False, progress=None):
+                        optimized_all_profiles=False, progress=None,
+                        mtc_trust_mode='landmark'):
     require(profile in PROFILES and depth in (2, 3, 4, 5), "Unsupported profile/depth")
     require((mtc_fixture is None) == (mtc_validation is None), 'Supply both --mtc-fixture and --mtc-validation')
+    require(mtc_trust_mode in ('landmark', 'standalone'),
+            'Unsupported MTC trust mode')
+    require(mtc_trust_mode == 'landmark' or mtc_fixture is not None
+            or optimized_all_profiles,
+            'Standalone MTC is reuse-only: supply --mtc-fixture and --mtc-validation')
     if optimized_all_profiles:
         require(mtc_fixture is None, 'Optimized credentials select MTC fixtures locally')
-        mtc, ma = preselect_mtc_fixture(repo, profile)
+        try:
+            mtc, ma = preselect_mtc_fixture(
+                repo, profile, mtc_trust_mode, require_anchor=False)
+        except ValueError:
+            fixture = generate_mtc(repo, output, image, profile)
+            validation = fixture.with_name(
+                fixture.name+'-validation')/'validation.json'
+            mtc = prevalidated_mtc(
+                fixture, validation, profile, mtc_trust_mode)
+            ma = [dict(path=str(fixture), valid=True, selected=True,
+                       reason='Generated because no compatible validated '
+                              'fixture existed')]
         write(output/'mtc-discovery.json', ma)
         if progress: progress('validating MTC')
-        selected_path = Path(mtc['fixture'])
-        validated = validate_mtc(selected_path, profile, image)
-        validated.update(anchor=mtc['anchor'], anchor_sha256=mtc['anchor_sha256'],
-                         anchor_origin=mtc['anchor_origin'], origin='reused-prechecked')
+        if mtc_trust_mode == 'landmark':
+            validated = validate_mtc(Path(mtc['fixture']), profile, image)
+        else:
+            validated = prevalidated_mtc(
+                mtc['fixture'], mtc['validation_evidence'], profile,
+                'standalone')
+        if 'anchor' in mtc:
+            validated.update(anchor=mtc['anchor'],
+                             anchor_sha256=mtc['anchor_sha256'],
+                             anchor_origin=mtc['anchor_origin'])
+        validated['origin'] = 'reused-prechecked'
         mtc = validated
     elif mtc_fixture is not None:
-        mtc = prevalidated_mtc(mtc_fixture, mtc_validation, profile)
+        mtc = prevalidated_mtc(mtc_fixture, mtc_validation, profile,
+                               mtc_trust_mode)
         ma = [dict(path=mtc['fixture'], valid=True, origin=mtc['origin'], validation_evidence=mtc['validation_evidence'])]
         write(output/'mtc-discovery.json', ma)
     else:
         mtc_paths = [p.parent for p in (repo/'artifacts/mtc').glob('*/manifest.json')]
         mtc, ma = select_or_generate(mtc_paths, lambda p: validate_mtc(p, profile, image), lambda: generate_mtc(repo, output, image, profile), output/'mtc-discovery.json')
-    if not optimized_all_profiles:
+    if not optimized_all_profiles or 'anchor' not in mtc:
         mtc.update(choose_anchor(mtc, output))
     global CA, SELECTED, REQUESTED
     CA, SELECTED, REQUESTED = mtc['ca_id'], mtc['selected_tai'], mtc['requested_tai']
@@ -1210,6 +1293,26 @@ def encrypted_extensions_selected(events, selected_tai=None):
     return False
 
 
+def requested_tai_observed(requests, requested_tai):
+    expected = core.relid(requested_tai)
+    for params in requests:
+        value = params.get('trust_anchor_ids')
+        if isinstance(value, str):
+            identifiers = [item.strip() for item in value.split(',')]
+        elif isinstance(value, list) and all(isinstance(item, str)
+                                             for item in value):
+            identifiers = value
+        else:
+            continue
+        for identifier in identifiers:
+            try:
+                if core.relid(identifier) == expected:
+                    return True
+            except (ValueError, TypeError):
+                continue
+    return False
+
+
 def classify(case, case_dir, url, process, *, positive_control=False, requested_tai=None,
              selected_tai=None, trusted_subtrees_url=None, expected_group=29):
     requested_tai = requested_tai if requested_tai is not None else REQUESTED
@@ -1237,7 +1340,8 @@ def classify(case, case_dir, url, process, *, positive_control=False, requested_
     names = {v: k for k, v in net.get('constants', {}).get('netError', {}).items()}
     result['net_errors'] = [dict(code=e, name=names.get(e)) for e in errors]
     requests = [p for name, p, _, _ in events if name == 'SSL_CLIENT_TRUST_ANCHOR_IDS_LIST']
-    result['requested_tai_observed'] = any(requested_tai in str(p) for p in requests)
+    result['requested_tai_observed'] = requested_tai_observed(
+        requests, requested_tai)
     result['selected_tai_observed'] = encrypted_extensions_selected(events, selected_tai)
     ssl_connections = [p for name, p, _, _ in events if name == 'SSL_CONNECT' and p.get('version')]
     negotiated_groups = sorted({p.get('key_exchange_group') for p in ssl_connections
@@ -1504,7 +1608,13 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
         result.update(key_establishment=key_establishment,
                       key_establishment_label=selected_group['key_establishment_label'],
                       tls_group=selected_group['group'],
-                      signature_profile=credentials['mtc']['profile'])
+                      signature_profile=credentials['mtc']['profile'],
+                      mtc_trust_mode=credentials['mtc']['mode'],
+                      requested_tai=credentials['mtc']['requested_tai'],
+                      selected_tai=credentials['mtc']['selected_tai'],
+                      mtc_verification_evidence=(
+                          'authenticated TLS 1.3 plus observed requested/selected '
+                          'MTC trust-anchor identity'))
         if x509_spki is not None:
             result.update(x509_trust_mode='spki-capability-bypass', normal_trusted_x509_baseline=False)
         if capture is not None:
@@ -1550,6 +1660,52 @@ def owned_results(repo):
                 yield root
 
 
+def functional_mode_status(repo, trust_mode):
+    require(trust_mode in ('landmark', 'standalone'),
+            'Unsupported MTC trust mode')
+    roots = sorted((Path(repo)/'artifacts/results').glob(
+        'chromium-browser-validation-*'), reverse=True)
+    for root in roots:
+        summary_path = root/'summary.json'
+        if not summary_path.is_file():
+            continue
+        try:
+            summary = read(summary_path)
+        except (OSError, ValueError, TypeError):
+            continue
+        if summary.get('mtc_trust_mode') != trust_mode:
+            continue
+        try:
+            credentials = read(root/'credentials.json')
+            result = read(root/'mtc-positive/result.json')
+            require(credentials.get('mtc', {}).get('mode') == trust_mode,
+                    'Credential mode does not match summary')
+            require(result.get('mtc_trust_mode') == trust_mode,
+                    'Result mode does not match summary')
+            require(result.get('name') == 'mtc-positive',
+                    'Missing mode-specific positive result')
+            required = (
+                'server_authentication_flight_observed',
+                'server_finished_observed', 'client_finished_observed',
+                'application_data_observed', 'requested_tai_observed',
+                'selected_tai_observed', 'negotiated_canonical_tls')
+            require(all(result.get(field) is True for field in required),
+                    'Mode-specific authenticated TLS evidence is incomplete')
+            evidence = result.get('evidence')
+            require(isinstance(evidence, dict), 'Missing evidence inventory')
+            for name in ('netlog.json', 'server.log', 'chromium.stdout.log',
+                         'chromium.stderr.log'):
+                require(name in evidence and Path(evidence[name]).is_file(),
+                        'Missing evidence file: '+name)
+            require(result.get('pass') is True
+                    and result.get('observed_outcome') == 'PASS',
+                    result.get('reason') or 'Mode-specific positive run failed')
+            return 'PASS', None
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            return 'FAIL', str(error)
+    return 'NOT RUN', None
+
+
 def cleanup(repo):
     # Abandoned processes are not killed by stored PID (PID reuse risk). Report them.
     for root in owned_results(repo):
@@ -1566,6 +1722,16 @@ def cleanup(repo):
     print('Owned containers cleaned; all evidence preserved. Normal runs clean their own process groups/profiles.')
 
 
+def standalone_operation_allowed(action, case, mtc_fixture,
+                                 optimized_all_profiles):
+    return bool(
+        (action == 'credentials'
+         and (mtc_fixture is not None or optimized_all_profiles))
+        or (action == 'run' and mtc_fixture is not None
+            and case in ('mtc-positive', 'mtc-no-trust',
+                         'mtc-bad-serial')))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('plan', 'credentials', 'status', 'run', 'cleanup',
@@ -1578,6 +1744,9 @@ def main(argv=None):
     parser.add_argument('--depth', type=int, choices=(2, 3, 4, 5), default=2)
     parser.add_argument('--mtc-fixture', type=Path, help='Explicit prevalidated MTC fixture; requires --mtc-validation')
     parser.add_argument('--mtc-validation', type=Path, help='Existing validation.json for the selected MTC fixture')
+    parser.add_argument('--mtc-trust-mode', choices=('landmark', 'standalone'),
+                        default='landmark',
+                        help='Plants-06 trust mode (default: landmark)')
     parser.add_argument('--x509-fixture-set')
     parser.add_argument('--chromium', type=Path)
     parser.add_argument('--mtc-trusted-subtrees', type=Path,
@@ -1608,6 +1777,18 @@ def main(argv=None):
     require(not (args.mtc_trusted_subtrees is not None and
                  args.mtc_trusted_subtrees_url is not None),
             '--mtc-trusted-subtrees and --mtc-trusted-subtrees-url are mutually exclusive')
+    require(args.mtc_trust_mode == 'landmark' or
+            standalone_operation_allowed(
+                args.action, args.case, args.mtc_fixture,
+                args.optimized_all_profiles),
+            'Standalone MTC supports mtc-positive, mtc-no-trust and '
+            'mtc-bad-serial runs, or credentials preparation, with explicit '
+            'prevalidated fixture/evidence; '
+            'mtc-bad-merkle and all remain landmark-only')
+    require(args.mtc_trust_mode == 'landmark' or
+            (args.mtc_trusted_subtrees is None
+             and args.mtc_trusted_subtrees_url is None),
+            'Standalone MTC forbids trusted-subtree overrides')
     trust_operation = args.action in ('trust-status', 'trust-x509', 'untrust-x509')
     require((args.root is not None) == trust_operation, '--root PATH is required only for trust-status/trust-x509/untrust-x509')
     require(not args.x509_fixture_set or args.action in ('run', 'credentials'),
@@ -1632,7 +1813,8 @@ def main(argv=None):
         print('PRINT ONLY: discover -> strictly validate -> reuse; generate only if no valid candidate.')
         print('Search: artifacts/mtc, artifacts/x509, artifacts/cert-chain-scaling')
         selected_group = key_establishment_config(args.key_establishment)
-        print('Identity: '+HOST+'; '+args.profile+'; X509 D='+str(args.depth)+'; MTC N=16 landmark leaf 0')
+        print('Identity: '+HOST+'; '+args.profile+'; X509 D='+str(args.depth)
+              +'; MTC N=16 '+args.mtc_trust_mode+' leaf 0')
         print('Key establishment: '+selected_group['key_establishment_label']+' ('+selected_group['group']+')')
         print('Cases: '+', '.join(CASES)); print('TLS: '+json.dumps(selected_group))
         if args.browser_mode == 'headless':
@@ -1673,7 +1855,8 @@ def main(argv=None):
             REPO, output, args.image, args.profile, args.depth,
             args.x509_fixture_set, args.mtc_fixture, args.mtc_validation,
             optimized_all_profiles=args.optimized_all_profiles,
-            progress=credential_progress)
+            progress=credential_progress,
+            mtc_trust_mode=args.mtc_trust_mode)
         if args.action == 'credentials':
             credential_progress('checking CACertificates')
             policy_metadata = chromium_ca_policy_report(
@@ -1719,6 +1902,7 @@ def main(argv=None):
         selected_group = key_establishment_config(args.key_establishment)
         summary = dict(overall_pass=False, timestamp=datetime.now(timezone.utc).isoformat(), chromium=browser,
                        hostname=HOST, tls=selected_group, key_establishment=args.key_establishment,
+                       mtc_trust_mode=args.mtc_trust_mode,
                        credentials=credentials, cases=results)
         if args.x509_spki_capability:
             summary.update(x509_trust_mode='spki-capability-bypass',

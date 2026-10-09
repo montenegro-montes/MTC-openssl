@@ -27,11 +27,16 @@ def connection(rows=None, random=shared.RANDOM, stream=0):
                 **{field: 0 for field in pcap.METRICS})
 
 
-def client_hello(random=shared.RANDOM):
+def client_hello(random=shared.RANDOM, requested_tai=None):
     hostname = pcap.bv.HOST.encode('ascii')
     name = b'\0' + len(hostname).to_bytes(2, 'big') + hostname
     sni = len(name).to_bytes(2, 'big') + name
     extensions = b'\0\0' + len(sni).to_bytes(2, 'big') + sni
+    if requested_tai is not None:
+        raw_id = pcap.bv.core.relid(requested_tai)
+        entries = bytes([len(raw_id)]) + raw_id
+        payload = len(entries).to_bytes(2, 'big') + entries
+        extensions += b'\xca\x34' + len(payload).to_bytes(2, 'big') + payload
     body = (b'\x03\x03' + bytes.fromhex(random) + b'\0\0\x02\x13\x02\x01\0'
             + len(extensions).to_bytes(2, 'big') + extensions)
     return base64.b64encode(b'\x01' + len(body).to_bytes(3, 'big') + body).decode('ascii')
@@ -85,7 +90,8 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
                     patch.object(pcap.bv, 'run_browser', side_effect=browser), \
                     patch.object(pcap.bv, 'classify', return_value={}):
                 result = pcap.bv.run_case('x509-positive', dict(mtc=dict(
-                    requested_tai='a', selected_tai='b', profile='ecdsa-p256')),
+                    requested_tai='a', selected_tai='b', profile='ecdsa-p256',
+                    mode='landmark')),
                     dict(executable='/mock/chromium'), output, root, 5, False, capture=capture)
             self.assertEqual(result['browser_process_wall_ms'], 125)
             capture.start.assert_called_once()
@@ -274,7 +280,8 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
 
     def test_pilot_csv_retains_nullable_comparisons_and_available_sample_counts(self):
         rows = []
-        for pair, durations in ((1, (1.5, 2.5)), (2, (None, 3.5))):
+        for pair, durations in ((1, (2.5, 1.5, 1.75)),
+                                (2, (3.5, None, 2.75))):
             for case, duration in zip(measurements.CASES, durations):
                 row = dict.fromkeys(measurements.META, '')
                 row.update({field: 2 for field in measurements.METRICS})
@@ -288,12 +295,17 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
         rejected.update(pair_index=3, status='INCONCLUSIVE', pair_complete=False, tcp_handshake_ms=999)
         rows.append(rejected)
         pairs = []
-        for pair, values in ((1, (1.5, 2.5, -1.0)), (2, (None, 3.5, None))):
+        for pair, values in ((1, (1.5, 2.5, -1.0)),
+                             (2, (None, 3.5, None))):
             paired = dict.fromkeys(measurements.PAIR_FIELDS)
             paired.update(pair=pair, pair_index=pair, signature_profile='ecdsa-p256',
                           execution_order='mtc-positive -> x509-positive')
             for metric in measurements.PRIMARY:
-                paired.update({metric+'_mtc': 2, metric+'_x509': 2, metric+'_delta': 0})
+                paired.update(measurements.paired_values({
+                    'x509': {metric: 2},
+                    'mtc-landmark': {metric: 2},
+                    'mtc-standalone': {metric: 2},
+                }, metric))
             for suffix, value in zip(('mtc', 'x509', 'delta'), values):
                 paired['tcp_handshake_ms_'+suffix] = value
             pairs.append(paired)
@@ -317,6 +329,8 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
             with (root/'warmups.csv').open(newline='') as source:
                 warmup_fields = csv.DictReader(source).fieldnames
             saved_summary = pcap.bv.read(root/'summary.json')
+            report = (root/'README.md').read_text()
+            html_report = (root/'report.html').read_text()
         measurement_fields = [*measurements.META, *measurements.METRICS,
                               *measurements.CSV_DECOMPOSITION, *measurements.CSV_COMPARISON]
         for omitted in measurements.CSV_OMITTED:
@@ -327,17 +341,108 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
         retained = [field for field in (*measurements.DECOMPOSITION, *measurements.COMPARISON)
                     if field not in measurements.CSV_OMITTED]
         self.assertEqual([field for field in measurement_fields if field in retained], retained)
-        self.assertEqual(saved_rows[2]['tcp_handshake_ms'], '')
+        self.assertEqual(saved_rows[4]['tcp_handshake_ms'], '')
         self.assertEqual(saved_pairs[1]['tcp_handshake_ms_mtc'], '')
         self.assertEqual(saved_pairs[1]['tcp_handshake_ms_delta'], '')
         self.assertEqual(saved_pairs[1]['tcp_handshake_ms_x509'], '3.5')
         stats = saved_summary['comparison_statistics']
         stats = stats['ecdsa-p256']
-        self.assertEqual(stats['mtc-positive']['tcp_handshake_ms']['n'], 1)
-        self.assertEqual(stats['mtc-positive']['tcp_handshake_ms']['mean'], 1.5)
-        self.assertEqual(stats['x509-positive']['tcp_handshake_ms']['n'], 2)
-        self.assertEqual(stats['x509-positive']['tcp_handshake_ms']['mean'], 3)
-        self.assertNotIn('tls_handshake_wire_bytes', stats['mtc-positive'])
+        self.assertEqual(stats['mtc-landmark']['tcp_handshake_ms']['n'], 1)
+        self.assertEqual(stats['mtc-landmark']['tcp_handshake_ms']['mean'], 1.5)
+        self.assertEqual(stats['x509']['tcp_handshake_ms']['n'], 2)
+        self.assertEqual(stats['x509']['tcp_handshake_ms']['mean'], 3)
+        self.assertEqual(stats['mtc-standalone']['tcp_handshake_ms']['n'], 2)
+        self.assertNotIn('tls_handshake_wire_bytes', stats['mtc-landmark'])
+        self.assertIn('## Data dictionary', report)
+        self.assertIn('### measurements.csv', report)
+        self.assertIn('### warmups.csv', report)
+        self.assertIn('### pairs.csv', report)
+        self.assertIn('### summary.json', report)
+        for field in measurement_fields:
+            self.assertIn(f'`{field}`', report)
+        for field in measurements.PAIR_FIELDS:
+            self.assertIn(f'`{field}`', report)
+        for field in saved_summary:
+            self.assertIn(f'`{field}`', report)
+        self.assertIn('they never mean zero', report)
+        self.assertIn('not CertificateVerify', report)
+        self.assertIn('left scenario minus right scenario', report)
+        self.assertIn('Chromium paired browser measurements', html_report)
+        self.assertIn('Performance statistics', html_report)
+
+    def test_three_scenario_order_is_deterministic_and_balanced(self):
+        self.assertEqual(measurements.order(1),
+                         ('x509', 'mtc-landmark', 'mtc-standalone'))
+        self.assertEqual(measurements.order(2),
+                         ('mtc-landmark', 'mtc-standalone', 'x509'))
+        self.assertEqual(measurements.order(3),
+                         ('mtc-standalone', 'x509', 'mtc-landmark'))
+        self.assertEqual(measurements.order(4), measurements.order(1))
+
+    def test_warmup_rounds_precede_measured_rounds(self):
+        self.assertEqual(measurements.campaign_phases(5, 30),
+                         (('warmup', 5), ('measured', 30)))
+
+    def test_all_profile_warmup_and_measurement_totals(self):
+        profiles = measurements.CAMPAIGN_PROFILES
+        for pairs, warmups, measured, warmup_runs in (
+                (1, 1, 15, 15), (3, 1, 45, 15), (30, 5, 450, 75)):
+            totals = measurements.campaign_totals(
+                profiles, pairs, warmups)
+            self.assertEqual(totals['total_measurements'], measured)
+            self.assertEqual(totals['total_warmup_runs'], warmup_runs)
+
+    def test_standalone_requested_tai_is_matched_exactly_in_clienthello(self):
+        raw = base64.b64decode(client_hello(
+            requested_tai='32473.101.2.1.0'))
+        with patch.object(pcap.bv, 'REQUESTED', '32473.101.2.1.0'):
+            standalone = pcap.hello(raw)
+        self.assertTrue(standalone['requested_tai_observed'])
+        self.assertEqual(standalone['trust_anchor_ids'][0]['decimal'],
+                         '32473.101.2.1.0')
+        with patch.object(pcap.bv, 'REQUESTED', '32473.101'):
+            wrong_prefix = pcap.hello(raw)
+        self.assertFalse(wrong_prefix['requested_tai_observed'])
+
+    def test_landmark_requested_tai_remains_unchanged(self):
+        raw = base64.b64decode(client_hello(
+            requested_tai='32473.101.2.1.1'))
+        with patch.object(pcap.bv, 'REQUESTED', '32473.101.2.1.1'):
+            landmark = pcap.hello(raw)
+        self.assertTrue(landmark['requested_tai_observed'])
+
+    def test_pair_contains_all_three_comparisons_and_legacy_aliases(self):
+        values = {
+            'x509': {'metric': 10},
+            'mtc-landmark': {'metric': 13},
+            'mtc-standalone': {'metric': 15},
+        }
+        paired = measurements.paired_values(values, 'metric')
+        self.assertEqual(paired['metric_delta'], 3)
+        self.assertEqual(paired['metric_mtc_landmark_vs_x509_delta'], 3)
+        self.assertEqual(paired['metric_mtc_standalone_vs_x509_delta'], 5)
+        self.assertEqual(
+            paired['metric_mtc_landmark_vs_mtc_standalone_delta'], -2)
+
+    def test_scenario_credentials_never_fall_back_between_modes(self):
+        credentials = {
+            'x509': {'cert': 'x509'},
+            'mtc_landmark': {'cert': 'landmark', 'mode': 'landmark'},
+            'mtc_standalone': {'cert': 'standalone', 'mode': 'standalone'},
+        }
+        for case, expected in (('x509', 'x509'),
+                               ('mtc-landmark', 'landmark'),
+                               ('mtc-standalone', 'standalone')):
+            selected_credentials, validation_case, selected = (
+                measurements.scenario_credentials(credentials, case))
+            self.assertEqual(selected['cert'], expected)
+            self.assertEqual(validation_case, ('x509-positive' if case == 'x509'
+                                                else 'mtc-positive'))
+            if case != 'x509':
+                self.assertIs(selected_credentials['mtc'], selected)
+            else:
+                self.assertIs(selected_credentials['mtc'],
+                              credentials['mtc_landmark'])
 
 
 if __name__ == '__main__':

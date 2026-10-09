@@ -669,8 +669,15 @@ MENU
 )
 
 browser_validation_credentials_all_profiles() {
- local profiles_text profile result index=0 total_start=$SECONDS docker_total counter_file
+ local profiles_text profile trust_mode result index=0 total_start=$SECONDS docker_total counter_file
  local profiles=() passed=()
+ local argument
+ for argument in "$@"; do
+  case "$argument" in
+   --mtc-trust-mode|--mtc-trust-mode=*)
+    fail '--all-profiles prepares both landmark and standalone; do not select one MTC trust mode.';;
+  esac
+ done
  counter_file=$(mktemp "${TMPDIR:-/tmp}/chromium-credential-docker-count.XXXXXX")
  profiles_text=$(python3 -B - "$REPO" <<'PY'
 import sys
@@ -685,23 +692,25 @@ PY
  ) || fail 'Could not load browser-measurements campaign profiles.'
  read -r -a profiles <<< "$profiles_text"
  for profile in "${profiles[@]}"; do
-  index=$((index+1))
-  if python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_validation.py" \
-    credentials --profile "$profile" "$@" --depth 2 \
-    --x509-fixture-set chromium-x509-depth-matrix-v1 \
-    --x509-chromium-ca-policy --optimized-all-profiles \
-    --precheck-index "$index" --precheck-total "${#profiles[@]}" \
-    --docker-count-file "$counter_file"; then
-   passed+=("$profile")
-  else
-   result=$?
-   rm -f "$counter_file"
-   echo "ERROR: Chromium browser credentials failed for profile: $profile" >&2
-   return "$result"
-  fi
+  for trust_mode in landmark standalone; do
+   index=$((index+1))
+   if python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_validation.py" \
+     credentials --profile "$profile" --mtc-trust-mode "$trust_mode" "$@" \
+     --x509-fixture-set chromium-x509-depth-matrix-v1 \
+     --x509-chromium-ca-policy --optimized-all-profiles \
+     --precheck-index "$index" --precheck-total "$((${#profiles[@]}*2))" \
+     --docker-count-file "$counter_file"; then
+    passed+=("$profile $trust_mode")
+   else
+    result=$?
+    rm -f "$counter_file"
+    echo "ERROR: Chromium browser credentials failed for profile=$profile trust_mode=$trust_mode" >&2
+    return "$result"
+   fi
+  done
  done
  printf '\nChromium browser credentials\n\n'
- for profile in "${passed[@]}"; do printf '%-12s PASS\n' "$profile"; done
+ for profile in "${passed[@]}"; do printf '%-26s PASS\n' "$profile"; done
  docker_total=$(awk '{total += $1} END {print total + 0}' "$counter_file")
  rm -f "$counter_file"
  printf '\nElapsed: %ss\nDocker run invocations: %s\n' "$((SECONDS-total_start))" "$docker_total"

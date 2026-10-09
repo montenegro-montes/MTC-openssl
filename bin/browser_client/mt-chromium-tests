@@ -29,8 +29,40 @@ capture_ready = bool(tools['interface'] and tools['tshark'] and
                      (tools['dumpcap'] or tools['tcpdump']))
 ready &= capture_ready
 print('Capture: '+('READY' if capture_ready else 'NOT READY'))
-print('Fixtures: AUTO (valid fixtures are reused; missing fixtures are generated at run)')
-print('X.509 trust: CACertificates policy (automatic; certificate verification enabled)')
+profiles = ('ecdsa-p256', 'ecdsa-p384', 'mldsa44', 'mldsa65', 'mldsa87')
+fixtures_ready = True
+roots = []
+print('Credential preparation:')
+for profile in profiles:
+    states = {}
+    for mode in ('landmark', 'standalone'):
+        try:
+            bv.preselect_mtc_fixture(repo, profile, mode)
+            states[mode] = 'READY'
+        except (ValueError, OSError, KeyError, TypeError):
+            states[mode] = 'NEEDS PREPARATION'
+            fixtures_ready = False
+    try:
+        selected = [bv.precheck_formal_x509_fixture(
+            repo, profile, depth, 'chromium-x509-depth-matrix-v1')
+                    for depth in (2, 3, 4, 5)]
+        roots.extend(fixture/'root.pem' for fixture in selected)
+        states['x509'] = 'READY (D=2..5)'
+    except (ValueError, OSError, KeyError, TypeError):
+        states['x509'] = 'NEEDS PREPARATION'
+        fixtures_ready = False
+    print(f"  {profile:<11} X509={states['x509']}; "
+          f"landmark={states['landmark']}; standalone={states['standalone']}")
+ready &= fixtures_ready
+try:
+    for root in roots:
+        bv.chromium_ca_policy(root)
+    policy_ready = bool(roots)
+except (ValueError, OSError, KeyError, TypeError):
+    policy_ready = False
+ready &= policy_ready
+print('X.509 trust: '+('READY' if policy_ready else 'NEEDS PREPARATION')+
+      ' (Chromium CACertificates; verification enabled)')
 print('Ready: '+('YES' if ready else 'NO'))
 PY
 }
@@ -67,7 +99,8 @@ def latest(prefix):
         return 'FAIL', brief(error)
 
 preflight = 'PASS' if (repo/'.mt-state/chromium-mtc/00.preflight.done').is_file() else 'NOT RUN'
-functional, functional_reason = latest('chromium-browser-validation-')
+functional_landmark, landmark_reason = bv.functional_mode_status(repo, 'landmark')
+functional_standalone, standalone_reason = bv.functional_mode_status(repo, 'standalone')
 pcap_status, pcap_reason = latest('chromium-browser-pcap-')
 measurements, measurements_reason = latest('chromium-browser-measurements-')
 
@@ -82,25 +115,28 @@ except (ValueError, OSError):
 
 rows = (
     ('Preflight', preflight),
-    ('Functional validation', functional),
+    ('Functional landmark', functional_landmark),
+    ('Functional standalone', functional_standalone),
     ('PCAP validation', pcap_status),
     ('Browser measurements', measurements),
     ('Capture backend', 'READY' if capture_ready else 'NOT READY'),
     ('Chromium', 'READY' if chromium_ready else 'NOT READY'),
 )
 overall = (all(value == 'PASS' for value in
-               (preflight, functional, pcap_status, measurements))
+               (preflight, functional_landmark, functional_standalone,
+                pcap_status, measurements))
            and capture_ready and chromium_ready)
 print('Chromium / MTC — Tests status')
 for label, value in rows:
     print(f'{label+":":<25}{value}')
 print(f'{"Overall:":<25}'+('READY' if overall else 'NOT READY'))
 for label, status, reason in (
-        ('Functional validation', functional, functional_reason),
+        ('Functional landmark', functional_landmark, landmark_reason),
+        ('Functional standalone', functional_standalone, standalone_reason),
         ('PCAP validation', pcap_status, pcap_reason),
         ('Browser measurements', measurements, measurements_reason)):
     if status == 'FAIL':
-        print(f'{label} reason: {reason}')
+        print(f'{label} reason: {brief(reason)}')
 PY
 }
 
@@ -112,10 +148,13 @@ repo=Path(sys.argv[1])
 sys.path.insert(0,str(repo/'campaigns/browser_client/chromium_mtc'))
 import browser_validation as bv
 import browser_pcap as pcap
-parser=argparse.ArgumentParser(description='Read-only readiness; no installation, generation or capture.')
-parser.add_argument('--capture',action='store_true')
+import browser_preflight as bp
+parser=argparse.ArgumentParser(description='Read-only readiness; capture is started only with --check-capture.')
+parser.add_argument('--strict',action='store_true')
+parser.add_argument('--check-capture','--capture',dest='check_capture',action='store_true')
 parser.add_argument('--profile',choices=bv.PROFILES)
 parser.add_argument('--depth',type=int,choices=(2,3,4,5))
+parser.add_argument('--mtc-trust-mode',choices=('landmark','standalone'),default='landmark')
 args=parser.parse_args(sys.argv[2:])
 profiles=(args.profile,) if args.profile else ('ecdsa-p256','ecdsa-p384','mldsa44','mldsa65','mldsa87')
 depths=(args.depth,) if args.depth else (2,3,4,5)
@@ -134,14 +173,14 @@ def require(ok,message):
 def chromium():
  data=bv.read(state/'chromium.json')
  actual=bv.browser_executable(data['executable'])
- require(actual['sha256']==data['sha256'],'Executable changed since detection')
- require(actual['commit']==data['chromium_commit'],'Chromium source commit changed')
  pins=dict(line.split('=',1) for line in (repo/'campaigns/browser_client/chromium_mtc/versions/chromium-mtc.env').read_text().splitlines() if line and not line.startswith('#'))
- require(actual['commit']==pins['CHROMIUM_PATCHED_COMMIT'],'Unexpected Chromium commit')
- require(data['boringssl_commit']==pins['BORINGSSL_PATCHED_COMMIT'],'Unexpected recorded BoringSSL commit')
  src=Path(subprocess.check_output(['git','-C',str(Path(actual['executable']).parent),'rev-parse','--show-toplevel'],text=True).strip())
  boring=subprocess.check_output(['git','-C',str(src/'third_party/boringssl/src'),'rev-parse','HEAD'],text=True).strip()
- require(boring==data['boringssl_commit'],'BoringSSL source commit changed')
+ problem=bp.build_evidence_problem(state,actual,data,pins,boring)
+ errors,warnings=bp.chromium_findings(
+     actual,data,pins,boring,problem,strict=args.strict)
+ for warning in warnings: print('[WARN] '+warning)
+ require(not errors,'; '.join(errors))
  require(not (src.parent/'.mtc-source-state/lock').exists(),'Source/build lock present; inspect owner before retrying')
 check('Recorded Chromium executable/build','run 10 (after build run chromium if needed)',chromium)
 def hostname():
@@ -167,13 +206,36 @@ for profile in profiles:
     if meta.get('server_hostname')!=bv.HOST or profile not in meta.get('profiles',[]) or 16 not in meta.get('sizes',[]): continue
     directory=manifest.parent/'batch16/mtc'/profile
     bv.check_saved_hashes(directory,bv.read(directory/'fixture-sha256.json'))
-    require((directory/'landmark-0000.pem').is_file() and (manifest.parent/'population'/profile/'0.key').is_file(),'Leaf 0 certificate/key missing')
-    anchor=bv.parse_landmark((directory/'trust.bin').read_bytes())
-    require(anchor['landmark']['tree_size']==16,'Expected N=16')
+    certificate=directory/(args.mtc_trust_mode+'-0000.pem')
+    require(certificate.is_file() and (manifest.parent/'population'/profile/'0.key').is_file(),
+            args.mtc_trust_mode+' leaf 0 certificate/key missing')
+    credential_meta=bv.read(directory/'manifest.json')
+    anchor=(bv.parse_landmark((directory/'trust.bin').read_bytes())
+            if args.mtc_trust_mode=='landmark'
+            else bv.parse_standalone((directory/'trust.bin').read_bytes()))
+    require(anchor['ca_id']==credential_meta.get('ca_id'),'Trust anchor CA ID mismatch')
+    if args.mtc_trust_mode=='landmark':
+     require(anchor['landmark']['tree_size']==16,'Expected N=16 landmark')
+    validations=sorted(manifest.parent.parent.glob(manifest.parent.name+'-validation*/validation.json'))
+    require(bool(validations),'Missing prevalidated MTC evidence')
+    validated=False
+    for validation in validations:
+     evidence=bv.read(validation)
+     if evidence.get('passed') is not True or evidence.get('server_hostname')!=bv.HOST: continue
+     if 'fixture' in evidence and Path(evidence['fixture']).resolve()!=manifest.parent.resolve(): continue
+     try: bv.check_saved_hashes(manifest.parent,evidence.get('fixture_hashes'),complete=True)
+     except (ValueError,OSError,KeyError,TypeError): continue
+     if any(c.get('profile')==profile and c.get('tree_size')==16
+            and c.get('mtc_mode')==args.mtc_trust_mode and c.get('success') is True
+            and c.get('fixture_hash')==bv.sha(directory/'manifest.json')
+            for c in evidence.get('cells',[])):
+      validated=True; break
+    require(validated,'No matching successful '+args.mtc_trust_mode+' validation cell')
     return
    except (ValueError,OSError,KeyError,TypeError) as error: errors.append(str(error))
-  raise ValueError('No intact N=16 landmark leaf 0 fixture. '+'; '.join(errors))
- check('MTC fixture '+profile,'browser-validation credentials --profile '+profile,mtc)
+  raise ValueError('No intact prevalidated N=16 '+args.mtc_trust_mode+' leaf 0 fixture. '+'; '.join(errors))
+ check('MTC fixture '+profile+' ('+args.mtc_trust_mode+')',
+       'browser-validation credentials --profile '+profile,mtc)
 roots=set()
 for profile in profiles:
  for depth in depths:
@@ -215,13 +277,26 @@ def policy():
   hashes={bv.hashlib.sha256(base64.b64decode(v,validate=True)).hexdigest() for v in value}
   require(roots<=hashes,'Policy lacks selected formal root fingerprints')
 check('Chromium CA policy available for formal roots','trust-setup',policy)
-if args.capture:
- def capture():
-  tools=pcap.requirements()
-  require(tools['interface'] and tools['tshark'] and (tools['dumpcap'] or tools['tcpdump']),'Capture backend/tshark unavailable')
-  print('Capture permissions: NOT CHECKED (no capture started).')
- check('Capture tools','doctor (install capture tools/grant loopback access through your administrator)',capture)
+tools=pcap.requirements()
+def capture_tools():
+ require(tools['interface'] and tools['tshark'] and (tools['dumpcap'] or tools['tcpdump']),
+         'Capture backend/tshark unavailable')
+check('Capture tools available','doctor (install capture tools through your administrator)',capture_tools)
+if args.check_capture:
+ try:
+  bp.verify_capture_permissions(tools)
+  print('[PASS] Capture permissions verified')
+ except bp.CaptureCheckError as error:
+  failures.append('Capture permissions')
+  if error.category=='permission':
+   print('[FAIL] Capture permissions insufficient: '+str(error))
+  else:
+   print('[FAIL] Capture permissions check '+error.category+': '+str(error))
+else:
+ print('[INFO] Capture permissions not tested (read-only preflight)')
 print('Read-only readiness only; cryptographic validation and effective browser policy remain runtime checks.')
+if not failures:
+ print('PREFLIGHT: PASS ('+('STRICT' if args.strict else 'DEVELOPMENT')+')')
 raise SystemExit(1 if failures else 0)
 PY
 }
@@ -275,7 +350,7 @@ Chromium / MTC — Tests / experiments
 MENU
   read -r -p 'Select an option: ' selection || exit 0
   case "$selection" in
-   1) menu_invoke readonly preflight --capture;;
+   1) menu_preflight;;
    2) menu_invoke readonly menu-status;;
    3) menu_submenu validation;;
    4) menu_submenu pcap;;
@@ -288,14 +363,14 @@ MENU
 )
 case "${1:-help}" in
  help|--help|-h) cat <<'HELP'
-Usage: mt-chromium-tests menu|menu-status|status|preflight [--profile PROFILE] [--depth D] [--capture]
+Usage: mt-chromium-tests menu|menu-status|status|preflight [--strict] [--check-capture] [--profile PROFILE] [--depth D] [--mtc-trust-mode MODE]
   browser-validation plan|status|run CASE [existing campaign options]
   browser-validation run-prevalidated-mtc mtc-positive --mtc-fixture PATH --mtc-validation FILE [options]
   browser-pcap plan|requirements|status|run CASE [existing campaign options]
   browser-measurements readiness|plan|requirements|status|run [existing campaign options]
   network-experiments (not implemented)
 KEM: x25519 or x25519-mlkem768. DEPTH: 2, 3, 4 or 5.
-Preflight is read-only. Defaults check the supported formal matrix (5 profiles, D=2..5).
+Preflight defaults to development/read-only. Strict requires pinned commits and matching build-result.json evidence. --check-capture starts only a temporary permission probe.
 Browser measurements selectively generate missing fixtures. Other test workflows require explicit setup.
 HELP
  ;;

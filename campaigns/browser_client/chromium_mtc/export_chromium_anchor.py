@@ -21,9 +21,9 @@ import core
 from config_formats import decode_mtb2
 
 
-def parse_landmark(raw):
+def parse_anchor(raw):
     bundle = decode_mtb2(raw)
-    authority, checkpoint = bundle.authority, bundle.checkpoint
+    authority = bundle.authority
     ca_id = authority.ca_id
     if len(authority.signers) != 2:
         raise ValueError("expected exactly two configured signers")
@@ -41,6 +41,28 @@ def parse_landmark(raw):
 
     log_number = authority.log_number
     min_serial, max_serial = authority.min_serial, authority.max_serial
+    return bundle, {
+        "format": "chromium-mtc-plants06-lab",
+        "version": 1,
+        "spec": "plants-06",
+        "source_format": "MTB2",
+        "ca_id": ca_id,
+        "ca_id_hex": core.relid(ca_id).hex(),
+        "signers": signers,
+        "log_number": authority.log_number,
+        "min_serial": authority.min_serial,
+        "min_serial_hex": f"0x{authority.min_serial:016x}",
+        "max_serial": authority.max_serial,
+        "max_serial_hex": f"0x{authority.max_serial:016x}",
+    }
+
+
+def parse_landmark(raw):
+    bundle, config = parse_anchor(raw)
+    checkpoint = bundle.checkpoint
+    ca_id = config["ca_id"]
+    log_number = config["log_number"]
+    min_serial, max_serial = config["min_serial"], config["max_serial"]
     landmark_number = bundle.signaling_landmark
     tree_size, timestamp = checkpoint.tree_size, checkpoint.timestamp
     checkpoint_root = checkpoint.root_hash
@@ -85,20 +107,7 @@ def parse_landmark(raw):
     individual = f"{ca_id}.1.{log_number}.{landmark_number}"
     group = f"{ca_id}.2.{log_number}.{landmark_number}"
 
-    return {
-        "format": "chromium-mtc-plants06-lab",
-        "version": 1,
-        "spec": "plants-06",
-        "source_format": "MTB2",
-        "ca_id": ca_id,
-        "ca_id_hex": core.relid(ca_id).hex(),
-        "signers": signers,
-        "log_number": log_number,
-        "min_serial": min_serial,
-        "min_serial_hex": f"0x{min_serial:016x}",
-        "max_serial": max_serial,
-        "max_serial_hex": f"0x{max_serial:016x}",
-        "landmark": {
+    config["landmark"] = {
             "number": landmark_number,
             "tree_size": tree_size,
             "timestamp": timestamp,
@@ -111,18 +120,27 @@ def parse_landmark(raw):
             "selected_trust_anchor_id_hex":
                 core.relid(individual).hex(),
             "trusted_subtrees": subtrees,
-        },
     }
+    return config
+
+
+def parse_standalone(raw):
+    _, config = parse_anchor(raw)
+    config["trust_mode"] = "standalone"
+    return config
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--trust", type=Path, required=True)
     ap.add_argument("--output", type=Path, required=True)
+    ap.add_argument("--trust-mode", choices=("landmark", "standalone"),
+                    default="landmark")
     args = ap.parse_args()
 
     raw = args.trust.read_bytes()
-    config = parse_landmark(raw)
+    config = (parse_standalone(raw) if args.trust_mode == "standalone"
+              else parse_landmark(raw))
 
     config["source"] = {
         "trust_file": args.trust.name,
@@ -149,8 +167,10 @@ def main():
     print(args.output)
     print(
         f"CA={config['ca_id']} "
-        f"N={config['landmark']['tree_size']} "
-        f"requested={config['landmark']['requested_trust_anchor_id']}"
+        f"mode={args.trust_mode} "
+        + (f"N={config['landmark']['tree_size']} "
+           f"requested={config['landmark']['requested_trust_anchor_id']}"
+           if args.trust_mode == "landmark" else "")
     )
 
 
