@@ -598,7 +598,7 @@ def main():
         print(f'Warmups: {args.warmups} complete pairs/profile; executed first and excluded from measured outputs.')
         print(f"Pairs: {args.pairs if args.pairs is not None else 'explicit --pairs required for run'}")
         print('Each run must PASS existing browser/PCAP validation. Stop on any failure; preserve evidence.')
-        print('Outputs: measurements.csv, pairs.csv, summary.json, README.md and per-run evidence.'); return 0
+        print('Outputs: measurements.csv, pairs.csv, summary.json, report.html, README.md and per-run evidence.'); return 0
     if args.action == 'requirements':
         print(bv.json.dumps(pcap.requirements(), indent=2))
         print('tshark is required for measurement metrics. A trusted X.509 root or externally installed Chromium CACertificates policy, plus valid requested-profile/depth fixtures, is required.'); return 0

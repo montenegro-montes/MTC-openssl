@@ -34,3 +34,8 @@ python3 bin/renders/chromium.py \
 
 The input is never modified. The renderer refuses to overwrite an existing
 report unless `--replace` is supplied.
+
+`browser-measurements run` invokes this renderer automatically after its final
+`summary.json` and CSV files have been written. The resulting report is saved
+as `report.html` in the same campaign result directory. The commands above are
+still useful for rendering older result directories manually.
