@@ -61,42 +61,177 @@ These values have different boundaries. In particular, `process` must not be
 treated as TLS latency, and `tls_bytes_total` must not be compared directly
 with PCAP on-wire bytes that include network headers and retransmissions.
 
-## `pcap.csv`
+## PCAP CSV: Data Dictionary
 
-The PCAP analyzer selects one TCP stream from its initial client SYN, correlates
-the TCP/TLS/application events, reassembles logical TLS records by `tcp.seq`,
-and fails closed when required boundaries are missing or ambiguous.
+The PCAP analyzer selects one TCP stream from its unique initial client SYN,
+correlates the TCP and TLS events, and reassembles logical TLS records by
+`tcp.seq`. The measured TLS interval starts at ClientHello and ends at the
+client Finished, both inclusive. ClientHello, the server Certificate and
+CertificateVerify, and client Finished remain mandatory and unambiguous. An
+HTTP request is not a handshake boundary and is optional: when tshark cannot
+identify it, only `tcp_syn_to_first_application_request_ms` is null and the
+remaining TLS measurements are retained.
 
-| Column | Unit | Meaning and method |
-|---|---|---|
-| `profile` | identifier | See the shared identity table. |
-| `case` | identifier | See the shared identity table. |
-| `key_establishment` | label | See the shared identity table. |
-| `openssl_group` | OpenSSL identifier | See the shared identity table. |
-| `phase` | category | See the shared identity table. |
-| `repetition` | integer | See the shared identity table. |
-| `tcp_handshake_ms` | ms | Capture timestamp from the initial client SYN to the unique client ACK that completes the corresponding TCP three-way handshake. |
-| `tcp_syn_to_clienthello_ms` | ms | Initial client SYN to the correlated ClientHello frame. |
-| `tls_clienthello_to_client_finished_ms` | ms | ClientHello to the client Finished that completes the measured TLS handshake interval. |
-| `tcp_syn_to_first_application_request_ms` | ms | Initial SYN to the first decrypted client HTTP request after Finished. This includes TCP, TLS, and the delay to the request. |
-| `tls_client_handshake_bytes` | bytes | Logical complete TLS records sent client-to-server from ClientHello through client Finished. TCP retransmissions are deduplicated; each TLS record's five-byte header is counted once. |
-| `tls_server_handshake_bytes` | bytes | Logical complete TLS records sent server-to-client over the same ClientHello-through-client-Finished interval, with retransmissions deduplicated. |
-| `tls_handshake_bytes` | bytes | `tls_client_handshake_bytes + tls_server_handshake_bytes`. This is bidirectional logical TLS-record size, not on-wire size. |
-| `tls_client_handshake_wire_bytes` | `frame.len` bytes | Sum of captured frame lengths for client-to-server frames carrying TCP payload in the TLS interval. Includes link/IP/TCP headers and retransmitted frames; pure ACKs are excluded. |
-| `tls_server_handshake_wire_bytes` | `frame.len` bytes | Equivalent server-to-client on-wire sum over the same interval. |
-| `tls_handshake_wire_bytes` | `frame.len` bytes | Client plus server TLS-handshake wire bytes. |
-| `tcp_handshake_wire_bytes` | `frame.len` bytes | Sum of SYN, corresponding SYN/ACK, and the ACK completing TCP establishment. |
-| `connection_handshake_wire_bytes` | `frame.len` bytes | Union of the TCP three-way-handshake frames and TLS-handshake payload frames. If the completing ACK also carries TLS data, that frame is counted once. |
-| `tls_client_handshake_packets` | frames | Number of client-to-server TCP-payload frames in the TLS interval. |
-| `tls_server_handshake_packets` | frames | Number of server-to-client TCP-payload frames in the TLS interval. |
-| `tls_handshake_packets` | frames | Total client and server TCP-payload frames in the TLS interval. |
-| `tls_client_certificate_bytes` | bytes | Complete client TLS Certificate handshake message, including its four-byte handshake header. Zero when no client Certificate was requested/present; mutual cases require it to be analyzable. Applies to X.509 and project MTC credentials carried in Certificate. |
-| `tls_server_certificate_bytes` | bytes | Complete server TLS Certificate handshake message, including its four-byte handshake header. This is distinct from the TLS CertificateVerify message. |
-| `tcp_stream` | tshark integer | Selected `tcp.stream` identifier. It is capture-local and is not comparable as a magnitude between runs. |
-| `client_random` | 64 hexadecimal characters | ClientHello random used as connection identity/correlation evidence. |
-| `analysis_status` | category | `OK` when every fail-closed selection and boundary check succeeds; otherwise `ERROR`. Only `OK` measured rows enter PCAP statistics. |
-| `analysis_error` | text | Diagnostic explaining a failed PCAP analysis; empty when status is `OK`. Failed rows retain blank metric cells rather than invented zeros. |
-| `tcp_retransmission_packets` | frames | Frames within the TLS interval marked by tshark as retransmission, fast retransmission, or spurious retransmission. They remain in wire/packet counts but are deduplicated from logical TLS bytes. |
+### A. Experiment identification
+
+| Column | Unit/type | Meaning and method | Zero, null, or not applicable |
+|---|---|---|---|
+| `profile` | identifier | Credential signature profile selected by the campaign; see the shared identity table above. | Required. |
+| `case` | identifier | Exact X.509, MTC landmark, or MTC standalone simple/mutual scenario. X.509 may carry a `-d2` to `-d5` suffix. | Required. |
+| `key_establishment` | label | Configured human-readable key-establishment selection. | Required configuration provenance. |
+| `openssl_group` | OpenSSL identifier | Exact TLS group configured in client and server. | Required configuration provenance. |
+| `phase` | category | `warmup` or `measured`. | Required. Warmups are retained here but excluded from `summary.json` statistics. |
+| `repetition` | integer | One-based repetition inside the profile/case/phase cell. | Required; never zero. |
+
+### B. Timing metrics
+
+| Column | Unit/type | Meaning and method | Zero, null, or not applicable |
+|---|---|---|---|
+| `tcp_handshake_ms` | ms | Capture time from the initial client SYN to the unique ACK completing its TCP three-way handshake. | Required for `analysis_status=OK`; a genuine measured zero is possible only at timestamp resolution. |
+| `tcp_syn_to_clienthello_ms` | ms | Initial SYN to the first and unique ClientHello of the selected stream. | Required for `OK`. |
+| `tls_clienthello_to_client_finished_ms` | ms | ClientHello to client Finished, the fixed end of the TLS handshake interval. | Required for `OK`. |
+| `tcp_syn_to_first_application_request_ms` | ms | Initial SYN to the first uniquely identified decrypted HTTP request after client Finished. | Null when HTTP is not identified; this does not invalidate other TLS metrics. |
+
+### C. Logical TLS handshake bytes
+
+| Column | Unit/type | Meaning and method | Zero, null, or not applicable |
+|---|---|---|---|
+| `tls_client_handshake_bytes` | bytes | Complete logical TLS records sent client-to-server from ClientHello through client Finished. Reassembled by TCP sequence; retransmissions are deduplicated and every TLS record header is counted once. | Required and normally nonzero. |
+| `tls_server_handshake_bytes` | bytes | Complete logical TLS records sent server-to-client over that same interval. | Required and normally nonzero. |
+| `tls_handshake_bytes` | bytes | `tls_client_handshake_bytes + tls_server_handshake_bytes`. | Required; logical TLS-record bytes, not packet bytes. |
+
+### D. Network-transmitted bytes
+
+| Column | Unit/type | Meaning and method | Zero, null, or not applicable |
+|---|---|---|---|
+| `tls_client_handshake_wire_bytes` | `frame.len` bytes | Sum of complete captured frame lengths for client TCP-payload frames in the TLS interval. Includes link/IP/TCP headers and retransmissions; excludes pure ACKs. | Required for `OK`. |
+| `tls_server_handshake_wire_bytes` | `frame.len` bytes | Equivalent server-to-client on-wire sum. | Required for `OK`. |
+| `tls_handshake_wire_bytes` | `frame.len` bytes | Client plus server handshake wire bytes. | Required for `OK`. |
+| `tcp_handshake_wire_bytes` | `frame.len` bytes | SYN + corresponding SYN/ACK + first ACK completing TCP establishment. | Required for `OK`. |
+| `connection_handshake_wire_bytes` | `frame.len` bytes | Union of TCP-establishment frames and TLS-interval payload frames. A completing ACK carrying TLS data is counted once. | Required for `OK`. |
+
+`tls_handshake_bytes` counts reconstructed TLS records and their five-byte
+record headers. `tls_handshake_wire_bytes` counts captured frames and therefore
+also link, IP, TCP, and retransmission cost. `connection_handshake_wire_bytes`
+adds the unique TCP three-way-handshake frames. None is a raw sum of Certificate
+or CertificateVerify messages.
+
+### E. Packets and retransmissions
+
+| Column | Unit/type | Meaning and method | Zero, null, or not applicable |
+|---|---|---|---|
+| `tls_client_handshake_packets` | frames | Client-to-server TCP-payload frames in the TLS interval. | Required for `OK`. |
+| `tls_server_handshake_packets` | frames | Server-to-client TCP-payload frames in the TLS interval. | Required for `OK`. |
+| `tls_handshake_packets` | frames | Sum of the preceding directional frame counts. | Required for `OK`. |
+| `tcp_retransmission_packets` | frames | TLS-interval frames marked by tshark as retransmission, fast retransmission, or spurious retransmission. | Zero means tshark marked none; retransmissions remain in wire counts but are deduplicated from logical TLS bytes. |
+
+### F. Certificate and CertificateVerify
+
+| Column | Unit/type | Meaning and method | Zero, null, or not applicable |
+|---|---|---|---|
+| `tls_client_certificate_bytes` | bytes | Complete client Certificate handshake message: body plus its four-byte TLS handshake header. | Zero in server-only authentication; mandatory and nonzero in a valid mutual case. |
+| `tls_server_certificate_bytes` | bytes | Complete server Certificate handshake message: body plus its four-byte TLS handshake header. Applies to X.509 and MTC credentials carried in Certificate. | Mandatory and nonzero. |
+| `tls_client_certificate_verify_bytes` | bytes | Complete client CertificateVerify handshake message, including its four-byte handshake header. Its TLS 1.3 algorithm and signature-vector encoding are validated. | Zero in server-only authentication; mandatory in a valid mutual case. |
+| `tls_server_certificate_verify_bytes` | bytes | Complete server CertificateVerify handshake message, including algorithm, signature-vector length, signature, and four-byte handshake header. | Mandatory and nonzero. |
+| `tls_client_certificate_verify_signature_bytes` | bytes | Only the cryptographic signature vector contents inside client CertificateVerify, after validating the declared vector length. | Zero in server-only authentication. It excludes algorithm, length, and handshake header. |
+| `tls_server_certificate_verify_signature_bytes` | bytes | Only the cryptographic signature vector contents inside server CertificateVerify. | Mandatory and nonzero. It is smaller than the complete CertificateVerify message. |
+
+Certificate size, complete CertificateVerify size, cryptographic signature
+size, TLS-record size, and TCP-frame size are separate quantities and must not
+be interchanged.
+
+### G. MTCProof and Merkle path
+
+| Column | Unit/type | Meaning and method | Zero, null, or not applicable |
+|---|---|---|---|
+| `tls_client_mtc_proof_bytes` | bytes | Complete client MTCProof taken from the octet-aligned certificate `signatureValue` after the canonical project parser accepts it. | Null for X.509 and server-only; unavailable if tshark does not expose client Certificate DER. |
+| `tls_server_mtc_proof_bytes` | bytes | Complete server MTCProof extracted and parsed identically. | Null for X.509; unavailable if DER extraction is unavailable. |
+| `tls_client_mtc_merkle_path_bytes` | bytes | Client MTCProof inclusion-path vector contents, excluding its two-byte vector length. | Null when MTC client authentication is not applicable or unavailable. |
+| `tls_server_mtc_merkle_path_bytes` | bytes | Server inclusion-path vector contents. | Null for X.509 or unavailable extraction. A valid empty path is represented by zero bytes. |
+| `tls_client_mtc_merkle_path_hashes` | count | Client path byte length divided by the validated 32-byte SHA-256 hash size. | Null when not applicable/unavailable; zero means a valid empty path. |
+| `tls_server_mtc_merkle_path_hashes` | count | Server path hash count calculated identically. | Same distinction between zero and null. |
+
+MTCProof is already inside the Certificate message counted by
+`tls_*_certificate_bytes`. It must **not** be added again to Certificate or
+authentication totals. Landmark proofs must contain no subtree signatures;
+standalone proofs must contain them.
+
+### H. Signed Certificate Timestamps
+
+| Column | Unit/type | Meaning and method | Zero, null, or not applicable |
+|---|---|---|---|
+| `tls_client_sct_bytes` | bytes | Sum of exact SCT-list extension-value contents in parsed client X.509 Certificate entries, including the SCT-list's own encoded framing. | Zero means parsed X.509 certificates contain no SCT; null for server-only, MTC, or unavailable DER. |
+| `tls_server_sct_bytes` | bytes | Equivalent server X.509 SCT-list size. | Zero means no SCT extension in successfully parsed X.509 certificates; null for MTC or unavailable DER. |
+
+### I. Authentication bytes
+
+| Column | Unit/type | Meaning and method | Zero, null, or not applicable |
+|---|---|---|---|
+| `tls_client_authentication_bytes` | bytes | `tls_client_certificate_bytes + tls_client_certificate_verify_bytes`. | Zero in server-only authentication. |
+| `tls_server_authentication_bytes` | bytes | `tls_server_certificate_bytes + tls_server_certificate_verify_bytes`. | Mandatory and nonzero for an accepted server-authenticated handshake. |
+| `tls_authentication_bytes` | bytes | `tls_client_authentication_bytes + tls_server_authentication_bytes`. | Required when Certificate/CertificateVerify parsing succeeds. |
+
+These totals include each Certificate and CertificateVerify handshake header
+once. They exclude TLS record headers, encryption expansion, TCP/IP/link
+headers, CertificateRequest, Finished, MTC trust anchors, and all
+retransmissions. Embedded MTCProof and SCT bytes are already part of Certificate
+and are not added separately.
+
+### J. Analysis status and traceability
+
+| Column | Unit/type | Meaning and method | Zero, null, or not applicable |
+|---|---|---|---|
+| `authentication_components_status` | category | `OK` when every applicable DER-dependent component was extracted; `UNAVAILABLE` when core handshake metrics succeeded but tshark did not expose Certificate DER needed for MTCProof or SCT. | Never a numeric zero. |
+| `authentication_components_error` | text | Specific explanation for `UNAVAILABLE`. | Empty when component status is `OK`. |
+| `tcp_stream` | capture-local integer | Unique selected tshark `tcp.stream`. | Required for `OK`; identifier only, not a measurement. |
+| `client_random` | 64 hexadecimal characters | Unique ClientHello random retained as correlation evidence. | Required for `OK`. |
+| `analysis_status` | category | `OK` after all mandatory TCP/TLS boundaries and structures pass; otherwise `ERROR`. | Only `OK` measured rows enter statistics. Missing HTTP alone does not produce `ERROR`. |
+| `analysis_error` | text | Fail-closed diagnostic for an invalid, missing, or ambiguous mandatory structure. | Empty for `OK`; failed metrics remain empty rather than zero. |
+| `source_capture` | relative path | Present only in a historically reprocessed `pcap.csv`; identifies the immutable per-run capture directory below `SOURCE` used to derive the row. It is not part of newly captured campaign rows. | Required in reprocessed output; not applicable to the primary capture-time CSV schema. |
+
+In Python/JSON, unavailable values are `null`. Python's CSV writer serializes
+that value as an empty field. Therefore an empty CSV field does not mean zero.
+A numeric zero is an observed applicable value: for example, no client
+Certificate in server-only authentication, no retransmissions, no SCT in a
+successfully parsed X.509 certificate, or a valid empty Merkle path. A null can
+instead mean not applicable (MTC fields for X.509), unavailable structured DER,
+or a deliberately optional observation such as unidentified HTTP. Use
+`case`, `analysis_status`, `authentication_components_status`, and their error
+columns to distinguish these conditions. `summary.json` also records null when
+a metric has no usable observations; `report.html` does not manufacture a
+statistic for it.
+
+### Interpreting example rows
+
+- In an X.509 server-only row, client Certificate and CertificateVerify sizes
+  are zero. Server authentication bytes equal
+  `tls_server_certificate_bytes + tls_server_certificate_verify_bytes`.
+  X.509 MTCProof fields are null. If `tls_server_sct_bytes` is zero, the parsed
+  transmitted chain contained no SCT extension.
+- In an MTC landmark row, `tls_server_mtc_proof_bytes` is a component already
+  contained in `tls_server_certificate_bytes`; it is reported for explanation,
+  not added to `tls_server_authentication_bytes`. SCT fields are null because
+  they are not applicable to that MTC credential. A missing HTTP decode leaves
+  only `tcp_syn_to_first_application_request_ms` empty.
+
+### Historical PCAP reprocessing and evidence files
+
+Existing captures can be analyzed into a new directory without repeating TLS:
+
+```sh
+bin/performance/mt-handshake-performance reprocess-pcap \
+  SOURCE \
+  DESTINATION
+```
+
+`SOURCE` must contain `pcap.csv` and its referenced per-run `handshake.pcap`
+and `keylog.txt` files. `DESTINATION` must not exist and must be below
+`artifacts/results/`; historical files are never overwritten. The retained
+`keylog.txt` lets tshark decrypt TLS 1.3, while `handshake.pcap` remains the raw
+packet evidence. Derived per-observation values are written to `pcap.csv`,
+measured `phase=measured` rows with `analysis_status=OK` feed `summary.json`,
+and `report.html` renders those statistics. Warmup rows remain in `pcap.csv`
+but never enter the summary or HTML statistics.
 
 ## Measurement limitations and correct comparison
 

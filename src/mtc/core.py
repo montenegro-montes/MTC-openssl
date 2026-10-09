@@ -526,4 +526,18 @@ def proof_extensions(encoded_proof):
     if offset!=len(encoded_proof):raise ValueError('trailing MTCProof data')
     decode_subtree_signature_block(signature_block)
     return extensions
+def proof_components(encoded_proof):
+    """Return byte-exact MTCProof components after canonical validation."""
+    proof_extensions(encoded_proof)
+    offset=0
+    def vector(width):
+        nonlocal offset
+        length=int.from_bytes(encoded_proof[offset:offset+width],'big');offset+=width
+        value=encoded_proof[offset:offset+length];offset+=length
+        return value
+    extensions=vector(2);start=int.from_bytes(encoded_proof[offset:offset+6],'big');offset+=6
+    end=int.from_bytes(encoded_proof[offset:offset+6],'big');offset+=6
+    inclusion=vector(2);signature_block=vector(3)
+    return dict(extensions=extensions,start=start,end=end,inclusion_proof=inclusion,
+                signatures=decode_subtree_signature_block(signature_block))
 def certificate(tbs,p):return seq(tbs,ALG,der(3,b'\0'+p))

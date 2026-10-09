@@ -39,6 +39,7 @@ Usage:
   $SELF run-mutual [CONFIG] [OUTPUT]
   $SELF run-all [CONFIG] [OUTPUT]  # compatibility alias
   $SELF run-retry [CONFIG] [OUTPUT]
+  $SELF reprocess-pcap SOURCE OUTPUT
 
 CONFIG defaults to .mt-state/handshake-performance.env. When OUTPUT is omitted,
 a new timestamped directory is selected below artifacts/results/. Nothing is
@@ -862,7 +863,7 @@ measure_pcap() {
   local output=$1 profile case_name phase count repetition directory pcap keylog log capture_log analysis_log analysis_values analysis_status ready attempt done_count=0 total_count started now eta
   local -a analyzer_args
   total_count=$(( ${#PROFILES[@]} * ${#ACTIVE_CASES[@]} * (WARMUPS + RUNS) )); started=$(date +%s)
-  printf 'profile,case,key_establishment,openssl_group,phase,repetition,tcp_handshake_ms,tcp_syn_to_clienthello_ms,tls_clienthello_to_client_finished_ms,tcp_syn_to_first_application_request_ms,tls_client_handshake_bytes,tls_server_handshake_bytes,tls_handshake_bytes,tls_client_handshake_wire_bytes,tls_server_handshake_wire_bytes,tls_handshake_wire_bytes,tcp_handshake_wire_bytes,connection_handshake_wire_bytes,tls_client_handshake_packets,tls_server_handshake_packets,tls_handshake_packets,tls_client_certificate_bytes,tls_server_certificate_bytes,tcp_stream,client_random,analysis_status,analysis_error,tcp_retransmission_packets\n' > "$output/pcap.csv"
+  printf 'profile,case,key_establishment,openssl_group,phase,repetition,tcp_handshake_ms,tcp_syn_to_clienthello_ms,tls_clienthello_to_client_finished_ms,tcp_syn_to_first_application_request_ms,tls_client_handshake_bytes,tls_server_handshake_bytes,tls_handshake_bytes,tls_client_handshake_wire_bytes,tls_server_handshake_wire_bytes,tls_handshake_wire_bytes,tcp_handshake_wire_bytes,connection_handshake_wire_bytes,tls_client_handshake_packets,tls_server_handshake_packets,tls_handshake_packets,tls_client_certificate_bytes,tls_server_certificate_bytes,tls_client_certificate_verify_bytes,tls_server_certificate_verify_bytes,tls_client_certificate_verify_signature_bytes,tls_server_certificate_verify_signature_bytes,tls_client_mtc_proof_bytes,tls_server_mtc_proof_bytes,tls_client_mtc_merkle_path_bytes,tls_server_mtc_merkle_path_bytes,tls_client_mtc_merkle_path_hashes,tls_server_mtc_merkle_path_hashes,tls_client_sct_bytes,tls_server_sct_bytes,tls_client_authentication_bytes,tls_server_authentication_bytes,tls_authentication_bytes,authentication_components_status,authentication_components_error,tcp_stream,client_random,analysis_status,analysis_error,tcp_retransmission_packets\n' > "$output/pcap.csv"
   printf '\nPCAP MEASUREMENTS — 9 profiles × %d authentication cases\n' "${#ACTIVE_CASES[@]}"
   for profile in "${PROFILES[@]}"; do
    for case_name in "${ACTIVE_CASES[@]}"; do
@@ -907,12 +908,18 @@ measure_pcap() {
         -e ip.src -e ip.dst -e ipv6.src -e ipv6.dst -e tcp.srcport -e tcp.dstport \
         -e tcp.flags.syn -e tcp.flags.ack -e tcp.seq -e tcp.ack -e tcp.len -e tcp.payload \
         -e tls.handshake.type -e tls.handshake.length -e tls.handshake.random \
+        -e tls.handshake.certificate -e tls.handshake.certificate_length \
+        -e tls.handshake.sig_hash_alg -e tls.handshake.client_cert_vrfy.sig_len \
+        -e tls.handshake.client_cert_vrfy.sig \
         -e tls.record.length -e http.request.method \
         -e tcp.analysis.retransmission -e tcp.analysis.fast_retransmission -e tcp.analysis.spurious_retransmission \
         >"$analysis_log" 2>"$directory/tshark.stderr" \
         || fail "$profile $case_name tshark analysis failed; inspect $directory/tshark.stderr"
       analyzer_args=()
       [[ "$case_name" != *-mutual ]] || analyzer_args+=(--expect-client-certificate)
+      if [[ "$case_name" == x509-* ]]; then analyzer_args+=(--credential-kind x509)
+      elif [[ "$case_name" == *-landmark* ]]; then analyzer_args+=(--credential-kind mtc-landmark)
+      else analyzer_args+=(--credential-kind mtc-standalone); fi
       if analysis_values=$(python3 "$REPO/campaigns/performance/handshake_performance/pcap_handshake.py" "$analysis_log" --format csv "${analyzer_args[@]}" 2>>"$directory/tshark.stderr"); then
         analysis_status=OK
       else
@@ -991,6 +998,12 @@ root=Path(sys.argv[1]); result={
  'tls_handshake_packets':'client plus server TCP-payload frames in the TLS handshake interval',
  'tls_client_certificate_bytes':'complete client Certificate handshake message, including its four-byte handshake header; zero only when not requested; applies to X.509 and project MTC credentials carried in Certificate',
  'tls_server_certificate_bytes':'complete server Certificate handshake message, including its four-byte handshake header; applies to X.509 and project MTC credentials carried in Certificate',
+ 'tls_certificate_verify_bytes':'complete CertificateVerify handshake message, including its four-byte handshake header',
+ 'tls_certificate_verify_signature_bytes':'signature vector contents after validating the TLS 1.3 algorithm and uint16 length fields',
+ 'mtc_proof_bytes':'complete MTCProof carried in the MTC certificate signatureValue; unavailable for X.509',
+ 'mtc_merkle_path_bytes':'MTCProof inclusion-path vector contents; excludes its uint16 length',
+ 'sct_bytes':'encoded SCT-list extension value; zero means a parsed certificate with no SCT extension, blank means unavailable',
+ 'tls_authentication_bytes':'Certificate plus CertificateVerify handshake messages, without TLS record overhead; Finished and CertificateRequest are excluded',
  'tcp_retransmission_packets':'retransmitted frames retained in wire-byte and packet counts but deduplicated from logical TLS bytes'}}
 T95={1:12.706,2:4.303,3:3.182,4:2.776,5:2.571,6:2.447,7:2.365,8:2.306,9:2.262,10:2.228,11:2.201,12:2.179,13:2.160,14:2.145,15:2.131,16:2.120,17:2.110,18:2.101,19:2.093,20:2.086,21:2.080,22:2.074,23:2.069,24:2.064,25:2.060,26:2.056,27:2.052,28:2.048,29:2.045,30:2.042}
 def describe(values):
@@ -1009,12 +1022,14 @@ for source,key in [('native.csv','native'),('pcap.csv','pcap')]:
   cases[profile]={}
   for name in sorted({r['case'] for r in measured if r['profile']==profile}):
    group=[r for r in measured if r['profile']==profile and r['case']==name]
-   fields=['tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native','process_wall_ms','tls_bytes_total'] if key=='native' else ['tcp_handshake_ms','tcp_syn_to_clienthello_ms','tls_clienthello_to_client_finished_ms','tcp_syn_to_first_application_request_ms','tls_client_handshake_bytes','tls_server_handshake_bytes','tls_handshake_bytes','tls_client_handshake_wire_bytes','tls_server_handshake_wire_bytes','tls_handshake_wire_bytes','tcp_handshake_wire_bytes','connection_handshake_wire_bytes','tls_client_handshake_packets','tls_server_handshake_packets','tls_handshake_packets','tls_client_certificate_bytes','tls_server_certificate_bytes','tcp_retransmission_packets']
+   fields=['tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native','process_wall_ms','tls_bytes_total'] if key=='native' else ['tcp_handshake_ms','tcp_syn_to_clienthello_ms','tls_clienthello_to_client_finished_ms','tcp_syn_to_first_application_request_ms','tls_client_handshake_bytes','tls_server_handshake_bytes','tls_handshake_bytes','tls_client_handshake_wire_bytes','tls_server_handshake_wire_bytes','tls_handshake_wire_bytes','tcp_handshake_wire_bytes','connection_handshake_wire_bytes','tls_client_handshake_packets','tls_server_handshake_packets','tls_handshake_packets','tls_client_certificate_bytes','tls_server_certificate_bytes','tls_client_certificate_verify_bytes','tls_server_certificate_verify_bytes','tls_client_certificate_verify_signature_bytes','tls_server_certificate_verify_signature_bytes','tls_client_mtc_proof_bytes','tls_server_mtc_proof_bytes','tls_client_mtc_merkle_path_bytes','tls_server_mtc_merkle_path_bytes','tls_client_mtc_merkle_path_hashes','tls_server_mtc_merkle_path_hashes','tls_client_sct_bytes','tls_server_sct_bytes','tls_client_authentication_bytes','tls_server_authentication_bytes','tls_authentication_bytes','tcp_retransmission_packets']
    cases[profile][name]={
     'key_establishment':result['key_establishment'],
     **({'depth_including_root':int(sys.argv[5]),'transmitted_certificates':int(sys.argv[5])-1,
         'scenario':f'{profile}-{name}' if '-d' in name else f'{profile}-{name}-d{sys.argv[5]}'} if name.startswith('x509-') else {}),
-    **{f:describe([float(r[f]) for r in group]) for f in fields},
+    **{f:(describe(values) if (values := [float(r[f]) for r in group
+                                         if r.get(f) not in (None,'')]) else None)
+       for f in fields},
    }
  result[key]=cases
 (root/'summary.json').write_text(json.dumps(result,indent=2)+'\n')
@@ -1200,6 +1215,11 @@ case "$command" in
     load_config "$config"
     configure_depth "${X509_DEPTH:-2}"
     run_retry_matrix "${requested_output:-$(default_retry_output)}"
+    ;;
+  reprocess-pcap)
+    [[ $# -eq 3 ]] || fail 'Usage: reprocess-pcap SOURCE OUTPUT'
+    python3 "$REPO/campaigns/performance/handshake_performance/reprocess_pcaps.py" \
+      "$2" "$3" --capture-image "$CAPTURE_IMAGE"
     ;;
   run-native|run-native-single|run-native-mutual|run-pcap|run-pcap-single|run-pcap-mutual|run-native-pcap|run-single|run-mutual|run-all)
     if [[ "$command" == run-all ]]; then

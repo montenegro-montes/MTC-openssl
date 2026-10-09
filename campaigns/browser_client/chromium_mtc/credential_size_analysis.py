@@ -40,24 +40,8 @@ def sha256(path):
 
 def _proof_components(encoded):
     """Measure a proof only after the project's canonical parser accepts it."""
-    core.proof_extensions(encoded)
-    position = 0
-
-    def vector(width):
-        nonlocal position
-        length = int.from_bytes(encoded[position:position + width], 'big')
-        position += width
-        value = encoded[position:position + length]
-        position += length
-        return value
-
-    vector(2)  # Extensions are validated by proof_extensions().
-    position += 12  # start and end uint48 values.
-    inclusion = vector(2)
-    signatures = core.decode_subtree_signature_block(vector(3))
-    if position != len(encoded):
-        raise ValueError('trailing MTCProof data')
-    return inclusion, signatures
+    components = core.proof_components(encoded)
+    return components['inclusion_proof'], components['signatures']
 
 
 def analyze_mtc(profile, scenario, selected):
