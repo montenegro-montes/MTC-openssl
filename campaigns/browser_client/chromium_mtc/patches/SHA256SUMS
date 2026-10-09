@@ -11,3 +11,4 @@ a357790dfa84011068d6c4a628a38d4363c71d946c719d9bd133e07cf5de1e54  chromium/0007-
 c8b20098b55a07ff5cad05c602a0b24c352477273f135be9ff42c1c8b23e8d70  chromium/0009-Add-Plants-06-RP-HTTP-trusted-subtrees.patch
 ca289d64085b44b57d8be4d7ccea578e86159a9d8bfb9b7d365972687eb4c863  chromium/0010-Add-Plants-06-standalone-trust-configuration-and-tests.patch
 1a73969cdd9b34c43f55fd2986e1ad0c8e14113fee165737ba60446c10ff7856  chromium/0011-chromium-plants06-private-anchor-policy.patch
+b6213be6223e2e80fda504f7c5d7ec588bc5b51df8a2daf955db0b82d991621e  boringssl/0003-Complete-Plants-06-verification-and-metadata.patch

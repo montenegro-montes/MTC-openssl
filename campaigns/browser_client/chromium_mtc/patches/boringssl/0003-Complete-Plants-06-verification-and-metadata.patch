@@ -1,0 +1,414 @@
+diff --git a/pki/path_builder.cc b/pki/path_builder.cc
+index 388b7b1..5c8eeb9 100644
+--- a/pki/path_builder.cc
++++ b/pki/path_builder.cc
+@@ -1041,7 +1041,8 @@ CertPathBuilder::Result CertPathBuilder::Run() {
+           result_path->certs, result_path->trust_anchor, delegate_, time_,
+           key_purpose_, initial_explicit_policy_, user_initial_policy_set_,
+           initial_policy_mapping_inhibit_, initial_any_policy_inhibit_,
+-          &result_path->user_constrained_policy_set, &result_path->errors);
++          &result_path->user_constrained_policy_set, &result_path->errors,
++          &result_path->mtc_verification_info);
+     }
+ 
+     // Give the delegate a chance to add errors to the path.
+diff --git a/pki/path_builder.h b/pki/path_builder.h
+index 2f8ba5b..4e78970 100644
+--- a/pki/path_builder.h
++++ b/pki/path_builder.h
+@@ -16,6 +16,7 @@
+ #define BSSL_PKI_PATH_BUILDER_H_
+ 
+ #include <memory>
++#include <optional>
+ #include <vector>
+ 
+ #include <openssl/base.h>
+@@ -92,6 +93,9 @@ struct OPENSSL_EXPORT CertPathBuilderResultPath {
+   // subset of policies user requested during verification).
+   std::set<der::Input> user_constrained_policy_set;
+ 
++  // Information authenticated while verifying an MTC, if this path uses one.
++  std::optional<MTCVerificationInfo> mtc_verification_info;
++
+   // Slot for per-path data that may set by CertPathBuilderDelegate. The
+   // specific type is chosen by the delegate. Can be nullptr when unused.
+   std::unique_ptr<CertPathBuilderDelegateData> delegate_data;
+diff --git a/pki/trust_store.cc b/pki/trust_store.cc
+index b2d71ba..8399319 100644
+--- a/pki/trust_store.cc
++++ b/pki/trust_store.cc
+@@ -221,7 +221,7 @@ bool MTCAnchor::IsValid() const {
+   if (!synthetic_cert_) {
+     return false;
+   }
+-  if (spec_version_ != kPlants04 && spec_version_ != kPlants05) {
++  if (spec_version_ != kPlants04 && spec_version_ != kPlants06) {
+     return false;
+   }
+   if (min_serial_ > max_serial_) {
+@@ -345,19 +345,19 @@ void MTCAnchor::CreateSyntheticCert(bssl::Span<const uint8_t> ca_id) {
+   BSSL_CHECK(CBB_add_asn1(&subject_set, &subject_log, CBS_ASN1_SEQUENCE));
+ 
+   // Plants-04 used an early experimental attribute OID and a textual CA ID.
+-  // Plants-05 uses id-rdna-trustAnchorID with the binary RELATIVE-OID value.
++  // Plants-06 uses id-rdna-trustAnchorID with the binary RELATIVE-OID value.
+   static const uint8_t plants04_tai_attr_oid[] = {
+       0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0xda, 0x4b, 0x2f, 0x01};
+   static const uint8_t plants05_tai_attr_oid[] = {
+       0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0xda, 0x4b, 0x2f, 0x03};
+-  const auto tai_attr_oid = spec_version_ == kPlants05
++  const auto tai_attr_oid = spec_version_ == kPlants06
+                                 ? MakeConstSpan(plants05_tai_attr_oid)
+                                 : MakeConstSpan(plants04_tai_attr_oid);
+   BSSL_CHECK(CBB_add_asn1_element(&subject_log, CBS_ASN1_OBJECT,
+                                   tai_attr_oid.data(),
+                                   tai_attr_oid.size()));
+ 
+-  if (spec_version_ == kPlants05) {
++  if (spec_version_ == kPlants06) {
+     constexpr unsigned kAsn1RelativeOid = 0x0d;
+     BSSL_CHECK(CBB_add_asn1_element(&subject_log, kAsn1RelativeOid,
+                                     ca_id.data(), ca_id.size()));
+diff --git a/pki/trust_store.h b/pki/trust_store.h
+index d7afd22..5865e9e 100644
+--- a/pki/trust_store.h
++++ b/pki/trust_store.h
+@@ -154,8 +154,8 @@ class OPENSSL_EXPORT MTCAnchor {
+     // draft-ietf-plants-merkle-tree-certs-04
+     kPlants04,
+ 
+-    // draft-ietf-plants-merkle-tree-certs-05
+-    kPlants05
++    // draft-ietf-plants-merkle-tree-certs-06
++    kPlants06
+   };
+ 
+   // Create an MTCAnchor with spec version kPlants04 for a trusted CA with
+@@ -169,7 +169,7 @@ class OPENSSL_EXPORT MTCAnchor {
+             UniquePtr<CRYPTO_BUFFER> ca_key,
+             std::vector<LogTrustedSubtrees> log_trusted_subtrees);
+ 
+-  // Experimental Plants-05 constructor. The existing constructor above
++  // Experimental Plants-06 constructor. The existing constructor above
+   // retains Plants-04 semantics for all existing Chromium callers.
+   MTCAnchor(MtcSpecVersion spec_version,
+             Span<const uint8_t> ca_id,
+diff --git a/pki/trust_store_in_memory_unittest.cc b/pki/trust_store_in_memory_unittest.cc
+index d383d66..358b943 100644
+--- a/pki/trust_store_in_memory_unittest.cc
++++ b/pki/trust_store_in_memory_unittest.cc
+@@ -251,7 +251,7 @@ TEST_F(TrustStoreInMemoryTest, MTCAnchors) {
+   }
+ }
+ 
+-TEST_F(TrustStoreInMemoryTest, Plants05AnchorMatchesRelativeOidIssuer) {
++TEST_F(TrustStoreInMemoryTest, Plants06AnchorMatchesRelativeOidIssuer) {
+   static constexpr uint8_t kCaId[] = {0x81, 0xfd, 0x59, 0x01};
+   static constexpr uint8_t kIssuerName[] = {
+       0x31, 0x14, 0x30, 0x12, 0x06, 0x0a, 0x2b, 0x06, 0x01, 0x04, 0x01,
+@@ -259,7 +259,7 @@ TEST_F(TrustStoreInMemoryTest, Plants05AnchorMatchesRelativeOidIssuer) {
+ 
+   UniquePtr<CRYPTO_BUFFER> ca_spki(CRYPTO_BUFFER_new({}, 0, nullptr));
+   auto anchor = std::make_shared<MTCAnchor>(
+-      MTCAnchor::kPlants05, kCaId, SignatureAlgorithm::kMldsa44,
++      MTCAnchor::kPlants06, kCaId, SignatureAlgorithm::kMldsa44,
+       std::move(ca_spki), 0, ~uint64_t{0},
+       std::vector<LogTrustedSubtrees>());
+   ASSERT_TRUE(anchor->IsValid());
+diff --git a/pki/verify_certificate_chain.cc b/pki/verify_certificate_chain.cc
+index a22e5a5..ee2d243 100644
+--- a/pki/verify_certificate_chain.cc
++++ b/pki/verify_certificate_chain.cc
+@@ -760,7 +760,8 @@ class PathVerifier {
+            InitialPolicyMappingInhibit initial_policy_mapping_inhibit,
+            InitialAnyPolicyInhibit initial_any_policy_inhibit,
+            std::set<der::Input> *user_constrained_policy_set,
+-           CertPathErrors *errors);
++           CertPathErrors *errors,
++           std::optional<MTCVerificationInfo> *mtc_verification_info);
+ 
+  private:
+   // Verifies and updates the valid policies. This corresponds with RFC 5280
+@@ -912,6 +913,8 @@ class PathVerifier {
+   // "signature" and instead have an MTCAnchor used for verification.
+   const MTCAnchor *working_mtc_anchor_ = nullptr;
+ 
++  std::optional<MTCVerificationInfo> *mtc_verification_info_ = nullptr;
++
+   // `max_path_length_` corresponds with the same named variable in RFC 5280
+   // section 6.1.2.
+   //
+@@ -1220,22 +1223,35 @@ static bool VerifyMTCProofSignaturePlants04(
+       Span(CRYPTO_BUFFER_data(key_bytes), CRYPTO_BUFFER_len(key_bytes)), cache);
+ }
+ 
+-enum class VerifyMTCResult {
+-  // Failed for any reason not covered by the more specific cases.
+-  kFailed,
++struct VerifyMTCResult {
++  enum Status {
++    // Failed for any reason not covered by the more specific cases.
++    kFailed,
+ 
+-  // The MTC was landmark relative (had no signatures) but the subtree range
+-  // was not present in `mtc_anchor`'s configured trusted subtrees.
+-  // (Note that this does not include the case where the range was present in
+-  // the trusted subtrees but had the incorrect hash.)
+-  kLandmarkNotRecognized,
++    // The MTC was landmark relative (had no signatures) but the subtree range
++    // was not present in `mtc_anchor`'s configured trusted subtrees.
++    // (Note that this does not include the case where the range was present in
++    // the trusted subtrees but had the incorrect hash.)
++    kLandmarkNotRecognized,
+ 
+-  // The MTC was verified as a standalone MTC and had a valid CA signature, but
+-  // `delegate->IsCosignatureVerificationResultAcceptable` returned false.
+-  kUnacceptableCosignatureVerificationResult,
++    // The MTC was verified as a standalone MTC and had a valid CA signature,
++    // but `delegate->IsCosignatureVerificationResultAcceptable` returned
++    // false.
++    kUnacceptableCosignatureVerificationResult,
+ 
+   // The MTC verified successfully.
+-  kSuccess,
++    kSuccess,
++  };
++
++  VerifyMTCResult(Status status) : status(status) {
++    BSSL_CHECK(status != kSuccess);
++  }
++
++  explicit VerifyMTCResult(MTCVerificationInfo info)
++      : status(kSuccess), info(std::move(info)) {}
++
++  Status status;
++  std::optional<MTCVerificationInfo> info;
+ };
+ // This function implements draft-ietf-plants-merkle-tree-certs-04 section 7.2:
+ // Verifying Certificate Signatures.
+@@ -1248,7 +1264,7 @@ static VerifyMTCResult VerifyMTC(const ParsedCertificate &cert,
+ 
+   const MTCAnchor::MtcSpecVersion spec_version = mtc_anchor->spec_version();
+   if (spec_version != MTCAnchor::kPlants04 &&
+-      spec_version != MTCAnchor::kPlants05) {
++      spec_version != MTCAnchor::kPlants06) {
+     return VerifyMTCResult::kFailed;
+   }
+ 
+@@ -1272,7 +1288,7 @@ static VerifyMTCResult VerifyMTC(const ParsedCertificate &cert,
+     return VerifyMTCResult::kFailed;
+   }
+   const bool signatures_ok =
+-      spec_version == MTCAnchor::kPlants05
++      spec_version == MTCAnchor::kPlants06
+           ? CBS_get_u24_length_prefixed(&mtc_proof, &signatures)
+           : CBS_get_u16_length_prefixed(&mtc_proof, &signatures);
+   if (!signatures_ok || CBS_len(&mtc_proof) != 0) {
+@@ -1286,9 +1302,9 @@ static VerifyMTCResult VerifyMTC(const ParsedCertificate &cert,
+     return VerifyMTCResult::kFailed;
+   }
+ 
+-  // Plants-05 constrains MTC serial numbers to the range configured by the
++  // Plants-06 constrains MTC serial numbers to the range configured by the
+   // issuing MTC CA. Plants-04 anchors retain the historical unrestricted range.
+-  if (spec_version == MTCAnchor::kPlants05 &&
++  if (spec_version == MTCAnchor::kPlants06 &&
+       !mtc_anchor->IsSerialInRange(serial)) {
+     return VerifyMTCResult::kFailed;
+   }
+@@ -1460,30 +1476,29 @@ static VerifyMTCResult VerifyMTC(const ParsedCertificate &cert,
+     );
+   }
+   if (trusted_subtree_hash) {
+-    // This initial Plants-05 path intentionally supports landmark-relative
++    // This initial Plants-06 path intentionally supports landmark-relative
+     // verification only. A landmark proof carries no subtree signatures.
+-    if (spec_version == MTCAnchor::kPlants05 &&
++    if (spec_version == MTCAnchor::kPlants06 &&
+         CBS_len(&signatures) != 0) {
+       return VerifyMTCResult::kFailed;
+     }
+ 
+-    return (CRYPTO_memcmp(expected_subtree_hash->data(),
+-                          trusted_subtree_hash->data(),
+-                          expected_subtree_hash->size()) == 0)
+-               ? VerifyMTCResult::kSuccess
+-               : VerifyMTCResult::kFailed;
++    if (CRYPTO_memcmp(expected_subtree_hash->data(),
++                      trusted_subtree_hash->data(),
++                      expected_subtree_hash->size()) != 0) {
++      return VerifyMTCResult::kFailed;
++    }
++    return VerifyMTCResult(MTCVerificationInfo{
++        MTCVerificationMode::kLandmark,
++        std::vector<uint8_t>(mtc_anchor->ca_id().begin(),
++                             mtc_anchor->ca_id().end()),
++        log_number, index});
+   }
+ 
+   if (CBS_len(&signatures) == 0) {
+     return VerifyMTCResult::kLandmarkNotRecognized;
+   }
+ 
+-  // Standalone Plants-05 verification is deliberately not enabled here yet.
+-  // The existing signature/cosigner path below remains Plants-04 only.
+-  if (spec_version == MTCAnchor::kPlants05) {
+-    return VerifyMTCResult::kFailed;
+-  }
+-
+   // Step 6: Let log_id be the log ID constructed from the CA ID in issuer and
+   // the log_number.
+   // Section 5.1: For each positive integer N, the OID {caID logs(0) N}
+@@ -1574,10 +1589,15 @@ static VerifyMTCResult VerifyMTC(const ParsedCertificate &cert,
+   }
+ 
+   if (found_valid_ca_signature) {
+-    return delegate->IsCosignatureVerificationResultAcceptable(
+-               mtc_anchor, std::move(valid_additional_cosigners))
+-               ? VerifyMTCResult::kSuccess
+-               : VerifyMTCResult::kUnacceptableCosignatureVerificationResult;
++    if (!delegate->IsCosignatureVerificationResultAcceptable(
++            mtc_anchor, std::move(valid_additional_cosigners))) {
++      return VerifyMTCResult::kUnacceptableCosignatureVerificationResult;
++    }
++    return VerifyMTCResult(MTCVerificationInfo{
++        MTCVerificationMode::kStandalone,
++        std::vector<uint8_t>(mtc_anchor->ca_id().begin(),
++                             mtc_anchor->ca_id().end()),
++        log_number, index});
+   }
+   return VerifyMTCResult::kFailed;
+ }
+@@ -1619,11 +1639,18 @@ void PathVerifier::BasicCertificateProcessing(
+     if (!is_target_cert) {
+       *shortcircuit_chain_validation = true;
+       errors->AddError(cert_errors::kMaxPathLengthViolated);
+-    } else if (VerifyMTCResult result =
+-                   VerifyMTC(cert, working_mtc_anchor_, delegate_);
+-               result != VerifyMTCResult::kSuccess) {
+-      *shortcircuit_chain_validation = true;
+-      switch (result) {
++    } else {
++      VerifyMTCResult result =
++          VerifyMTC(cert, working_mtc_anchor_, delegate_);
++      if (result.status == VerifyMTCResult::kSuccess) {
++        BSSL_CHECK(result.info.has_value());
++        if (mtc_verification_info_) {
++          *mtc_verification_info_ = std::move(result.info);
++        }
++      } else {
++        BSSL_CHECK(!result.info.has_value());
++        *shortcircuit_chain_validation = true;
++        switch (result.status) {
+         case VerifyMTCResult::kLandmarkNotRecognized:
+           errors->AddError(cert_errors::kMtcLandmarkNotRecognized);
+           break;
+@@ -1633,6 +1660,7 @@ void PathVerifier::BasicCertificateProcessing(
+           break;
+         default:
+           errors->AddError(cert_errors::kVerifySignedDataFailed);
++        }
+       }
+     }
+   } else {
+@@ -2100,13 +2128,18 @@ void PathVerifier::Run(
+     const std::set<der::Input> &user_initial_policy_set,
+     InitialPolicyMappingInhibit initial_policy_mapping_inhibit,
+     InitialAnyPolicyInhibit initial_any_policy_inhibit,
+-    std::set<der::Input> *user_constrained_policy_set, CertPathErrors *errors) {
++    std::set<der::Input> *user_constrained_policy_set, CertPathErrors *errors,
++    std::optional<MTCVerificationInfo> *mtc_verification_info) {
+   // This implementation is structured to mimic the description of certificate
+   // path verification given by RFC 5280 section 6.1.
+   BSSL_CHECK(delegate);
+   BSSL_CHECK(errors);
+ 
+   delegate_ = delegate;
++  mtc_verification_info_ = mtc_verification_info;
++  if (mtc_verification_info_) {
++    mtc_verification_info_->reset();
++  }
+ 
+   // An empty chain is necessarily invalid.
+   if (certs.empty()) {
+@@ -2244,12 +2277,13 @@ void VerifyCertificateChain(
+     const std::set<der::Input> &user_initial_policy_set,
+     InitialPolicyMappingInhibit initial_policy_mapping_inhibit,
+     InitialAnyPolicyInhibit initial_any_policy_inhibit,
+-    std::set<der::Input> *user_constrained_policy_set, CertPathErrors *errors) {
++    std::set<der::Input> *user_constrained_policy_set, CertPathErrors *errors,
++    std::optional<MTCVerificationInfo> *mtc_verification_info) {
+   PathVerifier verifier;
+   verifier.Run(certs, last_cert_trust, delegate, time, required_key_purpose,
+                initial_explicit_policy, user_initial_policy_set,
+                initial_policy_mapping_inhibit, initial_any_policy_inhibit,
+-               user_constrained_policy_set, errors);
++               user_constrained_policy_set, errors, mtc_verification_info);
+ }
+ 
+ bool VerifyCertificateIsSelfSigned(const ParsedCertificate &cert,
+diff --git a/pki/verify_certificate_chain.h b/pki/verify_certificate_chain.h
+index dbc99a1..2eddc38 100644
+--- a/pki/verify_certificate_chain.h
++++ b/pki/verify_certificate_chain.h
+@@ -15,6 +15,8 @@
+ #ifndef BSSL_PKI_VERIFY_CERTIFICATE_CHAIN_H_
+ #define BSSL_PKI_VERIFY_CERTIFICATE_CHAIN_H_
+ 
++#include <cstdint>
++#include <optional>
+ #include <set>
+ #include <vector>
+ 
+@@ -33,6 +35,18 @@ namespace der {
+ struct GeneralizedTime;
+ }
+ 
++enum class MTCVerificationMode : uint8_t {
++  kLandmark,
++  kStandalone,
++};
++
++struct MTCVerificationInfo {
++  MTCVerificationMode mode;
++  std::vector<uint8_t> ca_id;
++  uint16_t log_number;
++  uint64_t leaf_index;
++};
++
+ struct CertificateTrust;
+ 
+ // The key purpose (extended key usage) to check for during verification.
+@@ -306,7 +320,8 @@ OPENSSL_EXPORT void VerifyCertificateChain(
+     const std::set<der::Input> &user_initial_policy_set,
+     InitialPolicyMappingInhibit initial_policy_mapping_inhibit,
+     InitialAnyPolicyInhibit initial_any_policy_inhibit,
+-    std::set<der::Input> *user_constrained_policy_set, CertPathErrors *errors);
++    std::set<der::Input> *user_constrained_policy_set, CertPathErrors *errors,
++    std::optional<MTCVerificationInfo> *mtc_verification_info = nullptr);
+ 
+ // Returns true if `cert` is self-signed. Returns false `cert` is not
+ // self-signed or there was an error. If `errors` is non-null, it will contain
+diff --git a/pki/verify_unittest.cc b/pki/verify_unittest.cc
+index a06835e..705b2b9 100644
+--- a/pki/verify_unittest.cc
++++ b/pki/verify_unittest.cc
+@@ -319,7 +319,7 @@ TEST_F(VerifyMTCTest, SignaturelessMTC) {
+   EXPECT_TRUE(CertificateVerify(opts, &error)) << error.DiagnosticString();
+ }
+ 
+-TEST_F(VerifyMTCTest, Plants05SignaturelessMTCUsesUint24Signatures) {
++TEST_F(VerifyMTCTest, Plants06SignaturelessMTCUsesUint24Signatures) {
+   static constexpr char kLeafBase64[] =
+       "MIIB0zCCAUugAwIBAgIHAQAAAAAAADAMBgorBgEEAYLaSy8AMBYxFDASBgorBgEE"
+       "AYLaSy8DDQSB/VllMB4XDTI2MTAwMTE5NDY0M1oXDTI2MTAzMTE5NDY0M1owITEf"
+@@ -343,7 +343,7 @@ TEST_F(VerifyMTCTest, Plants05SignaturelessMTCUsesUint24Signatures) {
+   static constexpr uint8_t kCaId[] = {0x81, 0xfd, 0x59, 0x65};
+   UniquePtr<CRYPTO_BUFFER> ca_spki(CRYPTO_BUFFER_new({}, 0, nullptr));
+   auto anchor = std::make_shared<MTCAnchor>(
+-      MTCAnchor::kPlants05, kCaId, SignatureAlgorithm::kEcdsaSha256,
++      MTCAnchor::kPlants06, kCaId, SignatureAlgorithm::kEcdsaSha256,
+       std::move(ca_spki), 1ULL << 48, (1ULL << 48) + 15,
+       std::vector<LogTrustedSubtrees>{{1, {subtree}}});
+ 
