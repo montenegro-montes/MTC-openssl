@@ -113,6 +113,28 @@ select_depth() {
   esac
 }
 
+configure_iterations() {
+  RUNS=${1:-30}
+  case "$RUNS" in
+    1) WARMUPS=1;;
+    30|100|500|1000) WARMUPS=5;;
+    *) fail 'RUNS must be 1, 30, 100, 500, or 1000.';;
+  esac
+  export RUNS WARMUPS
+}
+
+select_iterations() {
+  local selection
+  printf '%s\n' 'Number of measured iterations:' \
+    '  1) 1' '  2) 30 (default)' '  3) 100' '  4) 500' '  5) 1000' >&2
+  read -r -p 'Choice [2]: ' selection || selection=2
+  case "${selection:-2}" in
+    1) configure_iterations 1;; 2) configure_iterations 30;;
+    3) configure_iterations 100;; 4) configure_iterations 500;;
+    5) configure_iterations 1000;; *) fail 'Choice must be 1..5.';;
+  esac
+}
+
 depth_output() {
   if [[ "$X509_DEPTH" == 2 ]]; then printf '%s\n' "$1"
   else printf '%s/d%s\n' "$1" "$2"; fi
@@ -263,7 +285,6 @@ X509_DEPTH=2
 X509_CHAIN_FIXTURES=
 RUNS=30
 WARMUPS=5
-PCAP_RUNS=30
 
 # Optional reproducible override: set both, or leave both empty for automatic resolution.
 MTC_ROOT=
@@ -273,12 +294,15 @@ EOF
 }
 
 create_configuration() {
-  local config=$1 selected=${2:-} depth=${3:-}
+  local config=$1 selected=${2:-} depth=${3:-} iterations=${4:-}
   [[ ! -e "$config" ]] || fail "Configuration exists: $config"
   if [[ -n "$selected" ]]; then configure_kem "$selected"; else select_kem; fi
   if [[ -n "$depth" ]]; then configure_depth "$depth"; else select_depth; fi
+  if [[ -n "$iterations" ]]; then configure_iterations "$iterations"; else select_iterations; fi
   mkdir -p "$(dirname "$config")"
-  config_template | sed -e "s/^KEM=x25519$/KEM=$KEM/" -e "s/^X509_DEPTH=2$/X509_DEPTH=$X509_DEPTH/" > "$config"
+  config_template | sed -e "s/^KEM=x25519$/KEM=$KEM/" \
+    -e "s/^X509_DEPTH=2$/X509_DEPTH=$X509_DEPTH/" \
+    -e "s/^RUNS=30$/RUNS=$RUNS/" -e "s/^WARMUPS=5$/WARMUPS=$WARMUPS/" > "$config"
   select_active_config "$config"
   echo "Created $config with key establishment $KEM_LABEL ($KEM_GROUP). A run resolves or prepares and validates the required dependencies lazily before measurements start."
 }
@@ -296,9 +320,9 @@ load_config() {
     export "$name"
   done < "$file"
 
-  : "${RUNS:?}" "${WARMUPS:?}" "${PCAP_RUNS:?}"
-  [[ "$RUNS" =~ ^[1-9][0-9]*$ && "$WARMUPS" =~ ^[0-9]+$ && "$PCAP_RUNS" =~ ^[1-9][0-9]*$ ]] \
-    || fail 'RUNS/WARMUPS/PCAP_RUNS must be integers.'
+  : "${RUNS:?}" "${WARMUPS:?}"
+  [[ "$RUNS" =~ ^[1-9][0-9]*$ && "$WARMUPS" =~ ^[0-9]+$ ]] \
+    || fail 'RUNS/WARMUPS must be integers.'
 
   configure_kem "${KEM:-x25519}"
 }
@@ -505,11 +529,10 @@ load_plan_counts() {
   X509_CHAIN_FIXTURES=
   RUNS=
   WARMUPS=
-  PCAP_RUNS=
 
   while IFS='=' read -r name value; do
     case "$name" in
-      KEM|RUNS|WARMUPS|PCAP_RUNS|X509_DEPTH|X509_CHAIN_FIXTURES)
+      KEM|RUNS|WARMUPS|X509_DEPTH|X509_CHAIN_FIXTURES)
         printf -v "$name" '%s' "$value"
         ;;
     esac
@@ -517,12 +540,10 @@ load_plan_counts() {
 
   : "${RUNS:?Missing RUNS in $file}"
   : "${WARMUPS:?Missing WARMUPS in $file}"
-  : "${PCAP_RUNS:?Missing PCAP_RUNS in $file}"
 
   [[ "$RUNS" =~ ^[1-9][0-9]*$ &&
-     "$WARMUPS" =~ ^[0-9]+$ &&
-     "$PCAP_RUNS" =~ ^[1-9][0-9]*$ ]] ||
-    fail 'RUNS/WARMUPS/PCAP_RUNS must be integers.'
+     "$WARMUPS" =~ ^[0-9]+$ ]] ||
+    fail 'RUNS/WARMUPS must be integers.'
   configure_kem "$KEM"
   configure_depth "$X509_DEPTH"
 }
@@ -840,14 +861,14 @@ PYMETRICS
 measure_pcap() {
   local output=$1 profile case_name phase count repetition directory pcap keylog log capture_log analysis_log analysis_values analysis_status ready attempt done_count=0 total_count started now eta
   local -a analyzer_args
-  total_count=$(( ${#PROFILES[@]} * ${#ACTIVE_CASES[@]} * (WARMUPS + PCAP_RUNS) )); started=$(date +%s)
+  total_count=$(( ${#PROFILES[@]} * ${#ACTIVE_CASES[@]} * (WARMUPS + RUNS) )); started=$(date +%s)
   printf 'profile,case,key_establishment,openssl_group,phase,repetition,tcp_handshake_ms,tcp_syn_to_clienthello_ms,tls_clienthello_to_client_finished_ms,tcp_syn_to_first_application_request_ms,tls_client_handshake_bytes,tls_server_handshake_bytes,tls_handshake_bytes,tls_client_handshake_wire_bytes,tls_server_handshake_wire_bytes,tls_handshake_wire_bytes,tcp_handshake_wire_bytes,connection_handshake_wire_bytes,tls_client_handshake_packets,tls_server_handshake_packets,tls_handshake_packets,tls_client_certificate_bytes,tls_server_certificate_bytes,tcp_stream,client_random,analysis_status,analysis_error,tcp_retransmission_packets\n' > "$output/pcap.csv"
   printf '\nPCAP MEASUREMENTS — 9 profiles × %d authentication cases\n' "${#ACTIVE_CASES[@]}"
   for profile in "${PROFILES[@]}"; do
    for case_name in "${ACTIVE_CASES[@]}"; do
-    printf '\n[PCAP] profile=%s case=%s: %d warmups + %d measured captures\n' "$profile" "$case_name" "$WARMUPS" "$PCAP_RUNS"
+    printf '\n[PCAP] profile=%s case=%s: %d warmups + %d measured captures\n' "$profile" "$case_name" "$WARMUPS" "$RUNS"
     for phase in warmup measured; do
-     [[ "$phase" == warmup ]] && count=$WARMUPS || count=$PCAP_RUNS
+     [[ "$phase" == warmup ]] && count=$WARMUPS || count=$RUNS
      printf '[PCAP] profile=%s case=%s phase=%s repetitions=%d\n' "$profile" "$case_name" "$phase" "$count"
      for ((repetition=1; repetition<=count; repetition++)); do
       start_server "$profile" "$case_name"
@@ -1088,7 +1109,7 @@ status_config() {
   load_plan_counts "$config"
   depth_plan '(selected output)'
   printf 'Key establishment: %s (%s)\nRepetitions: native=%s measured + %s warmups; PCAP=%s measured + %s warmups\n' \
-    "$KEM_LABEL" "$KEM_GROUP" "$RUNS" "$WARMUPS" "$PCAP_RUNS" "$WARMUPS"
+    "$KEM_LABEL" "$KEM_GROUP" "$RUNS" "$WARMUPS" "$RUNS" "$WARMUPS"
 }
 
 menu() {
@@ -1131,14 +1152,14 @@ command=${1:-menu}
 case "$command" in
   menu) menu;;
   init)
-    [[ $# -le 4 ]] || fail 'Usage: init [CONFIG] [KEM] [DEPTH]'
+    [[ $# -le 5 ]] || fail 'Usage: init [CONFIG] [KEM] [DEPTH] [RUNS]'
     config=${2:-$DEFAULT_CONFIG}
-    create_configuration "$config" "${3:-}" "${4:-}"
+    create_configuration "$config" "${3:-}" "${4:-}" "${5:-}"
     ;;
   new)
-    [[ $# -le 4 ]] || fail 'Usage: new [CONFIG] [KEM] [DEPTH]'
+    [[ $# -le 5 ]] || fail 'Usage: new [CONFIG] [KEM] [DEPTH] [RUNS]'
     config=${2:-"$REPO/.mt-state/handshake-performance-$(date -u +%Y%m%dT%H%M%SZ)-$$.env"}
-    create_configuration "$config" "${3:-}" "${4:-}"
+    create_configuration "$config" "${3:-}" "${4:-}" "${5:-}"
     ;;
   status)
     [[ $# -le 2 ]] || fail 'Usage: status [CONFIG]'
@@ -1160,12 +1181,12 @@ case "$command" in
     printf 'Mutual authentication: client and server use the same signature profile.\n\n'
     printf ' 4 Native single:        27 scenarios; %d measured + %d warmups\n' "$((27 * RUNS))" "$((27 * WARMUPS))"
     printf ' 5 Native mutual:        27 scenarios; %d measured + %d warmups\n' "$((27 * RUNS))" "$((27 * WARMUPS))"
-    printf ' 6 PCAP single:          27 scenarios; %d measured + %d warmup captures\n' "$((27 * PCAP_RUNS))" "$((27 * WARMUPS))"
-    printf ' 7 PCAP mutual:          27 scenarios; %d measured + %d warmup captures\n' "$((27 * PCAP_RUNS))" "$((27 * WARMUPS))"
+    printf ' 6 PCAP single:          27 scenarios; %d measured + %d warmup captures\n' "$((27 * RUNS))" "$((27 * WARMUPS))"
+    printf ' 7 PCAP mutual:          27 scenarios; %d measured + %d warmup captures\n' "$((27 * RUNS))" "$((27 * WARMUPS))"
     printf ' 8 Native + PCAP single: options 4 + 6\n'
     printf ' 9 Native + PCAP mutual: options 5 + 7\n'
     printf '10 Native + PCAP all:    54 scenarios; %d native observations and %d PCAP captures\n' \
-      "$((54 * (RUNS + WARMUPS)))" "$((54 * (PCAP_RUNS + WARMUPS)))"
+      "$((54 * (RUNS + WARMUPS)))" "$((54 * (RUNS + WARMUPS)))"
     printf '11 Trust Anchor Retry:   9 profiles; 630 transactions (70/profile)\n\n'
     printf 'Single cases: %s\nMutual cases: %s\n' "${SINGLE_CASES[*]}" "${MUTUAL_CASES[*]}"
     printf 'Example next output: %s\n' "$output"
