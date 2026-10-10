@@ -26,7 +26,7 @@ METRICS = ('tcp_packets_client_to_server', 'tcp_packets_server_to_client', 'tcp_
            'tcp_payload_bytes_client_to_server', 'tcp_payload_bytes_server_to_client', 'tcp_payload_bytes_total',
            'tcp_wire_bytes_client_to_server', 'tcp_wire_bytes_server_to_client', 'tcp_wire_bytes_total')
 HANDSHAKE_FIELDS = ph.METRIC_FIELDS
-BROWSER_TIMING_FIELDS = ('browser_process_wall_ms', 'browser_ssl_connect_ms',
+BROWSER_TIMING_FIELDS = ('browser_process_wall_ms', 'stabilization_ms', 'browser_ssl_connect_ms',
                          'browser_navigation_to_clienthello_ms', 'browser_request_to_response_headers_ms')
 COMPARISON_FIELDS = (*HANDSHAKE_FIELDS, *BROWSER_TIMING_FIELDS)
 COMPARISON_DEFINITIONS = {
@@ -43,6 +43,10 @@ COMPARISON_DEFINITIONS = {
         'and retransmissions, by direction and total. Not restricted to the handshake.',
     'browser_process_wall_ms': 'Monotonic time immediately before browser process creation through exit '
         '(including timeout termination): startup, navigation, rendering and shutdown; not handshake latency.',
+    'stabilization_ms': 'Monotonic time from browser process creation through consecutive responsive, completely '
+        'loaded about:blank checks separated by the conservative CDP settling interval, before starting the server, '
+        'capture, or experimental navigation. '
+        'It does not claim direct visibility into NetworkChangeNotifier.',
     'browser_ssl_connect_ms': 'NetLog SSL_CONNECT BEGIN to successful END on the correlated ClientHello source; '
         'includes browser TLS processing/verification, not a substitute for the PCAP TLS interval.',
     'browser_navigation_to_clienthello_ms': 'NetLog target URL_REQUEST_START_JOB BEGIN to correlated ClientHello; '
@@ -122,9 +126,11 @@ def handshake_metrics(rows, client_random, kind='auto'):
 def browser_metric_values(primary, browser_result, net):
     """Comparable connection fields and optional browser intervals, never summed latencies."""
     values = dict.fromkeys(COMPARISON_FIELDS)
-    duration = browser_result.get('browser_process_wall_ms')
-    if isinstance(duration, (int, float)) and not isinstance(duration, bool) and math.isfinite(duration) and duration >= 0:
-        values['browser_process_wall_ms'] = duration
+    for field in ('browser_process_wall_ms', 'stabilization_ms'):
+        duration = browser_result.get(field)
+        if (isinstance(duration, (int, float)) and not isinstance(duration, bool)
+                and math.isfinite(duration) and duration >= 0):
+            values[field] = duration
     if len(primary) != 1:
         values.update(analysis_status='ERROR', analysis_error='Expected exactly one URL-linked connection')
         return values
@@ -211,10 +217,14 @@ class Capture:
         self.clean = False
         self.keylog_path = output/'tls.keys'
 
-    def start(self):
+    def prepare_keylog(self):
         # This file decrypts the captured session: create it privately before Chromium opens it.
-        with self.keylog_path.open('xb') as keylog:
-            os.fchmod(keylog.fileno(), 0o600)
+        if not self.keylog_path.exists():
+            with self.keylog_path.open('xb') as keylog:
+                os.fchmod(keylog.fileno(), 0o600)
+
+    def start(self):
+        self.prepare_keylog()
         attempts = []
         try:
             for backend in ('dumpcap', 'tcpdump'):
@@ -594,7 +604,10 @@ def analyze(output, capture, browser_result):
                     if bv.encrypted_extensions_selected([
                             ('SSL_HANDSHAKE_MESSAGE_RECEIVED', dict(type=8, bytes=ee), None, None)]):
                         post_auth_rejections.add(item['client_random'])
-        url = bv.read(output/'chromium-command.json')['command'][-1]
+        command_evidence = bv.read(output/'chromium-command.json')
+        url = command_evidence.get('target_url')
+        bv.require(isinstance(url, str) and url.startswith('https://'),
+                   'Missing explicit experimental target_url')
         net = bv.read(output/'netlog.json')
         events = bv.relevant_netlog(net, url)
         net_connections = netlog_connections(net)

@@ -178,10 +178,15 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
     def test_capture_only_command_hands_private_keylog_to_owned_browser(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp); output = root/'case'
-            capture = SimpleNamespace(keylog_path=output/'tls.keys', start=Mock(), stop=Mock())
-            def browser(cmd, target, timeout):
+            capture = SimpleNamespace(keylog_path=output/'tls.keys', prepare_keylog=Mock(),
+                                      start=Mock(), stop=Mock())
+            def browser(cmd, target, timeout, **kwargs):
                 self.assertIn('--ssl-key-log-file='+str(capture.keylog_path.resolve()), cmd)
-                pcap.bv.write(target/'browser-timing.json', dict(browser_process_wall_ms=125))
+                self.assertEqual(cmd[-1], 'about:blank')
+                self.assertTrue(kwargs['target_url'].startswith('https://'+pcap.bv.HOST+':4433/'))
+                kwargs['before_navigation']()
+                pcap.bv.write(target/'browser-timing.json', dict(
+                    browser_process_wall_ms=125, stabilization_ms=25))
                 return 0
             with patch.object(pcap.bv, 'Server'), patch.object(pcap.bv, 'check_hostname'), \
                     patch.object(pcap.bv, 'run_browser', side_effect=browser), \
@@ -191,6 +196,8 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
                     mode='landmark')),
                     dict(executable='/mock/chromium'), output, root, 5, False, capture=capture)
             self.assertEqual(result['browser_process_wall_ms'], 125)
+            self.assertEqual(result['stabilization_ms'], 25)
+            capture.prepare_keylog.assert_called_once()
             capture.start.assert_called_once()
 
     def test_single_extraction_exports_shared_handshake_and_full_stream_wire_cost(self):
@@ -219,7 +226,8 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
             output = Path(tmp); capture = SimpleNamespace(path=output/'capture.pcapng', clean=True,
                 tools=dict(tshark='mock-tshark'), keylog_path=output/'tls.keys')
             capture.path.touch(); capture.keylog_path.write_text('synthetic keylog')
-            pcap.bv.write(output/'chromium-command.json', dict(command=['mock', 'https://'+pcap.bv.HOST+':4433/']))
+            pcap.bv.write(output/'chromium-command.json', dict(
+                command=['mock', 'about:blank'], target_url='https://'+pcap.bv.HOST+':4433/'))
             net = timing_netlog('https://'+pcap.bv.HOST+':4433/')
             pcap.bv.write(output/'netlog.json', net)
             (output/'server.log').write_text('<<< TLS 1.3, Handshake, ClientHello\n    '+raw.hex(' ')+'\n'

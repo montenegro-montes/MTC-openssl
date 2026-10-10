@@ -17,11 +17,14 @@ import shlex
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
 import time
 import uuid
+from urllib.parse import urlsplit
+from urllib.request import urlopen
 
 from cryptography import x509 as cryptography_x509
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -42,6 +45,7 @@ DOCKER_RUN_COUNT = 0
 CASES = ('mtc-positive', 'mtc-no-trust', 'mtc-bad-merkle', 'mtc-bad-serial', 'x509-positive')
 TLS = dict(version='TLS 1.3', group='X25519', cipher='TLS_AES_256_GCM_SHA384',
            tickets=False, client_authentication=False, port=4433)
+CDP_STABILIZATION_SETTLE_SECONDS = 1.0
 KEY_ESTABLISHMENTS = {
     'x25519': dict(label='X25519', openssl_group='X25519', netlog_group=29),
     'x25519-mlkem768': dict(label='X25519+ML-KEM768', openssl_group='X25519MLKEM768', netlog_group=0x11ec),
@@ -1256,14 +1260,16 @@ def validate_mts1(path, expected_log_number):
 
 def browser_command(executable, profile, case_dir, anchor, url, enable_mtc=False, browser_mode='headless', disable_trust_anchor_ids=False, trusted_subtrees=None, trusted_subtrees_url=None):
     require(browser_mode in ('headless', 'headed'), 'Invalid browser mode')
-    flags = [str(executable), '--headless=new', '--dump-dom', '--no-first-run', '--no-default-browser-check',
+    flags = [str(executable), '--headless=new', '--remote-debugging-port=0',
+             '--remote-debugging-address=127.0.0.1', '--no-first-run', '--no-default-browser-check',
              '--disable-background-networking', '--disable-component-update', '--disable-sync', '--disable-quic',
              '--no-proxy-server',
              '--user-data-dir='+str(profile), '--log-net-log='+str(case_dir/'netlog.json'),
              '--net-log-capture-mode=Everything']
     if browser_mode == 'headed':
         flags.remove('--headless=new')
-        flags.remove('--dump-dom')
+        flags.remove('--remote-debugging-port=0')
+        flags.remove('--remote-debugging-address=127.0.0.1')
         flags.remove('--log-net-log='+str(case_dir/'netlog.json'))
         flags.remove('--net-log-capture-mode=Everything')
     if enable_mtc:
@@ -1278,7 +1284,7 @@ def browser_command(executable, profile, case_dir, anchor, url, enable_mtc=False
         flags.append('--mtc-plants06-trusted-subtrees='+str(trusted_subtrees))
     if trusted_subtrees_url:
         flags.append('--mtc-plants06-trusted-subtrees-url='+str(trusted_subtrees_url))
-    return flags + [url]
+    return flags + [('about:blank' if browser_mode == 'headless' else url)]
 
 
 def relevant_netlog(data, url):
@@ -1559,29 +1565,299 @@ def check_hostname():
     require(addresses == {'127.0.0.1'}, resolution_error)
 
 
-def run_browser(cmd, output, timeout):
+class CdpConnection:
+    """Small RFC 6455 client for the loopback-only Chromium DevTools endpoint."""
+    def __init__(self, websocket_url, timeout):
+        parsed = urlsplit(websocket_url)
+        require(parsed.scheme == 'ws' and parsed.hostname in ('127.0.0.1', 'localhost'),
+                'Unsafe DevTools WebSocket endpoint')
+        self.socket = socket.create_connection((parsed.hostname, parsed.port), timeout=timeout)
+        key = base64.b64encode(os.urandom(16)).decode('ascii')
+        path = parsed.path + (('?' + parsed.query) if parsed.query else '')
+        request = (f'GET {path} HTTP/1.1\r\nHost: {parsed.hostname}:{parsed.port}\r\n'
+                   f'Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n'
+                   'Sec-WebSocket-Version: 13\r\n\r\n')
+        self.socket.sendall(request.encode('ascii'))
+        response = b''
+        while b'\r\n\r\n' not in response and len(response) < 16384:
+            response += self.socket.recv(4096)
+        require(response.startswith(b'HTTP/1.1 101 '), 'Chromium rejected DevTools WebSocket upgrade')
+        expected = base64.b64encode(hashlib.sha1(
+            (key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode('ascii')).digest())
+        headers, self.buffer = response.split(b'\r\n\r\n', 1)
+        headers = headers.lower()
+        require(b'sec-websocket-accept: ' + expected.lower() in headers,
+                'Invalid DevTools WebSocket handshake')
+        self.next_id = 1
+        self.events = []
+
+    def close(self):
+        try:
+            self.socket.close()
+        except OSError:
+            pass
+
+    def _exact(self, size):
+        result, self.buffer = self.buffer[:size], self.buffer[size:]
+        while len(result) < size:
+            block = self.socket.recv(size - len(result))
+            require(block, 'DevTools WebSocket closed unexpectedly')
+            result += block
+        return result
+
+    def _send(self, payload):
+        payload = payload.encode('utf-8'); mask = os.urandom(4)
+        length = len(payload)
+        header = bytes((0x81, 0x80 | min(length, 127)))
+        if length >= 126:
+            header = bytes((0x81, 0xfe if length < 65536 else 0xff))
+            header += struct.pack('!H' if length < 65536 else '!Q', length)
+        masked = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+        self.socket.sendall(header + mask + masked)
+
+    def _receive(self):
+        first, second = self._exact(2)
+        opcode = first & 0x0f; length = second & 0x7f
+        if length == 126:
+            length = struct.unpack('!H', self._exact(2))[0]
+        elif length == 127:
+            length = struct.unpack('!Q', self._exact(8))[0]
+        if second & 0x80:
+            mask = self._exact(4)
+        else:
+            mask = None
+        payload = self._exact(length)
+        if mask:
+            payload = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+        if opcode == 0x9:
+            return self._receive()
+        require(opcode == 0x1, 'Unexpected DevTools WebSocket frame')
+        return json.loads(payload)
+
+    def command(self, method, params=None):
+        identifier = self.next_id; self.next_id += 1
+        self._send(json.dumps(dict(id=identifier, method=method, params=params or {}), separators=(',', ':')))
+        while True:
+            message = self._receive()
+            if message.get('id') == identifier:
+                require('error' not in message, f'CDP {method} failed: {message.get("error")}')
+                return message.get('result', {})
+            self.events.append(message)
+
+    def wait_event(self, method, deadline):
+        while True:
+            for index, event in enumerate(self.events):
+                if event.get('method') == method:
+                    return self.events.pop(index)
+            self.socket.settimeout(max(0.01, deadline - time.monotonic()))
+            require(time.monotonic() < deadline, f'Timed out waiting for CDP {method}')
+            message = self._receive()
+            if message.get('method') == method:
+                return message
+            self.events.append(message)
+
+    def discard_events(self, *methods):
+        methods = set(methods)
+        self.events = [event for event in self.events if event.get('method') not in methods]
+
+    def wait_navigation_load(self, frame_id, loader_id, navigation_timestamp, deadline):
+        """Require both a post-navigate load event and the matching loader lifecycle event."""
+        load_event = None
+        lifecycle_event = None
+        while load_event is None or lifecycle_event is None:
+            require(time.monotonic() < deadline, 'Timed out waiting for correlated experimental navigation load')
+            pending, self.events = self.events, []
+            if not pending:
+                self.socket.settimeout(max(0.01, deadline-time.monotonic()))
+                pending = [self._receive()]
+            for event in pending:
+                method = event.get('method'); params = event.get('params', {})
+                if (method == 'Page.loadEventFired'
+                        and isinstance(params.get('timestamp'), (int, float))
+                        and params['timestamp'] >= navigation_timestamp):
+                    load_event = event
+                elif (method == 'Page.lifecycleEvent' and params.get('name') == 'load'
+                      and params.get('frameId') == frame_id
+                      and (loader_id is None or params.get('loaderId') == loader_id)):
+                    lifecycle_event = event
+                else:
+                    self.events.append(event)
+        return dict(load_event=load_event, lifecycle_event=lifecycle_event)
+
+
+def cdp_page(profile, deadline):
+    active = Path(profile)/'DevToolsActivePort'
+    while time.monotonic() < deadline:
+        if active.is_file():
+            lines = active.read_text(errors='replace').splitlines()
+            if lines and lines[0].isdigit():
+                port = int(lines[0])
+                try:
+                    with urlopen(f'http://127.0.0.1:{port}/json/list', timeout=0.5) as response:
+                        targets = json.load(response)
+                    pages = [item for item in targets if item.get('type') == 'page'
+                             and item.get('url') == 'about:blank' and item.get('webSocketDebuggerUrl')]
+                    if len(pages) == 1:
+                        return CdpConnection(pages[0]['webSocketDebuggerUrl'], max(0.1, deadline-time.monotonic()))
+                except (OSError, ValueError, json.JSONDecodeError):
+                    pass
+        time.sleep(0.05)
+    raise ValueError('Chromium DevTools endpoint did not become ready before stabilization timeout')
+
+
+def stabilize_cdp(connection, deadline, settle_seconds=CDP_STABILIZATION_SETTLE_SECONDS):
+    """Verify a responsive, fully loaded neutral page twice; no NetLog readiness is inferred."""
+    probes = []
+    connection.command('Page.enable')
+    connection.command('Page.setLifecycleEventsEnabled', {'enabled': True})
+    connection.command('Performance.enable')
+    connection.command('Runtime.enable')
+    while len(probes) < 2:
+        require(time.monotonic() < deadline, 'Chromium did not reach neutral-page stability before timeout')
+        result = connection.command('Runtime.evaluate', dict(
+            expression='JSON.stringify({url:location.href,state:document.readyState})', returnByValue=True))
+        value = json.loads(result.get('result', {}).get('value', '{}'))
+        require(value == {'url': 'about:blank', 'state': 'complete'},
+                'Chromium neutral page is not completely loaded')
+        probes.append(dict(monotonic=time.monotonic(), **value))
+        if len(probes) == 1:
+            remaining = deadline-time.monotonic()
+            require(remaining >= settle_seconds, 'Insufficient stabilization timeout')
+            time.sleep(settle_seconds)
+    return probes
+
+
+def run_browser(cmd, output, timeout, *, profile=None, target_url=None, before_navigation=None):
     check_hostname()
     # Only this child process group is signalled; no PID-name matching.
     with (output/'chromium.stdout.log').open('xb') as stdout, (output/'chromium.stderr.log').open('xb') as stderr:
         started = time.monotonic()
         child = subprocess.Popen(cmd, stdout=stdout, stderr=stderr, start_new_session=True)
-        write(output/'browser-process.json', dict(pid=child.pid, process_group=child.pid, command=cmd))
-        result = None
-        try:
-            result = child.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            result = 'timeout'
+        cdp = None
+        primary_error = None
+        cleanup_errors = []
+        def terminate():
+            try:
+                if child.poll() is not None:
+                    return
+            except Exception as error:
+                cleanup_errors.append('poll child: '+str(error))
             try:
                 os.killpg(child.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+            except Exception as error:
+                cleanup_errors.append('SIGTERM process group: '+str(error))
+                try:
+                    child.terminate()
+                except Exception as fallback_error:
+                    cleanup_errors.append('terminate child: '+str(fallback_error))
             try:
                 child.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                os.killpg(child.pid, signal.SIGKILL)
-                child.wait(timeout=5)
-        write(output/'browser-timing.json', dict(pid=child.pid,
-              browser_process_wall_ms=(time.monotonic()-started)*1000))
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except Exception as error:
+                    cleanup_errors.append('SIGKILL process group: '+str(error))
+                    try:
+                        child.kill()
+                    except Exception as fallback_error:
+                        cleanup_errors.append('kill child: '+str(fallback_error))
+                try:
+                    child.wait(timeout=5)
+                except Exception as error:
+                    cleanup_errors.append('wait after kill: '+str(error))
+            except Exception as error:
+                cleanup_errors.append('wait after terminate: '+str(error))
+        try:
+            # From this point every failure, including evidence I/O, is covered by cleanup.
+            write(output/'browser-process.json', dict(pid=child.pid, process_group=child.pid, command=cmd))
+            if target_url is not None:
+                require(profile is not None and before_navigation is not None,
+                        'CDP navigation requires profile and pre-navigation callback')
+                deadline = started + timeout
+                stabilization_started = started
+                cdp = cdp_page(profile, deadline)
+                probes = stabilize_cdp(cdp, deadline)
+                stabilization_ms = (time.monotonic()-stabilization_started)*1000
+                write(output/'browser-stabilization.json', dict(
+                    status='PASS', criterion='cdp-about-blank-readiness-with-settle-interval',
+                    limitation=('NetLog is finalized after Chromium exits; this barrier verifies CDP and '
+                                'neutral-page readiness, not NetworkChangeNotifier internal state. '
+                                'The effective loopback-only listening socket must also be verified by Ubuntu preflight.'),
+                    cdp_configured_address='127.0.0.1',
+                    settle_seconds=CDP_STABILIZATION_SETTLE_SECONDS,
+                    probes=probes, stabilization_ms=stabilization_ms))
+                before_navigation()
+                navigation_started = time.monotonic()
+                cdp.discard_events('Page.loadEventFired', 'Page.lifecycleEvent')
+                metrics = cdp.command('Performance.getMetrics').get('metrics', [])
+                navigation_timestamp = next((item.get('value') for item in metrics
+                                             if item.get('name') == 'Timestamp'), None)
+                require(isinstance(navigation_timestamp, (int, float)),
+                        'CDP did not provide a navigation timestamp')
+                navigation = cdp.command('Page.navigate', dict(url=target_url))
+                frame_id = navigation.get('frameId'); loader_id = navigation.get('loaderId')
+                require(isinstance(frame_id, str) and frame_id,
+                        'CDP Page.navigate did not identify the experimental frame')
+                require(loader_id is None or (isinstance(loader_id, str) and loader_id),
+                        'CDP Page.navigate returned an invalid loader identifier')
+                loads = cdp.wait_navigation_load(
+                    frame_id, loader_id, navigation_timestamp, deadline)
+                document = cdp.command('Runtime.evaluate', dict(
+                    expression=('JSON.stringify({url:location.href,'
+                                'html:document.documentElement.outerHTML})'), returnByValue=True))
+                observed = json.loads(document.get('result', {}).get('value', '{}'))
+                dom = observed.get('html')
+                require(isinstance(dom, str) and dom, 'CDP did not return the navigated document')
+                stdout.write(dom.encode('utf-8')); stdout.flush()
+                write(output/'cdp-navigation.json', dict(
+                    target_url=target_url, observed_url=observed.get('url'), page_navigate=navigation,
+                    frame_id=frame_id, loader_id=loader_id,
+                    navigation_timestamp=navigation_timestamp,
+                    load_event_observed=bool(loads['load_event']),
+                    matching_lifecycle_load_observed=bool(loads['lifecycle_event']),
+                    document_observed=True,
+                    navigation_wall_ms=(time.monotonic()-navigation_started)*1000))
+                cdp.command('Browser.close')
+                result = child.wait(timeout=max(0.01, deadline-time.monotonic()))
+            else:
+                result = child.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            result = 'timeout'
+        except Exception as error:
+            primary_error = error
+            evidence = output/('cdp-navigation.json' if (output/'browser-stabilization.json').is_file()
+                              else 'browser-stabilization.json')
+            if not evidence.exists():
+                try:
+                    write(evidence, dict(status='FAIL', target_url=target_url,
+                                         error=f'{type(error).__name__}: {error}'))
+                except Exception as evidence_error:
+                    cleanup_errors.append('write failure evidence: '+str(evidence_error))
+            raise
+        finally:
+            if cdp is not None:
+                try:
+                    cdp.close()
+                except Exception as error:
+                    cleanup_errors.append('close CDP: '+str(error))
+            terminate()
+            timing = dict(pid=child.pid, browser_process_wall_ms=(time.monotonic()-started)*1000)
+            stabilization = output/'browser-stabilization.json'
+            try:
+                if stabilization.is_file() and read(stabilization).get('status') == 'PASS':
+                    timing['stabilization_ms'] = read(stabilization)['stabilization_ms']
+                if cleanup_errors:
+                    timing['cleanup_errors'] = cleanup_errors
+                write(output/'browser-timing.json', timing)
+            except Exception:
+                if primary_error is None:
+                    raise
+            if cleanup_errors and primary_error is None:
+                raise ValueError('Chromium cleanup failed: '+'; '.join(cleanup_errors))
     return result
 
 
@@ -1621,9 +1897,8 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
         if capture is not None:
             require(browser_mode == 'headless', 'PCAP validation requires headless mode')
             check_hostname()
-        server.start()
         if capture is not None:
-            capture.start()
+            capture.prepare_keylog()
         with tempfile.TemporaryDirectory(prefix='mtc-browser-profile-', dir=output) as profile:
             cmd = browser_command(
                 browser['executable'],
@@ -1641,8 +1916,20 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
                 cmd.insert(-1, '--ignore-certificate-errors-spki-list='+x509_spki)
             if capture is not None:
                 cmd.insert(-1, '--ssl-key-log-file='+str(capture.keylog_path.resolve()))
-            write(output/'chromium-command.json', dict(command=cmd, timeout_seconds=timeout))
-            exit_code = run_browser(cmd, output, timeout)
+            write(output/'chromium-command.json', dict(
+                command=cmd, startup_url=cmd[-1], target_url=url, timeout_seconds=timeout))
+            if browser_mode == 'headless':
+                def begin_experiment():
+                    server.start()
+                    if capture is not None:
+                        capture.start()
+                exit_code = run_browser(cmd, output, timeout, profile=Path(profile),
+                                        target_url=url, before_navigation=begin_experiment)
+            else:
+                server.start()
+                if capture is not None:
+                    capture.start()
+                exit_code = run_browser(cmd, output, timeout)
         # Flush server logs after browser exits; preserve files before removing container.
         if capture is not None:
             capture.stop()
@@ -1664,8 +1951,9 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
                           'MTC trust-anchor identity'))
         if x509_spki is not None:
             result.update(x509_trust_mode='spki-capability-bypass', normal_trusted_x509_baseline=False)
-        if capture is not None:
-            result['browser_process_wall_ms'] = read(output/'browser-timing.json').get('browser_process_wall_ms')
+        timing = read(output/'browser-timing.json')
+        result['browser_process_wall_ms'] = timing.get('browser_process_wall_ms')
+        result['stabilization_ms'] = timing.get('stabilization_ms')
         if browser_mode == 'headed':
             # Keep the automated classifier intact; inspection lacks NetLog and DOM evidence.
             result.update(browser_mode='headed', observed_outcome='INSPECTION', **{'pass': False},

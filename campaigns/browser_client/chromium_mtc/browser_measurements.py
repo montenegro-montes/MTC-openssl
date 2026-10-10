@@ -121,6 +121,7 @@ HANDSHAKE_DEFINITIONS = {
     'analysis_error': ('string', 'none', 'Fail-closed analyzer diagnostic; blank when analysis_status is OK.'),
     'tcp_retransmission_packets': ('integer', 'frames', 'Frames in the handshake interval flagged by tshark as retransmission, fast retransmission, or spurious retransmission.'),
     'browser_process_wall_ms': ('number', 'ms', pcap.COMPARISON_DEFINITIONS['browser_process_wall_ms']),
+    'stabilization_ms': ('number', 'ms', pcap.COMPARISON_DEFINITIONS['stabilization_ms']),
     'browser_ssl_connect_ms': ('number', 'ms', pcap.COMPARISON_DEFINITIONS['browser_ssl_connect_ms']),
     'browser_request_to_response_headers_ms': ('number', 'ms', pcap.COMPARISON_DEFINITIONS['browser_request_to_response_headers_ms']),
 }
