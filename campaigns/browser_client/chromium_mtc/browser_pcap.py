@@ -408,7 +408,8 @@ def netlog_connections(net):
             if (name == 'SSL_CONNECT' and event.get('phase') == end_phase
                     and params.get('net_error', 0) == 0 and params.get('version') == 'TLS 1.3'):
                 connected_at = float(event.get('time', 0))
-            if (name == 'SOCKET_POOL_CLOSING_SOCKET' and params.get('reason') == 'Socket pool destroyed'
+            if (name == 'SOCKET_POOL_CLOSING_SOCKET' and params.get('reason') in (
+                    'Socket pool destroyed', 'Network changed')
                     and connected_at is not None and float(event.get('time', 0)) >= connected_at):
                 closed_unused = True
         # A shared component containing several handshakes cannot attribute its SSL_CONNECT

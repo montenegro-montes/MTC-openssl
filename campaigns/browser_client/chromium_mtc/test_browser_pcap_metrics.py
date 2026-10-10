@@ -76,7 +76,88 @@ def timing_netlog(target):
                 ])
 
 
+def auxiliary_netlog(reason, *, used=None, close_time=30, multiple_hellos=False):
+    events = [
+        dict(type='SSL_HANDSHAKE_MESSAGE_SENT', source=dict(id=1), time='10', phase=0,
+             params=dict(type=1, bytes=client_hello())),
+        dict(type='SSL_CONNECT', source=dict(id=1), time='20', phase=2,
+             params=dict(net_error=0, version='TLS 1.3')),
+    ]
+    if multiple_hellos:
+        events.append(dict(type='SSL_HANDSHAKE_MESSAGE_SENT', source=dict(id=1),
+                           time='11', phase=0,
+                           params=dict(type=1, bytes=client_hello('cd' * 32))))
+    if used == 'url':
+        events.append(dict(type='URL_METADATA', source=dict(id=1), time='25', phase=0,
+                           params=dict(url='https://server.mtc.example.com:4433/')))
+    elif used == 'request':
+        events.append(dict(type='HTTP_TRANSACTION_SEND_REQUEST', source=dict(id=1),
+                           time='25', phase=1, params={}))
+    events.append(dict(type='SOCKET_POOL_CLOSING_SOCKET', source=dict(id=1),
+                       time=str(close_time), phase=0, params=dict(reason=reason)))
+    return dict(constants=dict(logEventTypes={},
+                               logEventPhase=dict(PHASE_BEGIN=1, PHASE_END=2)),
+                events=events)
+
+
 class BrowserComparisonMetricsTests(unittest.TestCase):
+    def test_unused_tls_accepts_only_supported_post_connect_close_reasons(self):
+        for reason in ('Socket pool destroyed', 'Network changed'):
+            with self.subTest(reason=reason):
+                indexed = pcap.netlog_connections(auxiliary_netlog(reason))
+                self.assertTrue(indexed[shared.RANDOM]['auxiliary_tls_only'])
+
+    def test_network_change_with_url_or_http_use_is_not_auxiliary(self):
+        for used in ('url', 'request'):
+            with self.subTest(used=used):
+                indexed = pcap.netlog_connections(
+                    auxiliary_netlog('Network changed', used=used))
+                self.assertFalse(indexed[shared.RANDOM]['auxiliary_tls_only'])
+                self.assertEqual(indexed[shared.RANDOM]['http_request_observed'],
+                                 used == 'request')
+
+    def test_close_before_tls_completion_is_not_auxiliary(self):
+        indexed = pcap.netlog_connections(
+            auxiliary_netlog('Network changed', close_time=15))
+        self.assertFalse(indexed[shared.RANDOM]['auxiliary_tls_only'])
+
+    def test_component_with_multiple_clienthellos_is_not_auxiliary(self):
+        indexed = pcap.netlog_connections(
+            auxiliary_netlog('Network changed', multiple_hellos=True))
+        self.assertFalse(indexed[shared.RANDOM]['auxiliary_tls_only'])
+        self.assertFalse(indexed['cd' * 32]['auxiliary_tls_only'])
+
+    def test_unknown_close_reason_is_not_auxiliary(self):
+        indexed = pcap.netlog_connections(auxiliary_netlog('Idle timeout'))
+        self.assertFalse(indexed[shared.RANDOM]['auxiliary_tls_only'])
+
+    def test_correlation_failure_diagnostic_identifies_run_and_missing_evidence(self):
+        random = 'ab' * 32
+        entry = dict(stream=7, client_port=50123, client_randoms=[random],
+                     classification='other_correlated',
+                     tcp_payload_bytes_client_to_server=123,
+                     tcp_payload_bytes_server_to_client=456,
+                     first_client_abort_frame=None, first_server_payload_frame=12,
+                     last_client_payload_frame=11,
+                     aborted_before_tls_completion=False)
+        net = {random: dict(tls_completed=True, client_finished_observed=True,
+                            authentication_observed=True, http_request_observed=False,
+                            auxiliary_tls_only=False, aborted_unused_attempt=False)}
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp)
+            pcap.bv.write(output/'measurement-metadata.json', dict(
+                phase='warmup', profile='ecdsa-p256', case='mtc-standalone',
+                pair_index=1, execution_order=3))
+            diagnostic = pcap.correlation_diagnostics(
+                output, [entry], [], net, {random})
+        self.assertEqual(diagnostic['execution']['case'], 'mtc-standalone')
+        self.assertEqual(diagnostic['primary_tcp_streams'], [])
+        observed = diagnostic['connections'][0]
+        self.assertEqual(observed['tcp_stream'], 7)
+        self.assertTrue(observed['evidence'][0]['netlog_tls_completed'])
+        self.assertFalse(observed['evidence'][0]['netlog_auxiliary_tls_only'])
+        self.assertFalse(observed['evidence'][0]['netlog_aborted_unused_attempt'])
+
     def test_capture_creates_a_private_session_key_file_without_running_tools(self):
         with tempfile.TemporaryDirectory() as tmp:
             capture = pcap.Capture(Path(tmp), dict(dumpcap=None, tcpdump=None, interface='lo0', instruction='manual'))
