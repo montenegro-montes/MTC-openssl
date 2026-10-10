@@ -81,10 +81,14 @@ if profile == os.environ.get('FAIL_PROFILE'):
         return [call[call.index('--profile') + 1] for call in calls]
 
     def test_all_profiles_uses_normal_unforced_credentials_workflow(self):
-        result = self.run_setup('--all-profiles')
+        result = self.run_setup('--all-profiles', '--depth', '2')
         calls = self.calls()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.profiles(calls), list(PROFILES))
+        self.assertEqual(self.profiles(calls),
+                         [profile for profile in PROFILES for _ in range(2)])
+        self.assertEqual(
+            [call[call.index('--mtc-trust-mode') + 1] for call in calls],
+            ['landmark', 'standalone'] * len(PROFILES))
         self.assertTrue(all(call[0] == 'credentials' for call in calls))
         self.assertTrue(all('--mtc-fixture' not in call and '--mtc-validation' not in call
                             for call in calls))
@@ -117,9 +121,10 @@ if profile == os.environ.get('FAIL_PROFILE'):
         result = self.run_setup('--all-profiles', fail_profile='mldsa44')
         self.assertEqual(result.returncode, 7)
         self.assertEqual(self.profiles(self.calls()),
-                         ['ecdsa-p256', 'ecdsa-p384', 'mldsa44'])
+                         ['ecdsa-p256', 'ecdsa-p256', 'ecdsa-p384',
+                          'ecdsa-p384', 'mldsa44'])
         self.assertIn('ORIGINAL FAILURE', result.stderr)
-        self.assertIn('failed for profile: mldsa44', result.stderr)
+        self.assertIn('failed for profile=mldsa44 trust_mode=landmark', result.stderr)
 
 
 if __name__ == '__main__':

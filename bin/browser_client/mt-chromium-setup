@@ -198,9 +198,13 @@ PY
  esac
  date -u +%Y-%m-%dT%H:%M:%SZ > "$STATE/$step.done"
 }
+apparmor_required() {
+ [[ "$(uname -s)" == Linux ]] &&
+  [[ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] &&
+  [[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null)" == 1 ]]
+}
 sandbox_action() {
- [[ "$(uname -s)" == Linux ]] || { echo 'AppArmor setup is not required on this platform.'; return; }
- if [[ ! -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] || [[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" != 1 ]]; then
+ if ! apparmor_required; then
   echo 'AppArmor user-namespace setup is not required.'; return
  fi
  [[ -f "$STATE/paths.env" ]] || { echo 'Initialize/configure CHROMIUM_SRC first: mt-chromium-setup init' >&2; return 1; }
@@ -611,6 +615,194 @@ finally: lock.rmdir()
 PY
 }
 source "$REPO/bin/browser_client/mt-chromium-menu.sh"
+menu_preparation_run_remaining() {
+ local status_output answer step
+ local pending=()
+ if ! status_output=$("$0" prepare-build status 2>&1); then
+  printf '%s\n' "$status_output" >&2
+  return 1
+ fi
+ while IFS= read -r step; do
+  case "$step" in PENDING/STALE\ *) pending+=("${step#PENDING/STALE }");; esac
+ done <<< "$status_output"
+ if ((${#pending[@]} == 0)); then
+  echo 'All build-preparation steps are already recorded and current.'
+  return 0
+ fi
+ echo 'Pending build-preparation steps to execute:'
+ for step in "${pending[@]}"; do printf '  - %s\n' "$step"; done
+ echo 'These steps may include dependency synchronization, hooks and GN generation.'
+ read -r -p 'Execute exactly these pending steps in order? [y/N] ' answer || return 0
+ case "$answer" in y|Y) ;; *) echo 'Cancelled.'; return 0;; esac
+ for step in "${pending[@]}"; do
+  printf '\nExecuting %s\n' "$step"
+  (cd "$MENU_CALL_DIR" && "$0" prepare-build run "$step") || return $?
+ done
+}
+
+ca_policy_matrix() {
+ local matrix="$REPO/artifacts/x509/chromium-x509-depth-matrix-v1/matrix.json"
+ [[ -f "$matrix" && ! -L "$matrix" ]] || fail "Formal matrix manifest missing: $matrix"
+ printf '%s\n' "$matrix"
+}
+
+ca_policy_directory() {
+ local pointer="$STATE/ca-policy-path" directory=''
+ if [[ -f "$pointer" && ! -L "$pointer" ]]; then
+  IFS= read -r directory < "$pointer"
+ elif [[ -f "$REPO/artifacts/chromium-ca-policy/policy-manifest.json" ]]; then
+  directory="$REPO/artifacts/chromium-ca-policy"
+ fi
+ [[ -n "$directory" && -d "$directory" && ! -L "$directory" ]] ||
+  fail 'No generated Chromium CA policy selected. Generate it from the formal matrix first.'
+ python3 -B - "$REPO" "$directory" <<'PY'
+import hashlib,json,sys
+from pathlib import Path
+repo,root=Path(sys.argv[1]).resolve(),Path(sys.argv[2]).resolve()
+try: root.relative_to(repo/'artifacts')
+except ValueError: raise SystemExit('ERROR: Generated policy is outside repository artifacts: '+str(root))
+manifest=root/'policy-manifest.json'
+if not manifest.is_file() or manifest.is_symlink(): raise SystemExit('ERROR: Missing policy-manifest.json: '+str(manifest))
+data=json.loads(manifest.read_text())
+if data.get('fixture_set')!='chromium-x509-depth-matrix-v1': raise SystemExit('ERROR: Unexpected policy fixture_set')
+matrix=repo/'artifacts/x509/chromium-x509-depth-matrix-v1/matrix.json'
+if not matrix.is_file() or matrix.is_symlink(): raise SystemExit('ERROR: Formal matrix manifest is missing or unsafe')
+if hashlib.sha256(matrix.read_bytes()).hexdigest()!=data.get('matrix_manifest_sha256'):
+ raise SystemExit('ERROR: Generated policy does not match the current formal matrix')
+required={'canonical-policy.json','linux/mtc-ca-policy.json','macos/chromium-mtc-ca.mobileconfig'}
+if data.get('root_count')!=6 or set(data.get('outputs',{}))!=required:
+ raise SystemExit('ERROR: Incomplete Chromium CA policy manifest')
+for relative, expected in data['outputs'].items():
+ path=root/relative
+ if not path.is_file() or path.is_symlink(): raise SystemExit('ERROR: Missing/unsafe generated policy: '+str(path))
+ if hashlib.sha256(path.read_bytes()).hexdigest()!=expected.get('sha256'):
+  raise SystemExit('ERROR: Generated policy hash mismatch: '+str(path))
+PY
+ printf '%s\n' "$directory"
+}
+
+ca_policy_verify_roots() {
+ local matrix
+ matrix=$(ca_policy_matrix)
+ python3 -B - "$REPO" "$matrix" <<'PY'
+import sys
+from pathlib import Path
+repo,matrix=Path(sys.argv[1]),Path(sys.argv[2])
+sys.path.insert(0,str(repo/'campaigns/browser_client/chromium_mtc'))
+import browser_validation as bv
+for profile in bv.PROFILES:
+ root=matrix.parent/profile/'d2'/'root.pem'
+ if not root.is_file() or root.is_symlink(): raise SystemExit('ERROR: Missing/unsafe formal root: '+str(root))
+ result=bv.chromium_ca_policy(root)
+ print(f'{profile}: TRUSTED ({result["policy_root_der_sha256"]})')
+print('Overall: TRUSTED')
+PY
+}
+
+ca_policy_action() {
+ local action=$1 matrix output directory source destination answer temporary
+ case "$action" in
+  status)
+   echo 'Chromium CA policy'
+   if directory=$(ca_policy_directory 2>/dev/null); then
+    echo "Generated policy: $directory"
+   else
+    echo 'Generated policy: NOT PREPARED'
+   fi
+   if ca_policy_verify_roots; then :; else echo 'Installed formal roots: NOT READY'; return 1; fi;;
+  generate)
+   matrix=$(ca_policy_matrix)
+   output="$REPO/artifacts/chromium-ca-policy-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+   python3 -B "$REPO/campaigns/browser_client/chromium_mtc/generate_chromium_ca_policy.py" \
+    --matrix "$matrix" --output "$output"
+   mkdir -p "$STATE"
+   temporary=$(mktemp "$STATE/ca-policy-path.XXXXXX")
+   printf '%s\n' "$output" > "$temporary"
+   mv -- "$temporary" "$STATE/ca-policy-path"
+   echo "Generated policy directory: $output";;
+  install)
+   directory=$(ca_policy_directory)
+   case "$(uname -s)" in
+    Darwin)
+     source="$directory/macos/chromium-mtc-ca.mobileconfig"
+     echo "Profile to open: $source"
+     echo 'Chromium policy profile approval remains manual in System Settings.'
+     read -r -p 'Open this generated profile now? [y/N] ' answer || return 0
+     case "$answer" in y|Y) open "$source";; *) echo 'Cancelled.';; esac;;
+    Linux)
+     source="$directory/linux/mtc-ca-policy.json"
+     destination='/etc/chromium/policies/managed/mtc-ca-policy.json'
+     echo "Privileged installation: $source -> $destination"
+     if [[ -e "$destination" ]]; then
+      [[ -f "$destination" && ! -L "$destination" ]] || fail "Conflicting policy path preserved: $destination"
+      if cmp -s "$source" "$destination"; then echo 'The exact generated policy is already installed.'; return 0; fi
+      fail "Conflicting Chromium policy preserved: $destination"
+     fi
+     read -r -p 'Create the managed-policy directory and install this file with sudo? [y/N] ' answer || return 0
+     case "$answer" in
+      y|Y) sudo install -d -o root -g root -m 0755 "${destination%/*}"
+           sudo install -o root -g root -m 0644 "$source" "$destination";;
+      *) echo 'Cancelled.';;
+     esac;;
+    *) fail 'Chromium CA policy installation is supported only on macOS and Linux.';;
+   esac;;
+  verify) ca_policy_verify_roots;;
+ esac
+}
+
+menu_ca_policy() {
+ local selection
+ while true; do
+  printf '\nChromium CA policy\n\n1. Status\n2. Generate policy from formal matrix\n3. Install/open generated policy\n4. Verify all formal roots\n5. Back\n'
+  read -r -p 'Select an option: ' selection || return 0
+  case "$selection" in
+   1) ca_policy_action status || true;;
+   2) menu_invoke confirm ca-policy-generate;;
+   3) ca_policy_action install;;
+   4) ca_policy_action verify;;
+   5|0) return 0;;
+   *) echo 'Invalid option.';;
+  esac
+ done
+}
+
+menu_browser_credentials() {
+ local profiles_text selection profile depth_choice depth mode_choice trust_mode
+ local profiles=()
+ profiles_text=$(python3 -B - "$REPO" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0,str(Path(sys.argv[1])/'campaigns/browser_client/chromium_mtc'))
+from browser_measurements import CAMPAIGN_PROFILES
+print(' '.join(CAMPAIGN_PROFILES))
+PY
+ ) || return 1
+ read -r -a profiles <<< "$profiles_text"
+ echo 'Browser credentials profile'
+ echo '1. All profiles (landmark and standalone)'
+ for ((selection=0; selection<${#profiles[@]}; selection++)); do
+  printf '%d. %s\n' "$((selection+2))" "${profiles[selection]}"
+ done
+ printf '%d. Back\n' "$(( ${#profiles[@]}+2 ))"
+ read -r -p 'Select an option: ' selection || return 0
+ [[ "$selection" =~ ^[0-9]+$ ]] || { echo 'Invalid option.'; return 0; }
+ (( selection != ${#profiles[@]}+2 && selection != 0 )) || return 0
+ if (( selection == 1 )); then profile='';
+ elif (( selection >= 2 && selection <= ${#profiles[@]}+1 )); then profile=${profiles[selection-2]};
+ else echo 'Invalid option.'; return 0; fi
+ printf 'X.509 depth:\n1. 2 (default)\n2. 3\n3. 4\n4. 5\n'
+ read -r -p 'Select [1-4, Enter=1]: ' depth_choice || return 0
+ case "${depth_choice:-1}" in 1) depth=2;; 2) depth=3;; 3) depth=4;; 4) depth=5;; *) echo 'Invalid depth.'; return 0;; esac
+ if [[ -z "$profile" ]]; then
+  menu_invoke confirm browser-validation credentials --all-profiles --depth "$depth"
+  return 0
+ fi
+ printf 'MTC trust mode:\n1. Landmark (default)\n2. Standalone\n3. Back\n'
+ read -r -p 'Select [1-3, Enter=1]: ' mode_choice || return 0
+ case "${mode_choice:-1}" in 1) trust_mode=landmark;; 2) trust_mode=standalone;; 3) return 0;; *) echo 'Invalid trust mode.'; return 0;; esac
+ menu_invoke confirm browser-validation credentials --profile "$profile" --depth "$depth" --mtc-trust-mode "$trust_mode"
+}
+
 trust_setup() {
  if [[ "${1:-}" == --root ]]; then
   python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_validation.py" trust-x509 "$@"
@@ -630,40 +822,26 @@ HELP
 menu() (
  [[ -t 0 ]] || fail 'menu requires an interactive TTY on stdin.'
  trap 'printf "\n"; exit 130' INT
- local selection
+ local selection index
+ local labels actions
  while true; do
-  cat <<'MENU'
-Chromium / MTC — Setup / installation
-1. Doctor / requirements
-2. Initialize / configuration
-3. Installation status
-4. Source reconstruction
-5. Build preparation (macOS / Linux)
-6. Build Chromium
-7. Existing Chromium / MTC setup
-8. Sandbox / AppArmor setup
-9. X.509 trust management
-10. Chromium CA policy instructions
-11. Prepare browser credentials
-12. Cleanup / reset
-0. Exit
-MENU
+  labels=('Doctor / requirements' 'Initialize / configuration' 'Installation status' 'Source reconstruction' 'Build preparation' 'Build Chromium' 'Existing Chromium / MTC setup')
+  actions=(doctor init status source preparation build setup)
+  if apparmor_required; then labels+=('Sandbox / AppArmor setup'); actions+=(sandbox); fi
+  labels+=('X.509 trust management' 'Chromium CA policy' 'Prepare browser credentials' 'Cleanup / reset')
+  actions+=(trust ca-policy credentials cleanup)
+  printf 'Chromium / MTC — Setup / installation\n'
+  for ((index=0; index<${#labels[@]}; index++)); do printf '%d. %s\n' "$((index+1))" "${labels[index]}"; done
+  echo '0. Exit'
   read -r -p 'Select an option: ' selection || exit 0
-  case "$selection" in
-   1) menu_invoke readonly doctor;;
-   2) menu_invoke confirm init;;
-   3) menu_invoke readonly status; menu_invoke readonly reconstruct-source status; menu_invoke readonly prepare-build status; menu_invoke readonly build status;;
-   4) menu_submenu source;;
-   5) menu_submenu preparation;;
-   6) menu_submenu build;;
-   7) menu_submenu setup;;
-   8) menu_invoke confirm sandbox-setup;;
-   9) menu_submenu trust;;
-   10) menu_invoke readonly trust-setup;;
-   11) menu_invoke confirm browser-validation credentials;;
-   12) menu_invoke confirm cleanup;;
-   0) exit 0;;
-   *) echo 'Invalid option.';;
+  [[ "$selection" == 0 ]] && exit 0
+  [[ "$selection" =~ ^[1-9][0-9]*$ ]] && (( selection <= ${#actions[@]} )) || { echo 'Invalid option.'; continue; }
+  case "${actions[selection-1]}" in
+   doctor) menu_invoke readonly doctor;; init) menu_invoke confirm init;;
+   status) menu_invoke readonly status; menu_invoke readonly reconstruct-source status; menu_invoke readonly prepare-build status; menu_invoke readonly build status;;
+   source) menu_submenu source;; preparation) menu_submenu preparation;; build) menu_submenu build;; setup) menu_submenu setup;;
+   sandbox) menu_invoke confirm sandbox-setup;; trust) menu_submenu trust;;
+   ca-policy) menu_ca_policy;; credentials) menu_browser_credentials;; cleanup) menu_invoke confirm cleanup;;
   esac
  done
 )
@@ -730,6 +908,7 @@ Usage: mt-chromium-setup menu|doctor|init|status|plan|show STEP|run STEP|resume|
   x509-fixtures plan|generate --profile PROFILE --fixture-set NAME --output PATH
   x509-fixtures generate-matrix --fixture-set chromium-x509-depth-matrix-v1 --output NEW_PATH
   ca-policy --matrix PATH --output PATH
+  ca-policy-status|ca-policy-generate|ca-policy-install|ca-policy-verify
 Step 20: run 20 --fixture PATH or run 20 --generate (explicit selection/generation).
 Trust operations require --root PATH. No automatic fixture selection.
 HELP
@@ -762,6 +941,10 @@ HELP
  trust-setup) shift; trust_setup "$@";;
  x509-fixtures) shift; exec python3 -B "$REPO/campaigns/browser_client/chromium_mtc/generate_x509_depth_matrix.py" "$@";;
  ca-policy) shift; exec python3 -B "$REPO/campaigns/browser_client/chromium_mtc/generate_chromium_ca_policy.py" "$@";;
+ ca-policy-status) ca_policy_action status;;
+ ca-policy-generate) ca_policy_action generate;;
+ ca-policy-install) ca_policy_action install;;
+ ca-policy-verify) ca_policy_action verify;;
  sandbox-setup) sandbox_action setup;;
  sandbox-status) sandbox_action status;;
  doctor) doctor;;

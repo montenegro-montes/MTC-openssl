@@ -130,9 +130,19 @@ menu_submenu() {
    labels=('100 Verify reconstruction inputs' '110 Prepare depot_tools' '120 Prepare Chromium base' '130 Prepare BoringSSL base' '140 Import preserved commits' '150 Checkout patched source' '160 Verify source trees' 'Status' 'Plan')
    commands=('run 100' 'run 110' 'run 120' 'run 130' 'run 140' 'run 150' 'run 160' status plan);;
   preparation)
-   title='Build preparation (macOS / Linux)'; prefix=(prepare-build)
-   labels=('170 Verify reconstructed source' '180 Prepare Chromium checkout layout' '190 Sync pinned dependencies' '200 Check platform build dependencies' '210 Configure release build' '220 Verify build configuration' 'Status' 'Plan' 'Install build dependencies' 'Prepare Chromium AppArmor sandbox' 'Check Chromium AppArmor sandbox')
-   commands=('run 170' 'run 180' 'run 190' 'run 200' 'run 210' 'run 220' status plan install-deps sandbox-setup sandbox-status);;
+   title='Build preparation'; prefix=(prepare-build)
+   labels=('170 Verify reconstructed source' '180 Prepare Chromium checkout layout' '190 Sync pinned dependencies' '200 Check platform build dependencies' '210 Configure release build' '220 Verify build configuration' 'Status' 'Plan' 'Run all remaining preparation steps')
+   commands=('run 170' 'run 180' 'run 190' 'run 200' 'run 210' 'run 220' status plan run-remaining)
+   if [[ "$(uname -s)" == Darwin ]]; then
+    labels+=('Check Xcode / SDK readiness')
+   else
+    labels+=('Install build dependencies')
+   fi
+   commands+=(install-deps)
+   if type apparmor_required >/dev/null 2>&1 && apparmor_required; then
+    labels+=('Prepare Chromium AppArmor sandbox' 'Check Chromium AppArmor sandbox')
+    commands+=(sandbox-setup sandbox-status)
+   fi;;
   build)
    title='Build Chromium'; prefix=(build)
    labels=('Plan' 'Status' 'Build Chromium'); commands=(plan status 'run chromium');;
@@ -169,6 +179,10 @@ menu_submenu() {
   [[ "$selection" =~ ^[1-9][0-9]?$ ]] || { echo 'Invalid option.'; continue; }
   (( selection <= ${#labels[@]} )) || { echo 'Invalid option.'; continue; }
   read -r -a args <<< "${commands[selection-1]}"
+  if [[ "$section" == preparation && "${args[0]}" == run-remaining ]]; then
+   menu_preparation_run_remaining
+   continue
+  fi
   if [[ "$section" == validation && "${args[0]}" == run ]]; then
    if [[ "${args[1]}" == all ]]; then
     menu_validation_all
