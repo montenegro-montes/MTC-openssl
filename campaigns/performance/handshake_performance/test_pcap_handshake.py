@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import sys,unittest
+import csv,sys,tempfile,unittest
 sys.path.insert(0,str(Path(__file__).parent))
 import pcap_handshake as p
 
@@ -33,6 +33,27 @@ def fixture(mutual=False,fragment=False,retransmission=False):
  return rows
 
 class Tests(unittest.TestCase):
+ def test_tshark_29_column_order_maps_structured_fields_before_record_fields(self):
+  values={field:'' for field in p.FIELDS}
+  values.update({'frame.number':'6','tls.handshake.type':'2,8,11,15,20',
+                 'tls.handshake.length':'1206,2,931,75,48',
+                 'tls.handshake.certificate':'30:00','tls.handshake.certificate_length':'',
+                 'tls.record.length':'1210,1,23,952,96,69'})
+  with tempfile.TemporaryDirectory() as temporary:
+   path=Path(temporary)/'observed.tsv'
+   with path.open('w',newline='') as stream:
+    csv.writer(stream,delimiter='\t',lineterminator='\n').writerow([values[field] for field in p.FIELDS])
+   loaded=p.load_tsv(path)[0]
+  self.assertEqual(len(p.FIELDS),29)
+  self.assertEqual(loaded['tls.handshake.certificate'],'30:00')
+  self.assertEqual(loaded['tls.handshake.certificate_length'],'')
+  self.assertEqual(loaded['tls.record.length'],'1210,1,23,952,96,69')
+ def test_structural_values_are_unavailable_components_not_malformed_handshake(self):
+  rows=fixture();rows[4]['tls.handshake.certificate']='1210,1,23,952,96,69';rows[4]['tls.handshake.certificate_length']=''
+  result=p.analyze(rows,credential_kind='mtc-landmark')
+  self.assertEqual(result['analysis_status'],'OK');self.assertEqual(result['tls_server_certificate_bytes'],304)
+  self.assertIsNone(result['tls_server_mtc_proof_bytes']);self.assertEqual(result['authentication_components_status'],'UNAVAILABLE')
+  self.assertIn('CertificateEntry DER unavailable',result['authentication_components_error'])
  def test_complete_schema_and_boundaries(self):
   r=p.analyze(fixture())
   self.assertAlmostEqual(r['tcp_handshake_ms'],.045);self.assertAlmostEqual(r['tcp_syn_to_clienthello_ms'],.957);self.assertAlmostEqual(r['tls_clienthello_to_client_finished_ms'],7.255);self.assertAlmostEqual(r['tcp_syn_to_first_application_request_ms'],9)

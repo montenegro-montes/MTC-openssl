@@ -14,7 +14,9 @@ class AnalysisError(ValueError): pass
 
 BASE_FIELDS=("frame.time_epoch","frame.number","frame.len","tcp.stream","ip.src","ip.dst","ipv6.src","ipv6.dst","tcp.srcport","tcp.dstport","tcp.flags.syn","tcp.flags.ack","tcp.seq","tcp.ack","tcp.len","tcp.payload","tls.handshake.type","tls.handshake.length","tls.handshake.random","tls.record.length","http.request.method","tcp.analysis.retransmission","tcp.analysis.fast_retransmission","tcp.analysis.spurious_retransmission")
 STRUCTURED_FIELDS=("tls.handshake.certificate","tls.handshake.certificate_length","tls.handshake.sig_hash_alg","tls.handshake.client_cert_vrfy.sig_len","tls.handshake.client_cert_vrfy.sig")
-FIELDS=(*BASE_FIELDS,*STRUCTURED_FIELDS)
+_STRUCTURED_POSITION=BASE_FIELDS.index("tls.record.length")
+# Keep this order identical to the tshark command used by mt-handshake-performance.
+FIELDS=(*BASE_FIELDS[:_STRUCTURED_POSITION],*STRUCTURED_FIELDS,*BASE_FIELDS[_STRUCTURED_POSITION:])
 METRIC_FIELDS=("tcp_handshake_ms","tcp_syn_to_clienthello_ms","tls_clienthello_to_client_finished_ms","tcp_syn_to_first_application_request_ms","tls_client_handshake_bytes","tls_server_handshake_bytes","tls_handshake_bytes","tls_client_handshake_wire_bytes","tls_server_handshake_wire_bytes","tls_handshake_wire_bytes","tcp_handshake_wire_bytes","connection_handshake_wire_bytes","tls_client_handshake_packets","tls_server_handshake_packets","tls_handshake_packets","tls_client_certificate_bytes","tls_server_certificate_bytes","tls_client_certificate_verify_bytes","tls_server_certificate_verify_bytes","tls_client_certificate_verify_signature_bytes","tls_server_certificate_verify_signature_bytes","tls_client_mtc_proof_bytes","tls_server_mtc_proof_bytes","tls_client_mtc_merkle_path_bytes","tls_server_mtc_merkle_path_bytes","tls_client_mtc_merkle_path_hashes","tls_server_mtc_merkle_path_hashes","tls_client_sct_bytes","tls_server_sct_bytes","tls_client_authentication_bytes","tls_server_authentication_bytes","tls_authentication_bytes","authentication_components_status","authentication_components_error","tcp_stream","client_random","analysis_status","analysis_error","tcp_retransmission_packets")
 
 def _items(value): return [x.strip() for x in value.split(',') if x.strip()]
@@ -40,7 +42,10 @@ def load_tsv(path):
  rows=[]
  for line,values in enumerate(lines,1):
   if len(values) not in (len(BASE_FIELDS),len(FIELDS)):raise AnalysisError(f'TSV line {line}: expected {len(BASE_FIELDS)} or {len(FIELDS)} fields, got {len(values)}')
-  rows.append(dict(zip(FIELDS,(*values,*(['']*(len(FIELDS)-len(values)))))))
+  if len(values)==len(BASE_FIELDS):
+   row=dict(zip(BASE_FIELDS,values));row.update(dict.fromkeys(STRUCTURED_FIELDS,''))
+  else:row=dict(zip(FIELDS,values))
+  rows.append(row)
  return rows
 
 def _one_value(row,key,required=False):
@@ -165,16 +170,24 @@ def analyze(rows,server_port='4433',expect_client_certificate=False,credential_k
  connection_frames={_integer(r,'frame.number'):r for r in (*tcp_frames,*interval)}
  connection_wire=sum(_integer(r,'frame.len') for r in connection_frames.values())
  client_tls=_logical_records(client_frames);server_tls=_logical_records(server_frames)
- certs={'client':set(),'server':set()};cert_der={'client':[],'server':[]};certificate_verifies={'client':[],'server':[]};certificate_request=False
+ certs={'client':set(),'server':set()};cert_der={'client':[],'server':[]};cert_der_error={'client':None,'server':None};certificate_verifies={'client':[],'server':[]};certificate_request=False
  for row in interval:
   for kind,length in _handshakes(row):
    certificate_request|=kind=='13'
    side=direction(row)
    if kind=='11':
     certs[side].add(length+4)
-    for encoded in _items(row.get('tls.handshake.certificate','')):
-     try:cert_der[side].append(bytes.fromhex(encoded.replace(':','')))
-     except ValueError as e:raise AnalysisError(f"frame {row.get('frame.number','?')}: malformed Certificate DER") from e
+    encoded_items=_items(row.get('tls.handshake.certificate',''))
+    declared_items=_items(row.get('tls.handshake.certificate_length',''))
+    try:
+     decoded=[bytes.fromhex(encoded.replace(':','')) for encoded in encoded_items]
+     if declared_items:
+      declared=[int(value,0) for value in declared_items]
+      if len(declared)!=len(decoded) or any(size!=len(value) for size,value in zip(declared,decoded)):
+       raise ValueError('CertificateEntry length mismatch')
+     cert_der[side].extend(decoded)
+    except ValueError as e:
+     cert_der[side].clear();cert_der_error[side]=f"frame {row.get('frame.number','?')}: CertificateEntry DER unavailable: {e}"
    if kind=='15':certificate_verifies[side].append(_certificate_verify(row,length))
  if len(certs['server'])!=1:raise AnalysisError(f"expected one analyzable server Certificate, found {len(certs['server'])}")
  if len(certs['client'])>1:raise AnalysisError(f"expected at most one analyzable client Certificate, found {len(certs['client'])}")
@@ -190,13 +203,15 @@ def analyze(rows,server_port='4433',expect_client_certificate=False,credential_k
  if credential_kind.startswith('mtc-'):
   for side in ('client','server'):
    if certs[side]:
-    if len(cert_der[side])>1:raise AnalysisError(f'expected one {side} MTC CertificateEntry DER value')
-    if cert_der[side]:mtc[side]=_mtc_components(cert_der[side][0],credential_kind.removeprefix('mtc-'))
+    if cert_der_error[side]:component_errors.append(cert_der_error[side])
+    elif len(cert_der[side])>1:raise AnalysisError(f'expected one {side} MTC CertificateEntry DER value')
+    elif cert_der[side]:mtc[side]=_mtc_components(cert_der[side][0],credential_kind.removeprefix('mtc-'))
     else:component_errors.append(f'{side} MTC CertificateEntry DER unavailable from tshark')
  sct={side:None for side in ('client','server')}
  if credential_kind=='x509':
   for side in ('client','server'):
-   if cert_der[side]:sct[side]=sum(_sct_size(cert) for cert in cert_der[side])
+   if cert_der_error[side]:component_errors.append(cert_der_error[side]+'; SCT size unavailable')
+   elif cert_der[side]:sct[side]=sum(_sct_size(cert) for cert in cert_der[side])
    elif certs[side]:component_errors.append(f'{side} X.509 CertificateEntry DER unavailable from tshark; SCT size unavailable')
  ms=Decimal(1000)
  return {'tcp_handshake_ms':float((_time(ack)-syn_time)*ms),'tcp_syn_to_clienthello_ms':float((hello_time-syn_time)*ms),'tls_clienthello_to_client_finished_ms':float((finished_time-hello_time)*ms),'tcp_syn_to_first_application_request_ms':None if request_time is None else float((request_time-syn_time)*ms),'tls_client_handshake_bytes':client_tls,'tls_server_handshake_bytes':server_tls,'tls_handshake_bytes':client_tls+server_tls,'tls_client_handshake_wire_bytes':client_wire,'tls_server_handshake_wire_bytes':server_wire,'tls_handshake_wire_bytes':client_wire+server_wire,'tcp_handshake_wire_bytes':tcp_wire,'connection_handshake_wire_bytes':connection_wire,'tls_client_handshake_packets':len(client_frames),'tls_server_handshake_packets':len(server_frames),'tls_handshake_packets':len(interval),'tls_client_certificate_bytes':client_cert,'tls_server_certificate_bytes':server_cert,'tls_client_certificate_verify_bytes':client_cv,'tls_server_certificate_verify_bytes':server_cv,'tls_client_certificate_verify_signature_bytes':client_sig,'tls_server_certificate_verify_signature_bytes':server_sig,'tls_client_mtc_proof_bytes':mtc['client'][0],'tls_server_mtc_proof_bytes':mtc['server'][0],'tls_client_mtc_merkle_path_bytes':mtc['client'][1],'tls_server_mtc_merkle_path_bytes':mtc['server'][1],'tls_client_mtc_merkle_path_hashes':mtc['client'][2],'tls_server_mtc_merkle_path_hashes':mtc['server'][2],'tls_client_sct_bytes':sct['client'],'tls_server_sct_bytes':sct['server'],'tls_client_authentication_bytes':client_cert+client_cv,'tls_server_authentication_bytes':server_cert+server_cv,'tls_authentication_bytes':client_cert+client_cv+server_cert+server_cv,'authentication_components_status':'UNAVAILABLE' if component_errors else 'OK','authentication_components_error':'; '.join(component_errors),'tcp_stream':int(stream),'client_random':client_random,'analysis_status':'OK','analysis_error':'','tcp_retransmission_packets':sum(_retransmission(r) for r in interval)}
