@@ -178,12 +178,12 @@ A clean positive result requires:
 ## Existing-build resumable driver
 
 ```sh
-bin/browser_client/mt-chromium-mtc init
-bin/browser_client/mt-chromium-mtc plan
-bin/browser_client/mt-chromium-mtc resume
-bin/browser_client/mt-chromium-mtc status
+bin/browser_client/mt-chromium-setup init
+bin/browser_client/mt-chromium-setup plan
+bin/browser_client/mt-chromium-setup resume
+bin/browser_client/mt-chromium-setup status
 # Stop only the labelled workflow container; preserve fixtures/results/hosts:
-bin/browser_client/mt-chromium-mtc cleanup
+bin/browser_client/mt-chromium-setup cleanup
 ```
 
 `show STEP` displays implementation/commands; `run STEP` executes one step.
@@ -241,14 +241,14 @@ The separate source interface defaults to `$HOME/chromium-mtc-rebuild`.
 Use optional `--dest ABSOLUTE_PATH` before or after the subcommand to override it:
 
 ```sh
-bin/browser_client/mt-chromium-mtc reconstruct-plan
-bin/browser_client/mt-chromium-mtc reconstruct-source plan
-bin/browser_client/mt-chromium-mtc reconstruct-source status
+bin/browser_client/mt-chromium-setup reconstruct-plan
+bin/browser_client/mt-chromium-setup reconstruct-source plan
+bin/browser_client/mt-chromium-setup reconstruct-source status
 # Future server only: explicitly run each step in order; 110–130 download sources.
-bin/browser_client/mt-chromium-mtc reconstruct-source run 100
+bin/browser_client/mt-chromium-setup reconstruct-source run 100
 # Then individually run 110, 120, 130, 140, 150, 160.
 # Optional override (also accepted after run 100):
-bin/browser_client/mt-chromium-mtc reconstruct-source --dest /srv/mtc-source plan
+bin/browser_client/mt-chromium-setup reconstruct-source --dest /srv/mtc-source plan
 ```
 
 | Step | Operation |
@@ -303,18 +303,18 @@ All commands default to `$HOME/chromium-mtc-rebuild` and accept optional
 read-only; execution rejects platforms other than Ubuntu 24.04 x86_64.
 
 ```sh
-bin/browser_client/mt-chromium-mtc prepare-build plan
-bin/browser_client/mt-chromium-mtc prepare-build status
-bin/browser_client/mt-chromium-mtc prepare-build run 170
-bin/browser_client/mt-chromium-mtc prepare-build run 180
-bin/browser_client/mt-chromium-mtc prepare-build run 190
-bin/browser_client/mt-chromium-mtc prepare-build run 200
+bin/browser_client/mt-chromium-setup prepare-build plan
+bin/browser_client/mt-chromium-setup prepare-build status
+bin/browser_client/mt-chromium-setup prepare-build run 170
+bin/browser_client/mt-chromium-setup prepare-build run 180
+bin/browser_client/mt-chromium-setup prepare-build run 190
+bin/browser_client/mt-chromium-setup prepare-build run 200
 # Only if packages are missing: explicitly install with Chromium's own script.
 # It may request sudo; this action is never inferred from a failed check.
-bin/browser_client/mt-chromium-mtc prepare-build install-deps
+bin/browser_client/mt-chromium-setup prepare-build install-deps
 # After installation, explicitly rerun 200, then continue:
-bin/browser_client/mt-chromium-mtc prepare-build run 210
-bin/browser_client/mt-chromium-mtc prepare-build run 220
+bin/browser_client/mt-chromium-setup prepare-build run 210
+bin/browser_client/mt-chromium-setup prepare-build run 220
 ```
 
 | Stage | Explicit action |
@@ -381,10 +381,10 @@ conflicting args are refused rather than overwritten.
 ## Explicit compilation and provenance
 
 ```sh
-bin/browser_client/mt-chromium-mtc build plan
-bin/browser_client/mt-chromium-mtc build status
+bin/browser_client/mt-chromium-setup build plan
+bin/browser_client/mt-chromium-setup build status
 # The only driver interface that compiles Chromium:
-bin/browser_client/mt-chromium-mtc build run chromium
+bin/browser_client/mt-chromium-setup build run chromium
 ```
 
 The last command invokes exactly the equivalent of:
@@ -439,12 +439,12 @@ or installs a trust anchor. Python's `cryptography` package, OpenSSL, Docker and
 existing patched Chromium are prerequisites; missing tools are not installed.
 
 ```sh
-bin/browser_client/mt-chromium-mtc browser-validation plan
-bin/browser_client/mt-chromium-mtc browser-validation credentials
-bin/browser_client/mt-chromium-mtc browser-validation status
-bin/browser_client/mt-chromium-mtc browser-validation run all
-bin/browser_client/mt-chromium-mtc browser-validation run mtc-positive
-bin/browser_client/mt-chromium-mtc browser-validation cleanup
+bin/browser_client/mt-chromium-tests browser-validation plan
+bin/browser_client/mt-chromium-setup browser-validation credentials
+bin/browser_client/mt-chromium-tests browser-validation status
+bin/browser_client/mt-chromium-tests browser-validation run all
+bin/browser_client/mt-chromium-tests browser-validation run mtc-positive
+bin/browser_client/mt-chromium-setup browser-validation cleanup
 ```
 
 Optional `--chromium /absolute/executable` selects an existing browser;
@@ -556,8 +556,8 @@ If the old interoperability server occupies it, stop it explicitly using its
 own lifecycle command before starting this battery:
 
 ```sh
-bin/browser_client/mt-chromium-mtc cleanup
-bin/browser_client/mt-chromium-mtc browser-validation run all
+bin/browser_client/mt-chromium-setup cleanup
+bin/browser_client/mt-chromium-tests browser-validation run all
 ```
 
 Every credential audit/run writes a fresh
@@ -617,7 +617,7 @@ reads results and re-audits the selected root's current trust.
 Focused cheap tests:
 
 ```sh
-bash -n bin/browser_client/mt-chromium-mtc
+bash -n bin/browser_client/mt-chromium-setup bin/browser_client/mt-chromium-tests
 python3 -m unittest tests/test_chromium_mtc_workflow.py -v
 git diff --check
 ```
@@ -642,8 +642,8 @@ Chromium builds from creating their sandbox. After building Chromium, configure
 `CHROMIUM_SRC` in `.mt-state/chromium-mtc/paths.env`, then run:
 
 ```sh
-bin/browser_client/mt-chromium-mtc sandbox-setup
-bin/browser_client/mt-chromium-mtc sandbox-status
+bin/browser_client/mt-chromium-setup sandbox-setup
+bin/browser_client/mt-chromium-setup sandbox-status
 ```
 
 The setup applies only on Linux when
@@ -668,8 +668,8 @@ See [Chromium's AppArmor guidance](https://chromium.googlesource.com/chromium/sr
 
 ### Explicit MTC fixture reuse in the controlled driver
 
-`mt-chromium-mtc browser-validation run ...` (delegated to
-`mt-chromium-tests`) and setup's `browser-validation credentials` pass
+`mt-chromium-tests browser-validation run ...` and
+`mt-chromium-setup browser-validation credentials` pass
 `--mtc-fixture` and `--mtc-validation` from
 `.mt-state/chromium-mtc/paths.env`. Steps 20/30 must already have selected and
 checked the fixture and its successful functional validation evidence.

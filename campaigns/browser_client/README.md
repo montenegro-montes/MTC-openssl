@@ -7,6 +7,10 @@ Browser-oriented MTC implementations and interoperability experiments.
 - `boringssl_mtc_client/`: earlier BoringSSL-based client, wire probes,
   verifier experiments, and Trust Anchor ID validation utilities.
 
-The Chromium workflow driver is:
+The Chromium workflow drivers are:
 
-    bin/browser_client/mt-chromium-mtc
+    bin/browser_client/mt-chromium-setup
+    bin/browser_client/mt-chromium-tests
+
+Use `mt-chromium-setup menu` for installation and credential preparation, or
+`mt-chromium-tests menu` for validation and experiments.

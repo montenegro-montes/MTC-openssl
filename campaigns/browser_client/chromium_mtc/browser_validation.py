@@ -1037,7 +1037,7 @@ def root_trust(x):
             for i, cert in enumerate(certs):
                 p = Path(temp)/f'{i}.pem'; p.write_bytes(cert); args += ['-c', str(p)]
             result = command(args+['-c', str(root)], check=False)
-        manual = shlex.join(['bin/browser_client/mt-chromium-mtc', 'browser-validation', 'trust-x509', '--root', str(root)])
+        manual = shlex.join(['bin/browser_client/mt-chromium-setup', 'browser-validation', 'trust-x509', '--root', str(root)])
         return dict(status='TRUSTED' if result.returncode == 0 else 'UNTRUSTED_OR_UNAVAILABLE', method='security verify-cert -L ssl (no explicit trust override)',
                     returncode=result.returncode, diagnostic=(result.stdout+result.stderr)[-2000:], manual_command=manual)
     if system == 'Linux':

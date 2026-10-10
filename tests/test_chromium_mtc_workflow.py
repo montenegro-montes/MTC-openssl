@@ -189,12 +189,6 @@ class Safety(unittest.TestCase):
         for flag in ('--ignore-certificate-errors','--allow-insecure-localhost'):
             self.assertNotIn(flag,command)
 
-    def test_normal_resume_isolated(self):
-        text=(REPO/'bin/browser_client/mt-chromium-mtc').read_text()
-        self.assertIn('exec "$DRIVER_DIR/mt-chromium-tests" "$@"',text)
-        self.assertIn('exec "$DRIVER_DIR/mt-chromium-setup" "$@"',text)
-        self.assertNotIn('browser_validation',text)
-
     def test_plan_status_no_launch_or_generation(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(bv,'REPO',Path(tmp)), patch.object(bv,'command') as cmd, patch.object(bv.subprocess,'Popen') as launch, patch.object(bv,'prepare_credentials') as prepare:
             self.assertEqual(bv.main(['plan']),0);self.assertEqual(bv.main(['status']),0)

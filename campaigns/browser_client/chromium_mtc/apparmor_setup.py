@@ -21,7 +21,7 @@ def profile_for(executable):
     if any(c in path for c in '*?[]{}@"\\') or any(ord(c) < 32 for c in path):
         raise ValueError('Executable path contains unsupported AppArmor pattern characters')
     name = 'mtc-chromium-'+hashlib.sha256(path.encode()).hexdigest()[:16]
-    content = ('# Managed by mt-chromium-mtc sandbox-setup; exact executable only.\n'
+    content = ('# Managed by mt-chromium-setup sandbox-setup; exact executable only.\n'
                'abi <abi/4.0>,\ninclude <tunables/global>\n\n'
                f'profile {name} "{path}" flags=(unconfined) {{\n  userns,\n}}\n')
     return name, content
@@ -101,7 +101,7 @@ def main():
     print(f'Executable: {executable}\nProfile: {target}\nInstalled exact policy: {installed}\nLoaded: {active}')
     if args.action == 'status':
         if not (installed and active):
-            raise ValueError('Required policy is not installed/loaded. Run mt-chromium-mtc sandbox-setup.')
+            raise ValueError('Required policy is not installed/loaded. Run mt-chromium-setup sandbox-setup.')
         return
     if installed and active:
         print('READY: no changes needed.'); return
