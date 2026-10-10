@@ -1664,13 +1664,15 @@ class CdpConnection:
         """Require both a post-navigate load event and the matching loader lifecycle event."""
         load_event = None
         lifecycle_event = None
-        while load_event is None or lifecycle_event is None:
-            require(time.monotonic() < deadline, 'Timed out waiting for correlated experimental navigation load')
-            pending, self.events = self.events, []
-            if not pending:
-                self.socket.settimeout(max(0.01, deadline-time.monotonic()))
-                pending = [self._receive()]
-            for event in pending:
+        deferred = []
+        pending, self.events = self.events, []
+        try:
+            while load_event is None or lifecycle_event is None:
+                require(time.monotonic() < deadline, 'Timed out waiting for correlated experimental navigation load')
+                if not pending:
+                    self.socket.settimeout(max(0.01, deadline-time.monotonic()))
+                    pending = [self._receive()]
+                event = pending.pop(0)
                 method = event.get('method'); params = event.get('params', {})
                 if (method == 'Page.loadEventFired'
                         and isinstance(params.get('timestamp'), (int, float))
@@ -1681,8 +1683,11 @@ class CdpConnection:
                       and (loader_id is None or params.get('loaderId') == loader_id)):
                     lifecycle_event = event
                 else:
-                    self.events.append(event)
-        return dict(load_event=load_event, lifecycle_event=lifecycle_event)
+                    deferred.append(event)
+            return dict(load_event=load_event, lifecycle_event=lifecycle_event)
+        finally:
+            # Preserve unrelated evidence exactly once and in arrival order.
+            self.events = deferred + pending + self.events
 
 
 def cdp_page(profile, deadline):
