@@ -49,6 +49,13 @@ menu_submenu preparation
         self.assertIn("browser-validation credentials --all-profiles --depth", source)
         self.assertNotIn("Chromium CA policy instructions", source)
 
+    def test_setup_exposes_shared_capture_status(self):
+        source = SETUP.read_text()
+        self.assertIn("'Capture backend status'", source)
+        self.assertIn("capture) menu_invoke readonly capture-status", source)
+        self.assertIn("capture-status) capture_status", source)
+        self.assertIn("bp.capture_diagnostics(tools,check_capture=True)", source)
+
 
 if __name__ == "__main__":
     unittest.main()

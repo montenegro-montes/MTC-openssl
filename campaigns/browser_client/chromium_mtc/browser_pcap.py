@@ -7,9 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
-import platform
 import re
-import shutil
 import signal
 import socket
 import subprocess
@@ -18,6 +16,7 @@ import time
 
 sys.dont_write_bytecode = True
 import browser_validation as bv
+import browser_preflight as bp
 sys.path.insert(0, str(bv.REPO/'campaigns/performance/handshake_performance'))
 import pcap_handshake as ph
 
@@ -202,12 +201,7 @@ def save_comparison(output, result):
 
 
 def requirements():
-    system = platform.system()
-    return dict(platform=system, interface={'Darwin': 'lo0', 'Linux': 'lo'}.get(system),
-                capture_filter=FILTER, dumpcap=shutil.which('dumpcap'), tcpdump=shutil.which('tcpdump'),
-                tshark=shutil.which('tshark'), permissions='NOT CHECKED; capture readiness is checked only by run',
-                instruction='Install capture tools manually if missing. Ask your administrator to grant '
-                            'your user capture access to the loopback interface. No automatic sudo or permission changes.')
+    return bp.capture_requirements(FILTER)
 
 
 class Capture:
@@ -454,6 +448,47 @@ def netlog_connections(net):
     return indexed
 
 
+def correlation_diagnostics(output, matched, primary, net_connections, completed):
+    """Describe every correlated handshake without changing its classification."""
+    execution = {}
+    metadata = Path(output)/'measurement-metadata.json'
+    if metadata.is_file() and not metadata.is_symlink():
+        try:
+            execution = bv.read(metadata)
+        except (ValueError, OSError, KeyError, TypeError):
+            execution = {'metadata_error': 'measurement-metadata.json is unreadable'}
+    connections = []
+    for entry in matched:
+        evidence = []
+        for random in entry.get('client_randoms', []):
+            net = net_connections.get(random)
+            evidence.append(dict(
+                client_random=random,
+                netlog_connection_found=net is not None,
+                netlog_tls_completed=net.get('tls_completed') if net else None,
+                netlog_client_finished_observed=net.get('client_finished_observed') if net else None,
+                netlog_authentication_observed=net.get('authentication_observed') if net else None,
+                netlog_http_request_observed=net.get('http_request_observed') if net else None,
+                netlog_auxiliary_tls_only=net.get('auxiliary_tls_only') if net else None,
+                netlog_aborted_unused_attempt=net.get('aborted_unused_attempt') if net else None,
+                server_finished_pair_observed=random in completed))
+        connections.append(dict(
+            tcp_stream=entry.get('stream'), client_port=entry.get('client_port'),
+            classification=entry.get('classification'),
+            client_random_count=len(entry.get('client_randoms', [])),
+            tcp_payload_bytes_client_to_server=entry.get('tcp_payload_bytes_client_to_server'),
+            tcp_payload_bytes_server_to_client=entry.get('tcp_payload_bytes_server_to_client'),
+            first_client_abort_frame=entry.get('first_client_abort_frame'),
+            first_server_payload_frame=entry.get('first_server_payload_frame'),
+            last_client_payload_frame=entry.get('last_client_payload_frame'),
+            aborted_before_tls_completion=entry.get('aborted_before_tls_completion'),
+            evidence=evidence))
+    return dict(execution=execution, correlated_connection_count=len(matched),
+                primary_connection_count=len(primary),
+                primary_tcp_streams=[entry.get('stream') for entry in primary],
+                connections=connections)
+
+
 def analyze(output, capture, browser_result):
     result = dict(name=browser_result['name'], observed_outcome='INCONCLUSIVE', **{'pass': False},
                   key_establishment=browser_result.get('key_establishment'),
@@ -648,6 +683,9 @@ def analyze(output, capture, browser_result):
             entry['abort_before_server_flight'] = aborted and abort_before_flight
             if aborted:
                 entry['classification'] = 'aborted_before_tls_completion'
+        correlation = correlation_diagnostics(
+            output, matched, primary, net_connections, completed)
+        result['correlation_diagnostics'] = correlation
         result['wire_observed'] = dict(**{k: sum(e[k] for e in matched) for k in METRICS},
             **{'url_linked_'+k: sum(e[k] for e in primary) for k in METRICS},
             url_linked_connection_count=len(primary), url_linked_streams=[e['stream'] for e in primary],
@@ -696,8 +734,13 @@ def analyze(output, capture, browser_result):
                 'client_finished_observed', 'application_data_observed')),
                 'Browser semantic evidence contradicts rejection after server authentication')
         else:
-            bv.require(not any(e['classification'] == 'other_correlated' for e in matched),
-                       'Additional correlated connection lacks sufficient unused TLS-only evidence')
+            unresolved = [e for e in correlation['connections']
+                          if e['classification'] == 'other_correlated']
+            bv.require(not unresolved,
+                       'Additional correlated connection lacks sufficient unused TLS-only evidence: '
+                       +json.dumps(dict(execution=correlation['execution'],
+                                        primary_tcp_streams=correlation['primary_tcp_streams'],
+                                        unresolved=unresolved), sort_keys=True))
         result.update(observed_outcome=browser_result['observed_outcome'], **{'pass': browser_result['pass']})
     except (ValueError, OSError, KeyError, IndexError, subprocess.SubprocessError) as error:
         result['reasons'].append(str(error))

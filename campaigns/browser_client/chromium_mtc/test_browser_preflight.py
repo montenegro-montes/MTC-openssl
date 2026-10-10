@@ -3,6 +3,7 @@ import io
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import browser_preflight as bp
 import browser_validation as bv
@@ -120,6 +121,56 @@ class BrowserPreflightTests(unittest.TestCase):
             dict(interface='lo', dumpcap=None, tcpdump='/usr/bin/tcpdump'),
             startup_timeout=0,
             popen=lambda *args, **kwargs: process)['status'], 'started')
+
+    def test_capture_diagnostics_ready_on_linux_and_macos(self):
+        for system, interface in (('Linux', 'lo'), ('Darwin', 'lo0')):
+            with self.subTest(system=system), patch.object(bp.os, 'access', return_value=True):
+                tools = bp.capture_requirements(system=system, which=lambda name: '/bin/'+name)
+                result = bp.capture_diagnostics(
+                    tools, check_capture=True, interfaces={interface},
+                    verifier=lambda unused: {'status': 'started'})
+                self.assertEqual(result['category'], 'READY')
+                self.assertEqual(result['permissions'], 'PASS')
+
+    def test_missing_required_analyzer_is_specific(self):
+        paths = {'dumpcap': '/bin/dumpcap', 'tcpdump': None, 'tshark': None}
+        with patch.object(bp.os, 'access', return_value=True):
+            tools = bp.capture_requirements(system='Linux', which=paths.get)
+            result = bp.capture_diagnostics(tools, interfaces={'lo'})
+        self.assertEqual(result['category'], 'MISSING')
+        self.assertIn('tshark', result['reason'])
+        self.assertEqual(bp.capture_guidance(result, 'Linux'), ['sudo apt install tshark'])
+
+    def test_missing_loopback_is_reported_before_permission_probe(self):
+        with patch.object(bp.os, 'access', return_value=True):
+            tools = bp.capture_requirements(system='Darwin', which=lambda name: '/bin/'+name)
+            result = bp.capture_diagnostics(
+                tools, check_capture=True, interfaces=set(),
+                verifier=lambda unused: self.fail('capture probe must not run'))
+        self.assertEqual(result['category'], 'MISSING')
+        self.assertEqual(result['loopback'], 'MISSING')
+
+    def test_permission_and_execution_failures_are_distinct(self):
+        with patch.object(bp.os, 'access', return_value=True):
+            tools = bp.capture_requirements(system='Linux', which=lambda name: '/bin/'+name)
+            for source, expected in (('permission', 'PERMISSION_DENIED'),
+                                     ('startup', 'EXECUTION_FAILED')):
+                def reject(unused, category=source):
+                    raise bp.CaptureCheckError(category, 'probe failed')
+                with self.subTest(category=source):
+                    result = bp.capture_diagnostics(
+                        tools, check_capture=True, interfaces={'lo'}, verifier=reject)
+                    self.assertEqual(result['category'], expected)
+
+    def test_measurement_preflight_uses_shared_capture_diagnostics(self):
+        source = (Path(__file__).resolve().parents[3]
+                  / 'bin/browser_client/mt-chromium-tests').read_text()
+        self.assertIn('capture=bp.capture_diagnostics(tools,check_capture=True)', source)
+        start = source.index('browser_measurements_prepare() {')
+        end = source.index('\n}', start)
+        prepare = source[start:end]
+        self.assertLess(prepare.index('browser_measurements_environment "$image" "$chromium"'),
+                        prepare.index('if [[ "$all_profiles" == true ]]'))
 
 
 if __name__ == '__main__':

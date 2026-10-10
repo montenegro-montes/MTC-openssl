@@ -164,13 +164,18 @@ from pathlib import Path
 repo=Path(sys.argv[1]); requested=sys.argv[2]
 sys.path.insert(0,str(repo/'campaigns/browser_client/chromium_mtc'))
 import browser_pcap as pcap
+import browser_preflight as bp
 import browser_validation as bv
 browser=bv.browser_executable(Path(requested) if requested else None)
 print('[DEPENDENCIES] Chromium: PASS ('+browser['executable']+')')
 tools=pcap.requirements()
-bv.require(tools['interface'] and tools['tshark'] and
-           (tools['dumpcap'] or tools['tcpdump']),
-           'Capture backend is not ready: '+tools['instruction'])
+capture=bp.capture_diagnostics(tools,check_capture=True)
+for name in ('tcpdump','dumpcap','tshark','loopback','permissions','backend'):
+    print('[CAPTURE] '+name+': '+capture[name])
+if capture['backend'] != 'READY':
+    for line in bp.capture_guidance(capture): print('[CAPTURE] action: '+line)
+    raise ValueError('Capture backend is not ready ['+capture['category']+']: '
+                     +str(capture['reason']))
 print('[DEPENDENCIES] Capture backend: PASS')
 for directory in (repo/'artifacts', repo/'.mt-state'):
     directory.mkdir(parents=True, exist_ok=True)

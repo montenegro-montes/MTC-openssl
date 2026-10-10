@@ -2,7 +2,9 @@
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
+import socket
 import subprocess
 import tempfile
 import time
@@ -12,6 +14,88 @@ class CaptureCheckError(ValueError):
     def __init__(self, category, message):
         super().__init__(message)
         self.category = category
+
+
+def capture_requirements(capture_filter='tcp port 4433', system=None, which=shutil.which):
+    """Return the tools actually used by Chromium capture and analysis."""
+    system = system or __import__('platform').system()
+    return dict(platform=system,
+                interface={'Darwin': 'lo0', 'Linux': 'lo'}.get(system),
+                capture_filter=capture_filter,
+                dumpcap=which('dumpcap'), tcpdump=which('tcpdump'),
+                tshark=which('tshark'),
+                permissions='NOT CHECKED; run capture-status or the measurement preflight',
+                instruction='Run mt-chromium-setup capture-status for a specific diagnostic.')
+
+
+def capture_diagnostics(tools, *, check_capture=False, interfaces=None,
+                        verifier=None):
+    """Classify capture readiness without changing host permissions or configuration."""
+    if interfaces is None:
+        try:
+            interfaces = {name for _, name in socket.if_nameindex()}
+        except OSError:
+            interfaces = set()
+    rows = {}
+    for name in ('tcpdump', 'dumpcap', 'tshark'):
+        path = tools.get(name)
+        rows[name] = 'FOUND' if path and os.access(path, os.X_OK) else 'MISSING'
+    interface = tools.get('interface')
+    rows['loopback'] = 'AVAILABLE' if interface and interface in interfaces else 'MISSING'
+    capture_tool = next((name for name in ('dumpcap', 'tcpdump')
+                         if rows[name] == 'FOUND'), None)
+    if rows['loopback'] != 'AVAILABLE':
+        rows['permissions'] = 'NOT_CHECKED'
+        rows['backend'] = 'FAIL'
+        rows['category'] = 'MISSING'
+        rows['reason'] = 'Loopback interface is unavailable: '+str(interface)
+    elif not capture_tool or rows['tshark'] != 'FOUND':
+        rows['permissions'] = 'NOT_CHECKED'
+        rows['backend'] = 'FAIL'
+        rows['category'] = 'MISSING'
+        missing = [name for name in ('tshark',) if rows[name] == 'MISSING']
+        if not capture_tool: missing.append('dumpcap or tcpdump')
+        rows['reason'] = 'Missing required capture component: '+', '.join(missing)
+    elif not check_capture:
+        rows['permissions'] = 'NOT_CHECKED'
+        rows['backend'] = 'READY'
+        rows['category'] = 'READY'
+        rows['reason'] = None
+    else:
+        try:
+            (verifier or verify_capture_permissions)(tools)
+            rows['permissions'] = 'PASS'
+            rows['backend'] = 'READY'
+            rows['category'] = 'READY'
+            rows['reason'] = None
+        except CaptureCheckError as error:
+            rows['permissions'] = 'FAIL'
+            rows['backend'] = 'FAIL'
+            rows['category'] = ('PERMISSION_DENIED' if error.category == 'permission'
+                                else 'EXECUTION_FAILED')
+            rows['reason'] = str(error)
+    return rows
+
+
+def capture_guidance(diagnostics, system=None):
+    system = system or __import__('platform').system()
+    if diagnostics['category'] == 'READY':
+        return []
+    guidance = []
+    if diagnostics['tshark'] == 'MISSING':
+        guidance.append('sudo apt install tshark' if system == 'Linux'
+                        else 'Install Wireshark/tshark and ensure tshark is in PATH.')
+    if diagnostics['dumpcap'] == diagnostics['tcpdump'] == 'MISSING':
+        guidance.append('Install dumpcap (Wireshark) or tcpdump.')
+    if diagnostics['category'] == 'PERMISSION_DENIED':
+        if system == 'Linux' and diagnostics['dumpcap'] == 'FOUND':
+            guidance.extend(['sudo usermod -aG wireshark "$USER"',
+                             'Log out and back in so the new group membership takes effect.'])
+        else:
+            guidance.append('Ask your administrator to grant capture access to the loopback interface.')
+    if diagnostics['loopback'] != 'AVAILABLE':
+        guidance.append('Verify that the platform loopback interface exists and is enabled.')
+    return guidance
 
 
 def build_evidence_problem(state, actual, recorded, pins, current_boringssl):

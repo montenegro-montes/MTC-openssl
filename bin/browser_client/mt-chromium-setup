@@ -234,6 +234,23 @@ doctor() {
  df -h "$REPO" || echo 'Disk space unavailable'
  return 0
 }
+capture_status() {
+ python3 -B - "$REPO" <<'PY'
+import sys
+from pathlib import Path
+repo=Path(sys.argv[1])
+sys.path.insert(0,str(repo/'campaigns/browser_client/chromium_mtc'))
+import browser_pcap as pcap
+import browser_preflight as bp
+tools=pcap.requirements()
+result=bp.capture_diagnostics(tools,check_capture=True)
+for name in ('tcpdump','dumpcap','tshark','loopback','permissions','backend'):
+ print('[CAPTURE] '+name+': '+result[name])
+if result['reason']: print('[CAPTURE] reason: '+result['reason'])
+for line in bp.capture_guidance(result): print('[CAPTURE] action: '+line)
+raise SystemExit(0 if result['backend']=='READY' else 1)
+PY
+}
 reconstruct_plan() (
  source "$REPO/campaigns/browser_client/chromium_mtc/versions/chromium-mtc.env"
  cat <<PLAN
@@ -846,8 +863,8 @@ menu() (
  local selection index
  local labels actions
  while true; do
-  labels=('Doctor / requirements' 'Initialize / configuration' 'Installation status' 'Source reconstruction' 'Build preparation' 'Build Chromium' 'Existing Chromium / MTC setup')
-  actions=(doctor init status source preparation build setup)
+  labels=('Doctor / requirements' 'Capture backend status' 'Initialize / configuration' 'Installation status' 'Source reconstruction' 'Build preparation' 'Build Chromium' 'Existing Chromium / MTC setup')
+  actions=(doctor capture init status source preparation build setup)
   if apparmor_required; then labels+=('Sandbox / AppArmor setup'); actions+=(sandbox); fi
   labels+=('X.509 trust management' 'Chromium CA policy' 'Prepare browser credentials' 'Cleanup / reset')
   actions+=(trust ca-policy credentials cleanup)
@@ -858,7 +875,7 @@ menu() (
   [[ "$selection" == 0 ]] && exit 0
   [[ "$selection" =~ ^[1-9][0-9]*$ ]] && (( selection <= ${#actions[@]} )) || { echo 'Invalid option.'; continue; }
   case "${actions[selection-1]}" in
-   doctor) menu_invoke readonly doctor;; init) menu_invoke confirm init;;
+   doctor) menu_invoke readonly doctor;; capture) menu_invoke readonly capture-status;; init) menu_invoke confirm init;;
    status) menu_invoke readonly status; menu_invoke readonly reconstruct-source status; menu_invoke readonly prepare-build status; menu_invoke readonly build status;;
    source) menu_submenu source;; preparation) menu_submenu preparation;; build) menu_submenu build;; setup) menu_submenu setup;;
    sandbox) menu_invoke confirm sandbox-setup;; trust) menu_submenu trust;;
@@ -964,6 +981,7 @@ Usage: mt-chromium-setup menu|doctor|init|status|plan|show STEP|run STEP|resume|
   x509-fixtures generate-matrix --fixture-set chromium-x509-depth-matrix-v1 --output NEW_PATH
   ca-policy --matrix PATH --output PATH
   ca-policy-status|ca-policy-generate|ca-policy-install|ca-policy-verify|ca-policy-prepare
+  capture-status
 Step 20: run 20 --fixture PATH or run 20 --generate (explicit selection/generation).
 Trust operations require --root PATH. No automatic fixture selection.
 HELP
@@ -1032,6 +1050,7 @@ HELP
  ca-policy-install) ca_policy_action install;;
  ca-policy-verify) ca_policy_action verify;;
  ca-policy-prepare) ca_policy_prepare;;
+ capture-status) capture_status;;
  sandbox-setup) sandbox_action setup;;
  sandbox-status) sandbox_action status;;
  doctor) doctor;;
