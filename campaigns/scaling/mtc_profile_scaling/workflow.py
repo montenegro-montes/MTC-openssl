@@ -345,7 +345,8 @@ def main(argv=None):
     commit=checked(['git','rev-parse','HEAD'],cwd=REPO,text=True).stdout.strip()
     status=checked(['git','status','--porcelain'],cwd=REPO,text=True).stdout
     args.output.resolve().parent.mkdir(parents=True,exist_ok=True)
-    command=['docker','run','--rm','--network','none','-e','MTC_IMAGE_ID='+image,'-e','MTC_GIT_COMMIT='+commit,'-e','MTC_GIT_STATUS='+status,
+    command=['docker','run','--rm','--network','none','--user',f'{os.getuid()}:{os.getgid()}',
+             '-e','HOME=/tmp','-e','MTC_IMAGE_ID='+image,'-e','MTC_GIT_COMMIT='+commit,'-e','MTC_GIT_STATUS='+status,
              '-v',str(REPO)+':/repo:ro','-v',str(args.output.resolve().parent)+':/output']
     inner=['python3','/repo/'+str(Path(__file__).resolve().relative_to(REPO)),args.action,'--inside','--execute','--output','/output/'+args.output.name]
     for flag,path,mount in [('--fixtures',args.fixtures,'/fixtures'),('--seed-fixtures',args.seed_fixtures,'/seed'),('--validated-n16',args.validated_n16,'/gate.json')]:

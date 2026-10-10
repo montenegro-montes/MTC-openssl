@@ -140,6 +140,118 @@ for label, status, reason in (
 PY
 }
 
+browser_measurements_environment() {
+ local image=$1 chromium=$2 diagnostic socket_path
+ echo '[DEPENDENCIES] Checking Docker, image, Chromium and capture tools...'
+ command -v docker >/dev/null 2>&1 || fail 'Docker client is missing; install Docker without running the campaign as root.'
+ if ! diagnostic=$(docker info 2>&1); then
+  socket_path=${DOCKER_HOST:-}
+  socket_path=${socket_path#unix://}
+  [[ -n "$socket_path" && "$socket_path" != "${DOCKER_HOST:-}" ]] || socket_path=/var/run/docker.sock
+  echo "[DEPENDENCIES] Docker: FAIL" >&2
+  echo "User: $(id -un) (uid=$(id -u), groups=$(id -Gn))" >&2
+  [[ ! -e "$socket_path" ]] || ls -ld "$socket_path" >&2 || true
+  echo "Docker diagnostic: ${diagnostic//$'\n'/ }" >&2
+  fail 'Docker API is inaccessible. Start Docker or arrange user access to its socket, then log out/in if group membership changed. No groups were modified.'
+ fi
+ echo '[DEPENDENCIES] Docker: PASS'
+ docker image inspect "$image" >/dev/null 2>&1 ||
+  fail "Required Docker image is unavailable: $image"
+ echo "[DEPENDENCIES] Docker image: PASS ($image)"
+ python3 -B - "$REPO" "$chromium" <<'PY'
+import sys
+from pathlib import Path
+repo=Path(sys.argv[1]); requested=sys.argv[2]
+sys.path.insert(0,str(repo/'campaigns/browser_client/chromium_mtc'))
+import browser_pcap as pcap
+import browser_validation as bv
+browser=bv.browser_executable(Path(requested) if requested else None)
+print('[DEPENDENCIES] Chromium: PASS ('+browser['executable']+')')
+tools=pcap.requirements()
+bv.require(tools['interface'] and tools['tshark'] and
+           (tools['dumpcap'] or tools['tcpdump']),
+           'Capture backend is not ready: '+tools['instruction'])
+print('[DEPENDENCIES] Capture backend: PASS')
+for directory in (repo/'artifacts', repo/'.mt-state'):
+    directory.mkdir(parents=True, exist_ok=True)
+    bv.require(directory.is_dir() and not directory.is_symlink(),
+               'Unsafe working directory: '+str(directory))
+    bv.require(__import__('os').access(directory, __import__('os').R_OK | __import__('os').W_OK | __import__('os').X_OK),
+               'Working directory is not accessible to the invoking user: '+str(directory))
+print('[DEPENDENCIES] Working directories: PASS')
+PY
+}
+
+browser_measurements_prepare() {
+ local argument previous='' depth=2 image=mt-tls-mtc:local profile=ecdsa-p256 chromium='' all_profiles=false
+ local profiles_text setup="$REPO/bin/browser_client/mt-chromium-setup"
+ for argument in "$@"; do
+  [[ "$previous" != --depth ]] || depth=$argument
+  [[ "$previous" != --image ]] || image=$argument
+  [[ "$previous" != --profile ]] || profile=$argument
+  [[ "$previous" != --chromium ]] || chromium=$argument
+  case "$argument" in
+   --depth=*) depth=${argument#*=};; --image=*) image=${argument#*=};;
+   --profile=*) profile=${argument#*=};; --chromium=*) chromium=${argument#*=};;
+   --all-profiles) all_profiles=true;;
+  esac
+  previous=$argument
+ done
+ browser_measurements_environment "$image" "$chromium"
+ if [[ "$all_profiles" == true ]]; then
+  profiles_text=$(python3 -B - "$REPO" <<'PY'
+import sys
+from pathlib import Path
+sys.path.insert(0,str(Path(sys.argv[1])/'campaigns/browser_client/chromium_mtc'))
+from browser_measurements import CAMPAIGN_PROFILES
+print(' '.join(CAMPAIGN_PROFILES))
+PY
+  ) || fail 'Could not load browser-measurements profiles.'
+ else
+  profiles_text=$profile
+ fi
+ echo "[X509] Preparing formal dependencies: profiles=$profiles_text depth=$depth"
+ "$setup" x509-fixtures ensure --fixture-set chromium-x509-depth-matrix-v1 \
+  --output "$REPO/artifacts/x509/chromium-x509-depth-matrix-v1" \
+  --profiles $profiles_text --depth "$depth" --image "$image"
+ echo '[POLICY] Checking Chromium CACertificates...'
+ "$setup" ca-policy-prepare
+ echo '[CREDENTIALS] Preparing landmark and standalone credentials...'
+ if [[ "$all_profiles" == true ]]; then
+  "$setup" browser-validation credentials --all-profiles --depth "$depth" --image "$image"
+ else
+  "$setup" browser-validation credentials --measurement-profile "$profile" --depth "$depth" --image "$image"
+ fi
+ python3 -B - "$REPO" "$profiles_text" "$depth" <<'PY'
+import json,os,sys,tempfile
+from datetime import datetime,timezone
+from pathlib import Path
+repo,profiles,depth=Path(sys.argv[1]),sys.argv[2].split(),int(sys.argv[3])
+sys.path.insert(0,str(repo/'campaigns/browser_client/chromium_mtc'))
+import browser_validation as bv
+items=[]
+for profile in profiles:
+    fixture=bv.precheck_formal_x509_fixture(repo,profile,depth,'chromium-x509-depth-matrix-v1')
+    mtc={}
+    for mode in ('landmark','standalone'):
+        selected,_=bv.preselect_mtc_fixture(repo,profile,mode)
+        mtc[mode]={'fixture':selected['fixture'],'validation_evidence':selected['validation_evidence'],
+                   'anchor':selected['anchor'],'anchor_sha256':selected['anchor_sha256']}
+    items.append({'profile':profile,'depth':depth,'x509_fixture':str(fixture.resolve()),
+                  'x509_root_der_sha256':bv.certificate_sha256((fixture/'root.pem').read_bytes()),
+                  'mtc':mtc})
+record={'status':'PASS','prepared_at':datetime.now(timezone.utc).isoformat(),
+        'fixture_set':'chromium-x509-depth-matrix-v1','profiles':profiles,
+        'depth':depth,'dependencies':items}
+state=repo/'.mt-state/chromium-mtc'; state.mkdir(parents=True,exist_ok=True)
+fd,name=tempfile.mkstemp(prefix='.browser-measurements-preparation-',dir=state)
+with os.fdopen(fd,'w') as stream: json.dump(record,stream,indent=2,sort_keys=True);stream.write('\n')
+os.replace(name,state/'browser-measurements-preparation.json')
+print('[CREDENTIALS] All requested combinations: PASS')
+PY
+ echo '[MEASUREMENTS] Preparation complete.'
+}
+
 preflight() {
  python3 -B - "$REPO" "$@" <<'PY'
 import argparse, base64, getpass, json, platform, plistlib, subprocess, sys
@@ -304,6 +416,7 @@ campaign() {
  local module=$1
  shift
  if [[ "$module" == browser_measurements && "${1:-}" == run ]]; then
+  browser_measurements_prepare "$@"
   set -- "$@" --x509-chromium-ca-policy
  fi
  if [[ "$module" == browser_validation ]]; then
@@ -317,8 +430,8 @@ campaign() {
   fi
  fi
  # Functional validation and PCAP entrypoints cannot fall back to generating
- # credentials. Measurements use prepare_credentials()' existing selective
- # reuse/generation path so missing profile/depth fixtures can be prepared.
+ # credentials. Browser measurements have already completed the explicit
+ # preparation workflow above; their measurement engine remains fail-closed.
  python3 -B - "$REPO" "$module" "$@" <<'PY'
 import importlib, sys
 from pathlib import Path
@@ -371,7 +484,7 @@ Usage: mt-chromium-tests menu|menu-status|status|preflight [--strict] [--check-c
   network-experiments (not implemented)
 KEM: x25519 or x25519-mlkem768. DEPTH: 2, 3, 4 or 5.
 Preflight defaults to development/read-only. Strict requires pinned commits and matching build-result.json evidence. --check-capture starts only a temporary permission probe.
-Browser measurements selectively generate missing fixtures. Other test workflows require explicit setup.
+Browser measurements prepare and validate dependencies before starting. Other test workflows require explicit setup.
 HELP
  ;;
  menu) menu;;

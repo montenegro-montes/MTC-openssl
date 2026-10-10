@@ -37,7 +37,8 @@ class FunctionalMenuModesTests(unittest.TestCase):
             runner = root / 'mt-chromium-tests'
             runner.write_text(
                 '#!/usr/bin/env bash\n'
-                'printf "campaign <%s>\\n" "$*" >> "$COMMAND_LOG"\n')
+                'printf "campaign <%s>\\n" "$*" >> "$COMMAND_LOG"\n'
+                f'exit {setup_status}\n')
             runner.chmod(0o755)
             command_log = root / 'commands.log'
             script = r'''
@@ -154,18 +155,18 @@ menu_measurements_run_prepared 3 run --pairs 1 --warmups 1 --all-profiles
         result, commands = self.run_prepared()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(commands, [
-            'setup <browser-validation credentials --all-profiles --depth 3>',
             'campaign <browser-measurements run --pairs 1 --warmups 1 '
             '--all-profiles>',
         ])
+        self.assertIn('performs dependency preparation', result.stdout)
 
     def test_measurements_do_not_start_after_preparation_failure(self):
         result, commands = self.run_prepared(setup_status=23)
         self.assertEqual(result.returncode, 23)
         self.assertEqual(commands, [
-            'setup <browser-validation credentials --all-profiles --depth 3>',
+            'campaign <browser-measurements run --pairs 1 --warmups 1 '
+            '--all-profiles>',
         ])
-        self.assertIn('campaign not started', result.stdout)
 
     def test_preflight_menu_variants(self):
         expected = {

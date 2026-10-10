@@ -750,6 +750,26 @@ ca_policy_action() {
  esac
 }
 
+ca_policy_prepare() {
+ local directory answer
+ if ! directory=$(ca_policy_directory 2>/dev/null); then
+  echo '[POLICY] Generated package: MISSING; generating from the formal matrix.'
+  ca_policy_action generate
+ fi
+ if ca_policy_verify_roots >/dev/null 2>&1; then
+  echo '[POLICY] CACertificates: TRUSTED'
+  return 0
+ fi
+ echo '[POLICY] CACertificates: NEEDS INSTALLATION'
+ ca_policy_action install
+ if [[ "$(uname -s)" == Darwin ]]; then
+  echo 'Approve the opened Chromium configuration profile in System Settings.'
+  read -r -p 'Press Enter after the profile has been approved, or Ctrl-C to stop: ' answer || return 1
+ fi
+ ca_policy_verify_roots
+ echo '[POLICY] CACertificates: TRUSTED'
+}
+
 menu_ca_policy() {
  local selection
  while true; do
@@ -800,7 +820,8 @@ PY
  printf 'MTC trust mode:\n1. Landmark (default)\n2. Standalone\n3. Back\n'
  read -r -p 'Select [1-3, Enter=1]: ' mode_choice || return 0
  case "${mode_choice:-1}" in 1) trust_mode=landmark;; 2) trust_mode=standalone;; 3) return 0;; *) echo 'Invalid trust mode.'; return 0;; esac
- menu_invoke confirm browser-validation credentials --profile "$profile" --depth "$depth" --mtc-trust-mode "$trust_mode"
+ menu_invoke confirm browser-validation credentials --profile "$profile" --depth "$depth" \
+  --mtc-trust-mode "$trust_mode" --x509-fixture-set chromium-x509-depth-matrix-v1
 }
 
 trust_setup() {
@@ -846,29 +867,47 @@ menu() (
  done
 )
 
-browser_validation_credentials_all_profiles() {
- local profiles_text profile trust_mode result index=0 total_start=$SECONDS docker_total counter_file
+ensure_formal_x509_dependencies() {
+ local profiles_text=$1 depth=2 image=mt-tls-mtc:local argument previous=''
+ shift
+ for argument in "$@"; do
+  [[ "$previous" != --depth ]] || depth=$argument
+  [[ "$previous" != --image ]] || image=$argument
+  case "$argument" in
+   --depth=*) depth=${argument#*=};;
+   --image=*) image=${argument#*=};;
+  esac
+  previous=$argument
+ done
+ local profiles=()
+ read -r -a profiles <<< "$profiles_text"
+ python3 -B "$REPO/campaigns/browser_client/chromium_mtc/generate_x509_depth_matrix.py" \
+  ensure --fixture-set chromium-x509-depth-matrix-v1 \
+  --output "$REPO/artifacts/x509/chromium-x509-depth-matrix-v1" \
+  --profiles "${profiles[@]}" --depth "$depth" --image "$image"
+}
+
+browser_validation_credentials_profiles() {
+ local profiles_text=$1 profile trust_mode result index=0 total_start=$SECONDS docker_total counter_file image=mt-tls-mtc:local previous=''
+ shift
  local profiles=() passed=()
  local argument
  for argument in "$@"; do
+  [[ "$previous" != --image ]] || image=$argument
   case "$argument" in
+   --image=*) image=${argument#*=};;
    --mtc-trust-mode|--mtc-trust-mode=*)
     fail '--all-profiles prepares both landmark and standalone; do not select one MTC trust mode.';;
   esac
+  previous=$argument
  done
- counter_file=$(mktemp "${TMPDIR:-/tmp}/chromium-credential-docker-count.XXXXXX")
- profiles_text=$(python3 -B - "$REPO" <<'PY'
-import sys
-from pathlib import Path
-
-module_dir = Path(sys.argv[1]) / 'campaigns/browser_client/chromium_mtc'
-sys.path.insert(0, str(module_dir))
-from browser_measurements import CAMPAIGN_PROFILES
-
-print(' '.join(CAMPAIGN_PROFILES))
-PY
- ) || fail 'Could not load browser-measurements campaign profiles.'
  read -r -a profiles <<< "$profiles_text"
+ ensure_formal_x509_dependencies "$profiles_text" "$@" ||
+  fail "Formal X509 dependency preparation failed for profiles=$profiles_text"
+ python3 -B "$REPO/campaigns/browser_client/chromium_mtc/browser_validation.py" \
+  prepare-mtc-dependencies --profiles "${profiles[@]}" --image "$image" ||
+  fail "MTC dependency preparation failed for profiles=$profiles_text"
+ counter_file=$(mktemp "${TMPDIR:-/tmp}/chromium-credential-docker-count.XXXXXX")
  for profile in "${profiles[@]}"; do
   for trust_mode in landmark standalone; do
    index=$((index+1))
@@ -895,6 +934,22 @@ PY
  printf '\nOverall: PASS\n'
 }
 
+browser_validation_credentials_all_profiles() {
+ local profiles_text
+ profiles_text=$(python3 -B - "$REPO" <<'PY'
+import sys
+from pathlib import Path
+
+module_dir = Path(sys.argv[1]) / 'campaigns/browser_client/chromium_mtc'
+sys.path.insert(0, str(module_dir))
+from browser_measurements import CAMPAIGN_PROFILES
+
+print(' '.join(CAMPAIGN_PROFILES))
+PY
+ ) || fail 'Could not load browser-measurements campaign profiles.'
+ browser_validation_credentials_profiles "$profiles_text" "$@"
+}
+
 case "${1:-help}" in
  help|--help|-h) cat <<'HELP'
 Usage: mt-chromium-setup menu|doctor|init|status|plan|show STEP|run STEP|resume|cleanup
@@ -908,7 +963,7 @@ Usage: mt-chromium-setup menu|doctor|init|status|plan|show STEP|run STEP|resume|
   x509-fixtures plan|generate --profile PROFILE --fixture-set NAME --output PATH
   x509-fixtures generate-matrix --fixture-set chromium-x509-depth-matrix-v1 --output NEW_PATH
   ca-policy --matrix PATH --output PATH
-  ca-policy-status|ca-policy-generate|ca-policy-install|ca-policy-verify
+  ca-policy-status|ca-policy-generate|ca-policy-install|ca-policy-verify|ca-policy-prepare
 Step 20: run 20 --fixture PATH or run 20 --generate (explicit selection/generation).
 Trust operations require --root PATH. No automatic fixture selection.
 HELP
@@ -921,18 +976,49 @@ HELP
   if [[ "${1:-}" == credentials ]]; then
    all_profiles=false
    profile_requested=false
+   measurement_profile=''
+   formal_x509_requested=false
+   selected_profile=ecdsa-p256
    credentials_arguments=()
+   previous=''
    for argument in "${@:2}"; do
+    if [[ "$previous" == --measurement-profile ]]; then
+     measurement_profile=$argument
+     previous=$argument
+     continue
+    fi
+    [[ "$previous" != --profile ]] || selected_profile=$argument
+    [[ "$previous" != --x509-fixture-set ]] ||
+     [[ "$argument" != chromium-x509-depth-matrix-v1 ]] || formal_x509_requested=true
     case "$argument" in
      --all-profiles) all_profiles=true;;
-     --profile|--profile=*) profile_requested=true; credentials_arguments+=("$argument");;
+     --measurement-profile) previous=$argument; continue;;
+     --measurement-profile=*) measurement_profile=${argument#*=};;
+     --profile) profile_requested=true; credentials_arguments+=("$argument");;
+     --profile=*) profile_requested=true; selected_profile=${argument#*=}; credentials_arguments+=("$argument");;
+     --x509-fixture-set=chromium-x509-depth-matrix-v1) formal_x509_requested=true; credentials_arguments+=("$argument");;
      *) credentials_arguments+=("$argument");;
     esac
+    previous=$argument
    done
+   if [[ -n "$measurement_profile" ]]; then
+    [[ "$all_profiles" == false && "$profile_requested" == false ]] ||
+     fail '--measurement-profile is mutually exclusive with --profile/--all-profiles.'
+    case "$measurement_profile" in
+     ecdsa-p256|ecdsa-p384|mldsa44|mldsa65|mldsa87) ;;
+     *) fail "Unsupported browser-measurements profile: $measurement_profile";;
+    esac
+    browser_validation_credentials_profiles "$measurement_profile" "${credentials_arguments[@]}"
+    exit $?
+   fi
    if [[ "$all_profiles" == true ]]; then
     [[ "$profile_requested" == false ]] || fail '--profile and --all-profiles are mutually exclusive.'
     browser_validation_credentials_all_profiles "${credentials_arguments[@]}"
     exit $?
+   fi
+   if [[ "$formal_x509_requested" == true ]]; then
+    ensure_formal_x509_dependencies "$selected_profile" "${credentials_arguments[@]}" ||
+     fail "Formal X509 dependency preparation failed for profile=$selected_profile"
    fi
    selected_mtc_arguments "$@"
    set -- "$@" "${MTC_ARGUMENTS[@]}"
@@ -945,6 +1031,7 @@ HELP
  ca-policy-generate) ca_policy_action generate;;
  ca-policy-install) ca_policy_action install;;
  ca-policy-verify) ca_policy_action verify;;
+ ca-policy-prepare) ca_policy_prepare;;
  sandbox-setup) sandbox_action setup;;
  sandbox-status) sandbox_action status;;
  doctor) doctor;;

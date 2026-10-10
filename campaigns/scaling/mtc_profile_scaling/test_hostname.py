@@ -76,6 +76,34 @@ class HostnameTests(unittest.TestCase):
             command = run.call_args.args[0]
             self.assertEqual(command[command.index('--server-hostname') + 1], 'server.test')
             self.assertEqual(command[command.index('--profile') + 1], 'ecdsa-p256')
+            self.assertEqual(command[command.index('--user') + 1],
+                             f'{w.os.getuid()}:{w.os.getgid()}')
+            self.assertIn('HOME=/tmp', command)
+            self.assertIn(str(output.parent.resolve()) + ':/output', command)
+            self.assertFalse(output.exists())
+
+    def test_validation_container_uses_host_identity_for_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixtures = root / 'fixtures'
+            fixtures.mkdir()
+            output = root / 'validation'
+            argv = ['workflow.py', 'validate', '--output', str(output),
+                    '--fixtures', str(fixtures), '--profile', 'ecdsa-p256',
+                    '--mode', 'standalone', '--server-hostname', 'server.test',
+                    '--execute']
+            replies = [SimpleNamespace(stdout='[{"Id":"sha256:mock"}]'),
+                       SimpleNamespace(stdout='commit\n'), SimpleNamespace(stdout='')]
+            with patch.object(sys, 'argv', argv), patch.object(
+                    w, 'checked', side_effect=replies), patch.object(
+                    w.subprocess, 'run') as run, contextlib.redirect_stdout(io.StringIO()):
+                w.main()
+            command = run.call_args.args[0]
+            self.assertEqual(command[command.index('--user') + 1],
+                             f'{w.os.getuid()}:{w.os.getgid()}')
+            self.assertIn('HOME=/tmp', command)
+            self.assertIn(str(output.parent.resolve()) + ':/output', command)
+            self.assertIn(str(fixtures.resolve()) + ':/fixtures:ro', command)
             self.assertFalse(output.exists())
 
     def test_existing_output_and_seed_rejected_before_commands(self):

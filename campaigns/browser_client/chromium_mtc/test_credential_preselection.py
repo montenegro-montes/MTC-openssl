@@ -295,6 +295,44 @@ class CredentialPreselectionTests(unittest.TestCase):
         validate.assert_called_once_with(Path('/selected/fixture'), 'ecdsa-p256', 'image')
         fallback.assert_not_called()
 
+    def test_dependency_preparation_reuses_both_modes_without_generation(self):
+        fixture = self.repo/'fixture'; fixture.mkdir()
+        selected = dict(fixture=str(fixture), validation_evidence='/validation.json',
+                        anchor='/anchor.json', anchor_sha256='a'*64)
+        with patch.object(bv, 'preselect_mtc_fixture',
+                          return_value=(selected, [])) as preselect, \
+             patch.object(bv, 'generate_mtc') as generate, \
+             patch.object(bv, 'choose_anchor') as choose:
+            records = bv.prepare_mtc_dependencies(
+                self.repo, 'image', ('ecdsa-p256',))
+        self.assertEqual([record['origin'] for record in records],
+                         ['reused', 'reused'])
+        self.assertEqual(preselect.call_count, 2)
+        generate.assert_not_called()
+        choose.assert_not_called()
+
+    def test_dependency_preparation_generates_missing_fixture_once(self):
+        fixture = self.repo/'fixture'; fixture.mkdir()
+        landmark = dict(fixture=str(fixture), validation_evidence='/validation.json',
+                        anchor='/landmark.json', anchor_sha256='a'*64)
+        standalone = dict(fixture=str(fixture), validation_evidence='/validation.json',
+                          anchor='/standalone.json', anchor_sha256='b'*64)
+        selections = [
+            ValueError('missing fixture'), ValueError('missing fixture'),
+            (dict(landmark), []), (dict(landmark), []),
+            (dict(standalone), []),
+        ]
+        with patch.object(bv, 'preselect_mtc_fixture', side_effect=selections), \
+             patch.object(bv, 'generate_mtc', return_value=fixture) as generate, \
+             patch.object(bv, 'choose_anchor', return_value={
+                 'anchor': '/landmark.json', 'anchor_sha256': 'a'*64,
+                 'anchor_origin': 'generated'}):
+            records = bv.prepare_mtc_dependencies(
+                self.repo, 'image', ('ecdsa-p256',))
+        generate.assert_called_once()
+        self.assertEqual(records[0]['origin'], 'generated')
+        self.assertEqual(records[1]['origin'], 'reused')
+
     def test_openssl_batch_runs_every_check_in_one_ephemeral_container(self):
         root = bv.REPO/'.mt-state/chromium-tmp'; root.mkdir(parents=True, exist_ok=True)
         calls = []

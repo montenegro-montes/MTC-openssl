@@ -657,6 +657,9 @@ def main():
                    order_policy='Deterministic cyclic rotation by pair index; no random seed')
     try:
         root = bv.REPO/'artifacts/results'/(PREFIX+bv.stamp()); root.mkdir(parents=True, exist_ok=False)
+        preparation = bv.REPO/'.mt-state/chromium-mtc/browser-measurements-preparation.json'
+        if preparation.is_file() and not preparation.is_symlink():
+            (root/'preparation.json').write_bytes(preparation.read_bytes())
         summary['run_id'] = root.name
         print('Result directory: '+str(root), flush=True)
         summary.update(chromium=browser, credentials={}, x509_policies={}, input_sha256={})

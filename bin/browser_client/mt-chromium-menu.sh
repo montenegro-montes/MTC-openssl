@@ -86,22 +86,12 @@ menu_measurement_summary() {
 }
 
 menu_measurements_run_prepared() {
- local depth=$1 answer result
+ local depth=$1 answer
  shift
- printf 'Preparation command: '; printf '%q ' \
-  "$REPO/bin/browser_client/mt-chromium-setup" browser-validation credentials \
-  --all-profiles --depth "$depth"; printf '\n'
  printf 'Campaign command: '; printf '%q ' "$0" browser-measurements "$@"; printf '\n'
- read -r -p 'Prepare credentials, then run the campaign? [y/N] ' answer || return 0
+ echo 'The campaign command performs dependency preparation before measurements.'
+ read -r -p 'Prepare dependencies, then run the campaign? [y/N] ' answer || return 0
  case "$answer" in y|Y) ;; *) echo 'Cancelled.'; return 0;; esac
- if (cd "$MENU_CALL_DIR" && "$REPO/bin/browser_client/mt-chromium-setup" \
-      browser-validation credentials --all-profiles --depth "$depth"); then
-  :
- else
-  result=$?
-  printf 'Credential preparation failed with status %s; campaign not started.\n' "$result"
-  return "$result"
- fi
  (cd "$MENU_CALL_DIR" && "$0" browser-measurements "$@")
 }
 

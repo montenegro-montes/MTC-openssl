@@ -1151,6 +1151,53 @@ def prepare_credentials(repo, output, image, profile=PROFILE, depth=2,
     return data
 
 
+def prepare_mtc_dependencies(repo, image, profiles):
+    """Prepare reusable N=16 fixtures and canonical anchors before validation."""
+    require(profiles and all(profile in PROFILES for profile in profiles),
+            'Unsupported MTC dependency profile')
+    root = repo/'.mt-state/chromium-mtc'/('mtc-dependencies-'+stamp())
+    root.mkdir(parents=True, exist_ok=False)
+    records = []
+    for profile in profiles:
+        generated = False
+        profile_output = root/profile
+        profile_output.mkdir()
+        for mode in ('landmark', 'standalone'):
+            origin = 'reused'
+            try:
+                selected, _ = preselect_mtc_fixture(
+                    repo, profile, mode, require_anchor=True)
+            except (ValueError, OSError):
+                try:
+                    selected, _ = preselect_mtc_fixture(
+                        repo, profile, mode, require_anchor=False)
+                except (ValueError, OSError):
+                    if not generated:
+                        generate_mtc(repo, profile_output, image, profile)
+                        generated = True
+                    selected, _ = preselect_mtc_fixture(
+                        repo, profile, mode, require_anchor=False)
+                    origin = 'generated'
+                selected.update(choose_anchor(selected, profile_output))
+                selected, _ = preselect_mtc_fixture(
+                    repo, profile, mode, require_anchor=True)
+                if origin != 'generated':
+                    origin = 'anchor-generated'
+            fixture = Path(selected['fixture'])
+            require(os.access(fixture, os.R_OK | os.X_OK),
+                    'Selected MTC fixture is inaccessible to the invoking user: '+str(fixture))
+            records.append(dict(
+                profile=profile, mode=mode, origin=origin,
+                fixture=str(fixture.resolve()),
+                validation_evidence=selected['validation_evidence'],
+                anchor=selected['anchor'],
+                anchor_sha256=selected['anchor_sha256']))
+            print(f'[MTC] {profile} {mode}: {origin.upper()}', flush=True)
+    write(root/'summary.json', dict(status='PASS', profiles=list(profiles),
+                                    tree_size=16, records=records))
+    return records
+
+
 def mutate_anchor(anchor, case):
     data = copy.deepcopy(anchor)
     if case == 'mtc-bad-merkle':
@@ -1734,11 +1781,12 @@ def standalone_operation_allowed(action, case, mtc_fixture,
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('plan', 'credentials', 'status', 'run', 'cleanup',
+    parser.add_argument('action', choices=('plan', 'credentials', 'prepare-mtc-dependencies', 'status', 'run', 'cleanup',
                                            'trust-status', 'trust-x509', 'untrust-x509'))
     parser.add_argument('case', nargs='?', choices=(*CASES, 'all'))
     parser.add_argument('--root', type=Path, help='Exact PEM root required for trust-status/trust-x509/untrust-x509; no fixture discovery')
     parser.add_argument('--profile', choices=PROFILES, default=PROFILE)
+    parser.add_argument('--profiles', nargs='+', choices=PROFILES)
     parser.add_argument('--key-establishment', choices=tuple(KEY_ESTABLISHMENTS), default='x25519',
                         help='Group restricted at the server and verified in NetLog (default: x25519)')
     parser.add_argument('--depth', type=int, choices=(2, 3, 4, 5), default=2)
@@ -1807,6 +1855,12 @@ def main(argv=None):
             (args.action == 'credentials' and args.precheck_index and args.precheck_total and
              args.docker_count_file is not None),
             'Optimized all-profile credentials require bounded progress/count metadata')
+    require(args.profiles is None or args.action == 'prepare-mtc-dependencies',
+            '--profiles requires prepare-mtc-dependencies')
+    if args.action == 'prepare-mtc-dependencies':
+        require(args.case is None, 'prepare-mtc-dependencies takes no case')
+        prepare_mtc_dependencies(REPO, args.image, args.profiles or (args.profile,))
+        return 0
     if args.action in ('trust-status', 'trust-x509', 'untrust-x509'):
         return trust_action(args.action, args.root, args.image)
     if args.action == 'plan':

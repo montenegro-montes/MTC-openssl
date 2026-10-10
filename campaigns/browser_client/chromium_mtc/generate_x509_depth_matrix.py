@@ -411,10 +411,118 @@ def generate_matrix(output, fixture_set, image):
     print("Generated formal matrix:", matrix_path)
 
 
+def ensure_matrix(repo, output, fixture_set, profiles, depth, image):
+    """Reuse a valid formal matrix, or create it atomically when absent."""
+    bv.require(fixture_set == FORMAL_FIXTURE_SET, "Unexpected fixture_set")
+    bv.require(profiles and all(profile in bv.PROFILES for profile in profiles),
+               "Unsupported requested profile")
+    bv.require(depth in DEPTHS, "Unsupported requested depth")
+
+    failures = []
+    for profile in profiles:
+        try:
+            bv.precheck_formal_x509_fixture(
+                repo, profile, depth, fixture_set)
+        except (ValueError, OSError) as error:
+            failures.append((profile, str(error) or type(error).__name__))
+    if not failures:
+        print("Reused validated formal X509 fixtures: profiles="+
+              ",".join(profiles)+f" depth={depth}")
+        return
+
+    details = "; ".join(f"profile={profile} depth={depth}: {reason}"
+                        for profile, reason in failures)
+    if output.exists():
+        bv.require(output.is_dir() and not output.is_symlink(),
+                   "Formal X509 matrix path is not a safe directory: "+str(output))
+        bv.require(not (output/'matrix.json').exists(),
+                   "Formal X509 matrix manifest exists but requested cells are "
+                   "invalid; preserved without overwrite. "+details)
+        # A family is generated as one shared-root D=2..5 unit. Existing family
+        # directories are never merged with newly generated certificate material.
+        for profile, reason in failures:
+            bv.require(not (output/profile).exists(),
+                       "Formal X509 family exists but is incomplete, corrupt, or "
+                       f"incompatible; preserved without overwrite. profile={profile} "
+                       f"depth={depth}: {reason}")
+        for profile in bv.PROFILES:
+            family = output/profile
+            if family.exists():
+                for candidate_depth in DEPTHS:
+                    bv.precheck_formal_x509_fixture(
+                        repo, profile, candidate_depth, fixture_set)
+                continue
+            staging = Path(tempfile.mkdtemp(
+                prefix=f".chromium-x509-{profile}-", dir=output.parent))
+            try:
+                generate_family(staging, fixture_set, profile, image)
+                staging_repo = staging/'repo'
+                staging_matrix = (staging_repo/'artifacts/x509'/fixture_set)
+                staging_matrix.mkdir(parents=True)
+                (staging/profile).replace(staging_matrix/profile)
+                for candidate_depth in DEPTHS:
+                    bv.precheck_formal_x509_fixture(
+                        staging_repo, profile, candidate_depth, fixture_set)
+                (staging_matrix/profile).replace(family)
+            except Exception as error:
+                raise ValueError(
+                    f"Formal X509 family generation failed for profile={profile}; "
+                    f"staging preserved at {staging}: {error}") from error
+            for directory in (staging_matrix, staging_repo/'artifacts/x509',
+                              staging_repo/'artifacts', staging_repo, staging):
+                try:
+                    directory.rmdir()
+                except OSError:
+                    pass
+        build_matrix_manifest(output, fixture_set)
+        for profile in profiles:
+            bv.precheck_formal_x509_fixture(repo, profile, depth, fixture_set)
+        print("Completed and validated formal X509 matrix:", output)
+        return
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staging_root = Path(tempfile.mkdtemp(
+        prefix=".chromium-x509-depth-matrix-", dir=output.parent))
+    staging_repo = staging_root / "repo"
+    staging_output = (staging_repo / "artifacts" / "x509" / fixture_set)
+    try:
+        generate_matrix(staging_output, fixture_set, image)
+        for profile in profiles:
+            try:
+                bv.precheck_formal_x509_fixture(
+                    staging_repo, profile, depth, fixture_set)
+            except (ValueError, OSError) as error:
+                raise ValueError(
+                    f"Generated formal X509 fixture validation failed for "
+                    f"profile={profile} depth={depth}: {error}") from error
+        inaccessible = [str(path) for path in staging_output.rglob("*")
+                        if ((path.is_dir() and not os.access(path, os.R_OK | os.X_OK))
+                            or (path.is_file() and not os.access(path, os.R_OK)))]
+        bv.require(not inaccessible,
+                   "Generated formal X509 artifacts are not accessible to "
+                   "the invoking user: "+", ".join(inaccessible[:4]))
+        # output was proved absent above; rename publishes the complete matrix.
+        staging_output.replace(output)
+    except Exception as error:
+        raise ValueError(
+            "Formal X509 generation failed for profiles="+
+            ",".join(profiles)+f" depth={depth}; staging preserved at "
+            f"{staging_root}: {error}") from error
+    for directory in (staging_repo / "artifacts" / "x509",
+                      staging_repo / "artifacts", staging_repo, staging_root):
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+    print("Generated and validated formal X509 matrix:", output)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("plan", "generate", "generate-matrix"))
+    parser.add_argument("action", choices=("plan", "generate", "generate-matrix", "ensure"))
     parser.add_argument("--profile", choices=bv.PROFILES)
+    parser.add_argument("--profiles", nargs="+", choices=bv.PROFILES)
+    parser.add_argument("--depth", type=int, choices=DEPTHS)
     parser.add_argument("--fixture-set")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--image", default="mt-tls-mtc:local")
@@ -435,12 +543,22 @@ def main():
     bv.require(args.fixture_set, "generate requires --fixture-set")
     bv.require(args.output is not None, "generate requires --output")
 
+    if args.action == "ensure":
+        bv.require(args.profile is None, "ensure uses --profiles")
+        bv.require(args.profiles, "ensure requires --profiles")
+        bv.require(args.depth is not None, "ensure requires --depth")
+        ensure_matrix(HERE.parents[2], args.output, args.fixture_set,
+                      args.profiles, args.depth, args.image)
+        return 0
+
     if args.action == "generate-matrix":
-        bv.require(args.profile is None, "generate-matrix does not accept --profile")
+        bv.require(args.profile is None and args.profiles is None and args.depth is None,
+                   "generate-matrix does not accept profile/depth selectors")
         generate_matrix(args.output, args.fixture_set, args.image)
         return 0
 
-    bv.require(args.profile is not None, "generate requires --profile")
+    bv.require(args.profile is not None and args.profiles is None and args.depth is None,
+               "generate requires --profile only")
     generate_family(
         args.output,
         args.fixture_set,
