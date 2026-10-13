@@ -164,7 +164,7 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
 
     def test_multi_profile_plan_and_totals(self):
         self.assertEqual(measurements.CAMPAIGN_PROFILES,
-                         ('ecdsa-p256', 'ecdsa-p384', 'mldsa44', 'mldsa65', 'mldsa87'))
+            ('ecdsa-p256', 'ecdsa-p384', 'ecdsa-p521', 'mldsa44', 'mldsa65', 'mldsa87'))
         self.assertEqual(measurements.campaign_totals(measurements.CAMPAIGN_PROFILES, 3),
                          {'pairs_per_profile': 3, 'total_pairs': 15, 'total_measurements': 30,
                           'warmups_per_profile': 0, 'total_warmup_pairs': 0,
