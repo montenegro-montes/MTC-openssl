@@ -219,6 +219,8 @@ def case_definitions(manual, server_mtc):
                 "-connect", f"{SERVER_NAME}:4433",
                 "-servername", "server",
                 "-mtc_trust", "/server-mtc/batch16/mtc/ecdsa-p256/trust.bin",
+                "-mtc_ca", "/server-mtc/batch16/mtc/ecdsa-p256/mtc-ca.pem",
+                "-mtc_ca_root", "/server-mtc/batch16/mtc/ecdsa-p256/mtc-representation-root.pem",
                 "-mtc_landmark",
                 "-cert", "/work/client.pem",
                 "-key", "/work/client.key",
@@ -249,6 +251,8 @@ def case_definitions(manual, server_mtc):
                 "-cert", "/work/server.pem",
                 "-key", "/work/server.key",
                 "-mtc_client_trust", "/work/mtc-client-n16/ecdsa-p256/trust.bin",
+                "-mtc_ca", "/work/mtc-client-n16/ecdsa-p256/mtc-ca.pem",
+                "-mtc_ca_root", "/work/mtc-client-n16/ecdsa-p256/mtc-representation-root.pem",
                 "-mtc_landmark",
                 "-Verify", "1",
                 "-verify_return_error",
@@ -292,6 +296,8 @@ def case_definitions(manual, server_mtc):
                 "-key", "/server-mtc/population/ecdsa-p256/0.key",
                 "-mtc_id", "32473.101.1.1.1",
                 "-mtc_client_trust", "/work/mtc-client-n16/ecdsa-p256/trust.bin",
+                "-mtc_ca", "/work/mtc-client-n16/ecdsa-p256/mtc-ca.pem",
+                "-mtc_ca_root", "/work/mtc-client-n16/ecdsa-p256/mtc-representation-root.pem",
                 "-mtc_landmark",
                 "-Verify", "1",
                 "-verify_return_error",
@@ -304,6 +310,8 @@ def case_definitions(manual, server_mtc):
                 "-connect", f"{SERVER_NAME}:4433",
                 "-servername", "server",
                 "-mtc_trust", "/server-mtc/batch16/mtc/ecdsa-p256/trust.bin",
+                "-mtc_ca", "/server-mtc/batch16/mtc/ecdsa-p256/mtc-ca.pem",
+                "-mtc_ca_root", "/server-mtc/batch16/mtc/ecdsa-p256/mtc-representation-root.pem",
                 "-cert", "/work/mtc-client-n16/ecdsa-p256/landmark-0000.pem",
                 "-key", "/work/mtc-client-source/client-0000.key",
                 "-mtc_client_id", "32473.101.1.1.1",
@@ -416,6 +424,8 @@ def negative_case_definitions(manual):
                 "-cert", "/work/server.pem",
                 "-key", "/work/server.key",
                 "-mtc_client_trust", "/work/mtc-client-n16/ecdsa-p256/trust.bin",
+                "-mtc_ca", "/work/mtc-client-n16/ecdsa-p256/mtc-ca.pem",
+                "-mtc_ca_root", "/work/mtc-client-n16/ecdsa-p256/mtc-representation-root.pem",
                 "-mtc_landmark",
                 "-Verify", "1",
                 "-verify_return_error",
@@ -579,6 +589,11 @@ def main():
     for root, label in ((manual, "manual fixture root"), (server_mtc, "MTC fixture root")):
         if not root.is_dir():
             parser.error(f"{label} missing: {root}")
+    for directory in (server_mtc / "batch16/mtc/ecdsa-p256",
+                      manual / "mtc-client-n16/ecdsa-p256"):
+        for name in ("mtc-ca.pem", "mtc-representation-root.pem"):
+            if not (directory / name).is_file():
+                parser.error(f"MTC-07 authority file missing: {directory / name}")
     output = args.output.resolve() if args.output else None
     results_root = (REPO / "artifacts/results").resolve()
     if output and (not output.is_relative_to(results_root) or output.exists()):

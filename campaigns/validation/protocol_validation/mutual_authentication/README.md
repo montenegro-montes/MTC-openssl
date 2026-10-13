@@ -164,6 +164,8 @@ For MTC server authentication, the client uses:
 
 ```text
 -mtc_trust <trust.bin>
+-mtc_ca <mtc-ca.pem>
+-mtc_ca_root <mtc-representation-root.pem>
 -mtc_landmark
 ```
 
@@ -171,6 +173,8 @@ For MTC client authentication, the server uses:
 
 ```text
 -mtc_client_trust <trust.bin>
+-mtc_ca <mtc-ca.pem>
+-mtc_ca_root <mtc-representation-root.pem>
 -mtc_landmark
 ```
 
