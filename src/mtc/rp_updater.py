@@ -348,7 +348,7 @@ def update_and_publish(
     """Run one complete fail-closed relying-party update transaction.
 
     freshness_policy is an optional local RP policy applied to the
-    authenticated MCP2 checkpoint timestamp; it is not a Draft-06
+    authenticated MCP2 checkpoint timestamp; it is not a Draft-07
     certificate or MTCProof verification requirement.
     """
     store = RPStateStore(state_directory)

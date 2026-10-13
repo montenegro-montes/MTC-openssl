@@ -1,4 +1,4 @@
-"""Focused draft-06 CosignedMessage and cosigning tests."""
+"""Focused draft-07 CosignedSubtree and cosigning tests."""
 
 import argparse
 from pathlib import Path
@@ -89,7 +89,7 @@ def main():
             (ident, signature) for ident, signature in signatures
         ], 3)
 
-    print("PASS: draft-06 CosignedMessage and reusable cosigning")
+    print("PASS: draft-07 CosignedSubtree and reusable cosigning")
 
 
 if __name__ == "__main__":

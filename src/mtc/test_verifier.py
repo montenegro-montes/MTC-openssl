@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory() as temp:
             variants={'leaf':certificate(mtc_tbs(cert,'32473.9',0),p),'no proof':certificate(tbs,b''),
                       'extra proof':certificate(tbs,p+b'\0'),'trailing DER':cert+b'\0',
                       'subtree':certificate(tbs,p[:2]+b'\xff'*6+p[8:]),'length':certificate(tbs,b'\xff\xff'+p[2:])}
-            # Draft-06 Section 5.2.1 extension-vector framing and canonical order.
+            # Draft-07 Section 5.2.1 extension-vector framing and canonical order.
             variants.update({
                 'valid different extensions':certificate(tbs,b'\0\4\x12\x34\0\0'+p[2:]),
                 'incomplete extension':certificate(tbs,b'\0\2\x12\x34'+p[2:]),

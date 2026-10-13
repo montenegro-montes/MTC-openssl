@@ -1,4 +1,4 @@
-"""Deterministic draft-06 Section 6.4 landmark-sequence tests."""
+"""Deterministic draft-07 Section 6.4 landmark-sequence tests."""
 from core import cover
 
 from landmarks import (
@@ -134,7 +134,7 @@ for index in (-1, MAX_U48 + 1):
     else:
         raise AssertionError("accepted invalid entry index")
 
-print("PASS: draft-06 landmark sequence and selection")
+print("PASS: draft-07 landmark sequence and selection")
 
 
 # Section 6.4.3: strict active-landmark publication format.
@@ -205,4 +205,4 @@ reject_publication(
     f"3\n{MAX_U48 + 1} 300\n16 200\n".encode()
 )
 
-print("PASS: draft-06 landmark publication")
+print("PASS: draft-07 landmark publication")

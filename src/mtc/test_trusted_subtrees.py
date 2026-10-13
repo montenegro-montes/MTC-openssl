@@ -1,4 +1,4 @@
-"""Tests for draft-06 Section 7.4 trusted subtrees."""
+"""Tests for draft-07 Section 7.4 trusted subtrees."""
 
 import tempfile
 from dataclasses import replace
@@ -235,4 +235,4 @@ for start, end in ((0, 0), (0, 3)):
         "decoded invalid MTS1 subtree interval",
     )
 
-print("PASS: draft-06 trusted subtrees")
+print("PASS: draft-07 trusted subtrees")

@@ -109,7 +109,7 @@ def main():
             new,trusted,malformed_checker))
         print('PASS: invalid authenticated snapshot log identities rejected')
 
-        # Draft-06 Section 7.4: incorporate active landmark subtrees only
+        # Draft-07 Section 7.4: incorporate active landmark subtrees only
         # after authenticating the reference checkpoint and validating each
         # subtree against it with a Section 4.4 consistency proof.
         sequence=[

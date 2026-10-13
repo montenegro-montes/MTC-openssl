@@ -1,4 +1,4 @@
-"""Persistent CA-side lifecycle for draft-06 issuance logs."""
+"""Persistent CA-side lifecycle for draft-07 issuance logs."""
 
 from contextlib import contextmanager
 import fcntl
@@ -300,7 +300,7 @@ class IssuanceLifecycle:
         return log_number,sequence[:candidates[-1].number+1]
 
     def landmark_publication(self,log_number,now):
-        """Return the canonical draft-06 publication for one issuance log."""
+        """Return the canonical draft-07 publication for one issuance log."""
         return encode_publication(self.landmarks(log_number),now)
 
     def active_landmarks(self,now):

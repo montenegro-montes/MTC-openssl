@@ -1,4 +1,4 @@
-"""Draft-06 Section 4.4 subtree consistency proof tests."""
+"""Draft-07 Section 4.4 subtree consistency proof tests."""
 
 import hashlib
 
@@ -133,4 +133,4 @@ if __name__ == "__main__":
     boundary_tests()
     accumulated_vectors()
     verification_vectors()
-    print("PASS: draft-06 subtree consistency proofs")
+    print("PASS: draft-07 subtree consistency proofs")

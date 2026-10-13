@@ -1,4 +1,4 @@
-"""Draft-06 Section 7.4 trusted-subtree validation.
+"""Draft-07 Section 7.4 trusted-subtree validation.
 
 This module validates landmark-subtree evidence against an already
 authenticated reference checkpoint.  Checkpoint authentication and cosigner
