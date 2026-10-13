@@ -769,26 +769,45 @@ static int leaf_hash(X509 *x,Slice extensions,unsigned char out[32]){
     ok=EVP_DigestFinal_ex(md,out,&size)&&size==32;
 end:EVP_MD_CTX_free(md);OPENSSL_free(der);return ok;
 }
-int mtc_verify(X509 *x,MTCConfig *c){
+int mtc_verify_timed(X509 *x,MTCConfig *c,MTCVerificationTiming *timing){
     const ASN1_BIT_STRING *signature;const X509_ALGOR *alg;Slice p,extensions,proof,sigs;
-    uint64_t serial,start,end,index;unsigned char leaf[32],root[32];
+    uint64_t serial,start,end,index;unsigned char leaf[32],root[32];double begin;
+    if(timing)memset(timing,0,sizeof(*timing));
     if(!x||!c||X509_get_version(x)!=2||!issuer(x,c->caid)||!algorithm(X509_get0_tbs_sigalg(x)))return 0;
     X509_get0_signature(&signature,&alg,x);
     if(!algorithm(alg)||(signature->flags&7)||signature->length<0||!ASN1_INTEGER_get_uint64(&serial,X509_get_serialNumber(x))||serial<c->min||serial>c->max||serial_revoked(c,serial)||(serial>>48)!=c->log)return 0;
     index=serial&0xffffffffffffULL;p=(Slice){signature->data,(size_t)signature->length};
     if(!vector(&p,2,&extensions)||!mtc_extensions(extensions)||!number(&p,6,&start)||!number(&p,6,&end)||!vector(&p,2,&proof)||!vector(&p,3,&sigs)||p.n)return 0;
+    begin=tick();
     if(!leaf_hash(x,extensions,leaf)||!mtc_eval(leaf,index,start,end,proof.p,proof.n,root))return 0;
+    if(timing)timing->merkle_proof_ms=tick()-begin;
     if(c->landmark){
         size_t ignored_signature_count;
+        begin=tick();
         if(!signature_block_v2(sigs,&ignored_signature_count))return 0;
         for(unsigned i=0;i<c->ntrusted;i++)
             if(c->trusted[i].log==c->log&&
-               c->trusted[i].start==start&&c->trusted[i].end==end)
-                return !CRYPTO_memcmp(root,c->trusted[i].hash,32);
+               c->trusted[i].start==start&&c->trusted[i].end==end){
+                int ok=!CRYPTO_memcmp(root,c->trusted[i].hash,32);
+                if(timing)timing->landmark_validation_ms=tick()-begin;
+                return ok;
+            }
         for(unsigned i=0;i<c->nsubs;i++)
-            if(c->subs[i].start==start&&c->subs[i].end==end)
-                return !CRYPTO_memcmp(root,c->subs[i].hash,32);
+            if(c->subs[i].start==start&&c->subs[i].end==end){
+                int ok=!CRYPTO_memcmp(root,c->subs[i].hash,32);
+                if(timing)timing->landmark_validation_ms=tick()-begin;
+                return ok;
+            }
+        if(timing)timing->landmark_validation_ms=tick()-begin;
         return 0;
     }
-    return sigcheck(c,sigs,start,end,root,0);
+    begin=tick();
+    {
+        int ok=sigcheck(c,sigs,start,end,root,0);
+        if(timing)timing->standalone_validation_ms=tick()-begin;
+        return ok;
+    }
+}
+int mtc_verify(X509 *x,MTCConfig *c){
+    return mtc_verify_timed(x,c,NULL);
 }

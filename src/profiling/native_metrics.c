@@ -1,4 +1,5 @@
 #include "native_metrics.h"
+#include "../ssl/native_components.h"
 #include <openssl/crypto.h>
 #include <stdio.h>
 #include <time.h>
@@ -61,12 +62,20 @@ static void info_callback(const SSL *ssl, int where, int ret)
 {
     NativeMetrics *value = metrics(ssl);
     if (value != NULL && (where & SSL_CB_HANDSHAKE_START)) {
+        mtc_native_components_reset((SSL *)ssl);
         value->handshake_start = monotonic_ms();
         value->handshake_started = 1;
     }
     if (value != NULL && (where & SSL_CB_HANDSHAKE_DONE)
             && value->handshake_started) {
         double finished = monotonic_ms();
+        double component_ms[MTC_NATIVE_COMPONENT_COUNT] = {0};
+        double authentication_ms = 0;
+        unsigned long component_calls[MTC_NATIVE_COMPONENT_COUNT] = {0};
+        int components_ok = mtc_native_components_snapshot((SSL *)ssl,
+                component_ms, component_calls, MTC_NATIVE_COMPONENT_COUNT);
+        int authentication_ok = mtc_native_authentication_snapshot(
+                (SSL *)ssl, &authentication_ms);
         fprintf(stdout, "NATIVE_METRICS {\"tcp_connect_wall_ms_native\":");
         if (value->connect_ok) fprintf(stdout, "%.6f", value->connect_wall);
         else fputs("null", stdout);
@@ -75,6 +84,23 @@ static void info_callback(const SSL *ssl, int where, int ret)
         fputs("\"connection_establishment_wall_ms_native\":", stdout);
         if (value->connect_ok) fprintf(stdout, "%.6f", finished - value->connect_start);
         else fputs("null", stdout);
+        if (components_ok && component_calls[MTC_NATIVE_X509_VERIFY] > 0)
+            fprintf(stdout, ",\"x509_verification_ms\":%.6f,"
+                    "\"credential_verification_total_ms\":%.6f",
+                    component_ms[MTC_NATIVE_X509_VERIFY],
+                    component_ms[MTC_NATIVE_X509_VERIFY]);
+        else fputs(",\"x509_verification_ms\":null,"
+                   "\"credential_verification_total_ms\":null", stdout);
+        if (components_ok && component_calls[MTC_NATIVE_CERTIFICATE_VERIFY] > 0)
+            fprintf(stdout, ",\"certificate_verify_ms\":%.6f",
+                    component_ms[MTC_NATIVE_CERTIFICATE_VERIFY]);
+        else fputs(",\"certificate_verify_ms\":null", stdout);
+        if (authentication_ok)
+            fprintf(stdout,
+                    ",\"client_authentication_verification_total_ms\":%.6f",
+                    authentication_ms);
+        else fputs(",\"client_authentication_verification_total_ms\":null",
+                   stdout);
         fputs("}\n", stdout);
         fflush(stdout);
         value->handshake_started = 0;

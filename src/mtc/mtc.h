@@ -10,6 +10,11 @@ typedef struct mtc_config MTCConfig;
 typedef struct mtc_authority_v2 MTCAuthorityV2;
 typedef struct mtc_checkpoint_v2 MTCCheckpointV2;
 typedef struct mtc_trust_bundle_v2 MTCTrustBundleV2;
+typedef struct {
+    double merkle_proof_ms;
+    double landmark_validation_ms;
+    double standalone_validation_ms;
+} MTCVerificationTiming;
 MTCConfig *mtc_load_authority_config_v2(const char *path);
 /* Transitional draft-07 loader: authenticate the MTC CA certificate with the
  * representation root, then reconcile its authoritative duplicated fields. */
@@ -44,6 +49,7 @@ int mtc_add_trusted_subtree(MTCConfig *c, uint64_t log_number,
  * itself an authenticated checkpoint or standardized wire format. */
 int mtc_load_trusted_subtrees(MTCConfig *c, const char *path);
 int mtc_verify(X509 *x, MTCConfig *c);
+int mtc_verify_timed(X509 *x, MTCConfig *c, MTCVerificationTiming *timing);
 int mtc_client(SSL_CTX *ctx,const char *path,int landmark,
                const char *trusted_subtrees,const char *certificate,
                const char *root);

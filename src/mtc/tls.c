@@ -535,7 +535,8 @@ static int verify(X509_STORE_CTX *store,void *arg){
     TLSConfig *c=arg;SSL *ssl=X509_STORE_CTX_get_ex_data(store,SSL_get_ex_data_X509_STORE_CTX_idx());
     TLSState *s=ssl?state(ssl,c->role):NULL;X509 *x=X509_STORE_CTX_get0_cert(store);int ok=0;
     X509_STORE *trust=NULL;X509_STORE_CTX *check=NULL;double begin=tick();
-    if(!s||!s->confirmed||!x||!mtc_verify(x,c->trust))goto end;
+    MTCVerificationTiming timing={0};
+    if(!s||!s->confirmed||!x||!mtc_verify_timed(x,c->trust,&timing))goto end;
     if(X509_check_purpose(x,c->purpose,0)!=1||X509_cmp_current_time(X509_get0_notBefore(x))>=0||X509_cmp_current_time(X509_get0_notAfter(x))<=0)goto end;
     /* Restricted direct-CA profile: MTC authenticates this leaf, then native
        X509 validates its applicable leaf constraints with it locally trusted.
@@ -545,7 +546,14 @@ static int verify(X509_STORE_CTX *store,void *arg){
     X509_STORE_CTX_set0_verified_chain(store,X509_STORE_CTX_get1_chain(check));ok=1;
 end:
     X509_STORE_CTX_free(check);X509_STORE_free(trust);X509_STORE_CTX_set_error(store,ok?X509_V_OK:X509_V_ERR_APPLICATION_VERIFICATION);
-    if(ok)fprintf(stderr,"MTC verification: OK\nMTC_VERIFY {\"mtc_credential_auth_ms\":%.6f}\n",tick()-begin);
+    if(ok){
+        if(c->trust->landmark)
+            fprintf(stderr,"MTC verification: OK\nMTC_VERIFY {\"mtc_credential_auth_ms\":%.6f,\"merkle_proof_ms\":%.6f,\"landmark_validation_ms\":%.6f,\"standalone_validation_ms\":null}\n",
+                    tick()-begin,timing.merkle_proof_ms,timing.landmark_validation_ms);
+        else
+            fprintf(stderr,"MTC verification: OK\nMTC_VERIFY {\"mtc_credential_auth_ms\":%.6f,\"merkle_proof_ms\":%.6f,\"landmark_validation_ms\":null,\"standalone_validation_ms\":%.6f}\n",
+                    tick()-begin,timing.merkle_proof_ms,timing.standalone_validation_ms);
+    }
     return ok;
 }
 /* The MTC signatureValue is a proof, not an X.509 CA signature. Allow only
