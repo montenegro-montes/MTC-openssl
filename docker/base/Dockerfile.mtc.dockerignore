@@ -11,7 +11,12 @@
 !src/mtc/openssl.sh
 !src/mtc/retry_peer.c
 !src/mtc/retry_tls.c
+!src/mtc/check_snapshot.c
+!src/mtc/check_revoked.c
+!src/mtc/check_mtc_ca.c
 !src/profiling/
 !src/profiling/native_metrics.c
 !src/profiling/native_metrics.h
+!src/profiling/native_components.c
+!src/profiling/native_components.h
 !src/profiling/patch_native_metrics.py
