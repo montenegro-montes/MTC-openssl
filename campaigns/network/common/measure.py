@@ -16,13 +16,13 @@ def client_args(host,scenario,profile,mode):
  if mode=='single':
   root=f"/repo/{os.environ['NETWORK_SINGLE_ROOT']}";pop=f'{root}/population/{profile}';mtc=f'{root}/batch16/mtc/{profile}'
   if scenario.startswith('mtc-'):
-   args+=['-mtc_trust',f'{mtc}/{"trust.bin" if variant=="landmark" else "authority.bin"}']
+   args+=['-mtc_trust',f'{mtc}/{"trust.bin" if variant=="landmark" else "authority.bin"}','-mtc_ca',f'{mtc}/mtc-ca.pem','-mtc_ca_root',f'{mtc}/mtc-representation-root.pem']
    if variant=='landmark':args+=['-mtc_landmark']
   else:args+=['-CAfile',f'{pop}/ca.pem']
  else:
   base=f"/repo/{os.environ['NETWORK_MUTUAL_ROOT']}";sx=f"/repo/{os.environ['NETWORK_MUTUAL_SERVER_X509']}/{profile}/ca-server";cx=f'{base}/client-x509/{profile}/ca-server';sm=f'{base}/server-mtc/batch16/{profile}';cm=f'{base}/client-mtc/batch16/{profile}'
   if scenario.startswith('mtc-'):
-   args+=['-mtc_trust',f'{sm}/{"trust.bin" if variant=="landmark" else "authority.bin"}','-cert',f'{cm}/{variant}-0000.pem','-key',f'{cx}/client-0000.key','-mtc_client_id',os.environ['NETWORK_MTC_ID'] if variant=='landmark' else os.environ['NETWORK_MTC_ID'].rsplit('.',3)[0]]
+   args+=['-mtc_trust',f'{sm}/{"trust.bin" if variant=="landmark" else "authority.bin"}','-mtc_ca',f'{sm}/mtc-ca.pem','-mtc_ca_root',f'{sm}/mtc-representation-root.pem','-cert',f'{cm}/{variant}-0000.pem','-key',f'{cx}/client-0000.key','-mtc_client_id',os.environ['NETWORK_MTC_ID'] if variant=='landmark' else os.environ['NETWORK_MTC_ID'].rsplit('.',3)[0]]
    if variant=='landmark':args+=['-mtc_landmark']
   else:args+=['-CAfile',f'{sx}/root.pem','-cert',f'{cx}/client-0000.pem','-key',f'{cx}/client-0000.key']
  return args
