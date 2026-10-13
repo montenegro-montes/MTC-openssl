@@ -42,13 +42,16 @@ def commands(root, profile, mode):
         kind = mode.removeprefix('mtc-')
         server += ['-cert', str(fixture / f'{kind}-0000.pem'), '-mtc_id',
                    manifest['ca_id'] + ('.1.1.1' if kind == 'landmark' else '')]
-        client += ['-mtc_trust', str(fixture / ('trust.bin' if kind == 'landmark' else 'authority.bin'))]
+        client += ['-mtc_trust', str(fixture / ('trust.bin' if kind == 'landmark' else 'authority.bin')),
+                   '-mtc_ca', str(fixture / 'mtc-ca.pem'),
+                   '-mtc_ca_root', str(fixture / 'mtc-representation-root.pem')]
         if kind == 'landmark':
             server += ['-mtc_landmark']
             client += ['-mtc_landmark']
     for command in (server, client):
         for index, option in enumerate(command):
-            if option in ('-key', '-cert', '-CAfile', '-mtc_trust'):
+            if option in ('-key', '-cert', '-CAfile', '-mtc_trust',
+                          '-mtc_ca', '-mtc_ca_root'):
                 if not Path(command[index + 1]).is_file():
                     raise FileNotFoundError(command[index + 1])
     return server, client
