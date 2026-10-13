@@ -2,6 +2,7 @@
 #include <assert.h>
 
 static void expect_request(const char *trust,const char *mts1,
+                           const char *certificate,const char *root,
                            const char *expected){
     SSL_CTX *ctx=SSL_CTX_new(TLS_method());
     TLSEndpointConfig *endpoint;
@@ -11,7 +12,7 @@ static void expect_request(const char *trust,const char *mts1,
 
     assert(ctx);
     assert(id_encode(expected,encoded,&encoded_n));
-    assert(mtc_client(ctx,trust,1,mts1));
+    assert(mtc_client(ctx,trust,1,mts1,certificate,root));
 
     endpoint=SSL_CTX_get_ex_data(ctx,ci);
     assert(endpoint);
@@ -29,7 +30,7 @@ static void expect_request(const char *trust,const char *mts1,
 int main(int argc,char **argv){
     SSL_CTX *ctx;
 
-    assert(argc==6);
+    assert(argc==8);
 
     /*
      * argv:
@@ -38,6 +39,8 @@ int main(int argc,char **argv){
      *   3 RP generation with null retained landmark
      *   4 legacy RP generation without metadata
      *   5 RP generation with wrong-log metadata
+     *   6 MTC CA certificate
+     *   7 trusted representation root
      */
 
     {
@@ -50,16 +53,16 @@ int main(int argc,char **argv){
                             trust->caid,(unsigned long long)trust->log);
         assert(retained_n>0&&(size_t)retained_n<sizeof(retained));
 
-        expect_request(argv[1],argv[2],retained);
-        expect_request(argv[1],argv[3],trust->caid);
-        expect_request(argv[1],argv[4],trust->caid);
+        expect_request(argv[1],argv[2],argv[6],argv[7],retained);
+        expect_request(argv[1],argv[3],argv[6],argv[7],trust->caid);
+        expect_request(argv[1],argv[4],argv[6],argv[7],trust->caid);
 
         mtc_free(trust);
     }
 
     ctx=SSL_CTX_new(TLS_method());
     assert(ctx);
-    assert(!mtc_client(ctx,argv[1],1,argv[5]));
+    assert(!mtc_client(ctx,argv[1],1,argv[5],argv[6],argv[7]));
     SSL_CTX_free(ctx);
 
     puts("PASS: RP retained-landmark signaling and fail-closed log binding");

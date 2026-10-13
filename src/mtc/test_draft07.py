@@ -12,7 +12,8 @@ from unittest.mock import patch
 
 import core
 import prepare
-from config_formats import decode_mtb2, encode_mca2
+from config_formats import (decode_mtb2, encode_mca2,
+                            reconcile_mtc_ca_certificate)
 
 
 def main():
@@ -49,7 +50,7 @@ def main():
     if not lib.is_dir():lib=prefix/'lib64'
     subprocess.run([prepare.OPENSSL,'version'],check=True)
     subprocess.run([sys.executable,'-B',str(source/'test_core.py')],check=True)
-    with tempfile.TemporaryDirectory(prefix='mtc-draft06-tests-') as directory:
+    with tempfile.TemporaryDirectory(prefix='mtc-draft07-tests-') as directory:
         temp=Path(directory)
         for name in ['test_ids','test_revoked_ranges','test_trusted_subtrees_c',
                      'check','check_trusted_subtree']+(['check_snapshot'] if args.persistent else []):
@@ -60,7 +61,7 @@ def main():
                             '-o',str(temp/name)],check=True)
         subprocess.run([str(temp/'test_ids')],check=True)
         subprocess.run([str(temp/'test_revoked_ranges')],check=True)
-        subprocess.run([str(temp/'test_trusted_subtrees_c')],check=True)
+        subprocess.run([str(temp/'test_trusted_subtrees_c')],check=True,cwd=temp)
         subprocess.run([
             args.cc,'-Wall','-Wextra','-g',
             '-fsanitize=address,undefined','-fno-omit-frame-pointer',
@@ -602,6 +603,9 @@ def main():
                 config=(out/'trust.bin').read_bytes()
                 bundle=decode_mtb2(config)
                 assert encode_mca2(bundle.authority)==(out/'authority.bin').read_bytes()
+                assert (out/'mtc-representation-root.pem').is_file()
+                reconcile_mtc_ca_certificate(
+                    bundle.authority,(out/'mtc-ca.der').read_bytes())
                 assert bundle.checkpoint.tree_size==n
                 assert bundle.checkpoint.timestamp==meta['checkpoint']['timestamp']
                 assert bundle.checkpoint.root_hash.hex()==meta['checkpoint']['hash']
@@ -878,6 +882,8 @@ def main():
                         str(null_generation/'trusted-subtrees.mts1'),
                         str(legacy_generation/'trusted-subtrees.mts1'),
                         str(wrong_log_generation/'trusted-subtrees.mts1'),
+                        str(out/'mtc-ca.pem'),
+                        str(out/'mtc-representation-root.pem'),
                     ],capture_output=True)
 
                     assert signaling.returncode==0,(
@@ -993,6 +999,8 @@ def main():
                                     '-verify_hostname','offline-mtc-test',
                                     '-verify_return_error',
                                     '-mtc_trust',str(out/'trust.bin'),
+                                    '-mtc_ca',str(out/'mtc-ca.pem'),
+                                    '-mtc_ca_root',str(out/'mtc-representation-root.pem'),
                                     '-mtc_landmark',
                                     '-no_ticket',
                                     '-ign_eof',
@@ -1084,6 +1092,8 @@ def main():
                     no_landmark=subprocess.run([
                         prepare.OPENSSL,'s_client',
                         '-mtc_trust',str(out/'trust.bin'),
+                        '-mtc_ca',str(out/'mtc-ca.pem'),
+                        '-mtc_ca_root',str(out/'mtc-representation-root.pem'),
                         '-mtc_trusted_subtrees',str(mts1),
                     ],capture_output=True,text=True,timeout=10)
 
@@ -1119,7 +1129,7 @@ def main():
                      MTC_TEST_FAMILIES=','.join(args.profiles),PYTHONDONTWRITEBYTECODE='1')
             subprocess.run([sys.executable,'-B',str(source/'test_verifier.py')],env=env,check=True)
             print(f'PASS N={n}: generation, static landmarks, native verification and negatives',flush=True)
-    print('PASS: draft-06 local migration tests; temporary fixtures removed')
+    print('PASS: draft-07 local migration tests; temporary fixtures removed')
 
 
 if __name__=='__main__':main()

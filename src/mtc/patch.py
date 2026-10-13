@@ -14,6 +14,8 @@ for app in ['s_client','s_server']:
         '#include "mt_tls.h"\n'
         '#include "mtc.h"\n'
         'static const char *mtc_file=NULL;\n'
+        'static const char *mtc_ca=NULL;\n'
+        'static const char *mtc_ca_root=NULL;\n'
         'static int mtc_landmark_mode=0;'
     )
     if app=='s_server':
@@ -26,7 +28,8 @@ for app in ['s_client','s_server']:
 
     s=once(s,'#include "mt_tls.h"',declarations)
 
-    enums='    OPT_COMMON,\n    OPT_MTC_CONFIG, OPT_MTC_LANDMARK,'
+    enums=('    OPT_COMMON,\n    OPT_MTC_CONFIG, OPT_MTC_CA, '
+           'OPT_MTC_CA_ROOT, OPT_MTC_LANDMARK,')
     if app=='s_server':
         enums += ' OPT_MTC_CLIENT_TRUST,'
     else:
@@ -36,6 +39,8 @@ for app in ['s_client','s_server']:
     opt='mtc_trust' if app=='s_client' else 'mtc_id'
     options=(
         f'    {{"{opt}", OPT_MTC_CONFIG, \'s\', "MTC-experimental trust config or server trust anchor ID"}},\n'
+        '    {"mtc_ca", OPT_MTC_CA, \'s\', "MTC-07 certification authority certificate"},\n'
+        '    {"mtc_ca_root", OPT_MTC_CA_ROOT, \'s\', "Trusted MTC representation root certificate"},\n'
         '    {"mtc_landmark", OPT_MTC_LANDMARK, \'-\', "Require MTC-experimental landmark certificate"},\n'
     )
     if app=='s_server':
@@ -54,6 +59,8 @@ for app in ['s_client','s_server']:
 
     cases=(
         '        case OPT_MTC_CONFIG: mtc_file=opt_arg(); break;\n'
+        '        case OPT_MTC_CA: mtc_ca=opt_arg(); break;\n'
+        '        case OPT_MTC_CA_ROOT: mtc_ca_root=opt_arg(); break;\n'
         '        case OPT_MTC_LANDMARK: mtc_landmark_mode=1; break;\n'
     )
     if app=='s_server':
@@ -80,13 +87,13 @@ for app in ['s_client','s_server']:
         s=once(s,cert_anchor,cert_code+cert_anchor)
 
         anchor='    con = SSL_new(ctx);'
-        code='''    if (mtc_file || mtc_trusted_subtrees
+        code='''    if (mtc_file || mtc_ca || mtc_ca_root || mtc_trusted_subtrees
         || (mtc_landmark_mode && !mtc_client_id)) {
-        if (!mtc_file
+        if (!mtc_file || !mtc_ca || !mtc_ca_root
             || mt_file || mt_incompatible || enable_server_rpk
             || (mtc_trusted_subtrees && !mtc_landmark_mode)
             || !mtc_client(ctx,mtc_file,mtc_landmark_mode,
-                           mtc_trusted_subtrees)) {
+                           mtc_trusted_subtrees,mtc_ca,mtc_ca_root)) {
             BIO_printf(bio_err,"MTC-experimental configuration rejected\\n"); goto end;
         }
     }
@@ -102,11 +109,14 @@ for app in ['s_client','s_server']:
         s=once(s,verify_anchor,verify_code+verify_anchor)
 
         anchor='    if (!set_cert_key_stuff(ctx, s_cert, s_key, s_chain, build_chain))'
-        code='''    if (mtc_file || mtc_client_trust || mtc_landmark_mode) {
+        code='''    if (mtc_file || mtc_client_trust || mtc_ca || mtc_ca_root || mtc_landmark_mode) {
         if ((!mtc_file && !mtc_client_trust)
             || mt_file || mt_incompatible || enable_server_rpk || ctx2
+            || ((mtc_ca || mtc_ca_root) && !mtc_client_trust)
+            || (mtc_client_trust && (!mtc_ca || !mtc_ca_root))
             || (mtc_file && !mtc_server(ctx,mtc_file))
-            || (mtc_client_trust && !mtc_server_verify_client(ctx,mtc_client_trust,mtc_landmark_mode))) {
+            || (mtc_client_trust && !mtc_server_verify_client(
+                    ctx,mtc_client_trust,mtc_landmark_mode,mtc_ca,mtc_ca_root))) {
             BIO_printf(bio_err,"MTC-experimental configuration rejected\\n"); goto end;
         }
     }

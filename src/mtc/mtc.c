@@ -155,6 +155,24 @@ static int supported_signer_key(EVP_PKEY *key){
     for(size_t i=0;i<sizeof(names)/sizeof(names[0]);i++)if(EVP_PKEY_is_a(key,names[i]))return 1;
     return 0;
 }
+static const char *signer_algorithm_oid(EVP_PKEY *key){
+    if(!key)return NULL;
+    if(EVP_PKEY_is_a(key,"EC")){
+        const char *digest=ec_signer_digest(key);
+        if(!digest)return NULL;
+        if(!strcmp(digest,"SHA256"))return "1.2.840.10045.4.3.2";
+        if(!strcmp(digest,"SHA384"))return "1.2.840.10045.4.3.3";
+        if(!strcmp(digest,"SHA512"))return "1.2.840.10045.4.3.4";
+        return NULL;
+    }
+    if(EVP_PKEY_is_a(key,"mldsa44")||EVP_PKEY_is_a(key,"ML-DSA-44"))return "2.16.840.1.101.3.4.3.17";
+    if(EVP_PKEY_is_a(key,"mldsa65")||EVP_PKEY_is_a(key,"ML-DSA-65"))return "2.16.840.1.101.3.4.3.18";
+    if(EVP_PKEY_is_a(key,"mldsa87")||EVP_PKEY_is_a(key,"ML-DSA-87"))return "2.16.840.1.101.3.4.3.19";
+    if(EVP_PKEY_is_a(key,"slhdsasha2128s")||EVP_PKEY_is_a(key,"SLH-DSA-SHA2-128s"))return "2.16.840.1.101.3.4.3.20";
+    if(EVP_PKEY_is_a(key,"slhdsasha2192s")||EVP_PKEY_is_a(key,"SLH-DSA-SHA2-192s"))return "2.16.840.1.101.3.4.3.22";
+    if(EVP_PKEY_is_a(key,"slhdsasha2256s")||EVP_PKEY_is_a(key,"SLH-DSA-SHA2-256s"))return "2.16.840.1.101.3.4.3.24";
+    return NULL;
+}
 static int sigcheck(MTCConfig *c,Slice sigs,uint64_t start,uint64_t end,const unsigned char root[32],uint64_t timestamp){
     Slice prev={NULL,0},id,sig;unsigned valid=0;unsigned char msg[400];size_t n;
     while(sigs.n){
@@ -342,6 +360,166 @@ invalid:
 end:
     mtc_free_authority_v2(authority);return config;
 }
+
+static int name_matches_id(X509_NAME *name,const char *id){
+    static const unsigned char oid[]={0x2b,0x06,0x01,0x05,0x05,0x07,0x19,0x03};
+    unsigned char expected[255],*der=NULL;size_t length;int ok=0,n;Slice s;TLV t;
+    if(!name||!id||(n=i2d_X509_NAME(name,&der))<=0||
+       !id_encode_bounded(id,expected,sizeof(expected),&length))goto end;
+    s=(Slice){der,(size_t)n};
+    if(!tlv(&s,&t)||s.n||t.tag!=0x30)goto end;
+    s=t.body;
+    if(!tlv(&s,&t)||s.n||t.tag!=0x31)goto end;
+    s=t.body;
+    if(!tlv(&s,&t)||s.n||t.tag!=0x30)goto end;
+    s=t.body;
+    if(!tlv(&s,&t)||t.tag!=6||t.body.n!=sizeof(oid)||memcmp(t.body.p,oid,sizeof(oid)))goto end;
+    if(!tlv(&s,&t)||s.n||t.tag!=0x0d||t.body.n!=length||memcmp(t.body.p,expected,length))goto end;
+    ok=1;
+end:
+    OPENSSL_free(der);return ok;
+}
+
+static int positive_integer_u64(TLV value,uint64_t *out){
+    uint64_t result=0;size_t offset=0;
+    if(value.tag!=2||!value.body.n||value.body.n>9||(value.body.p[0]&0x80))return 0;
+    if(value.body.n>1&&value.body.p[0]==0&&!(value.body.p[1]&0x80))return 0;
+    if(value.body.n==9){if(value.body.p[0]!=0)return 0;offset=1;}
+    for(size_t i=offset;i<value.body.n;i++)result=(result<<8)|value.body.p[i];
+    *out=result;return 1;
+}
+
+static int exact_critical_extension(X509 *certificate,const char *oid,
+                                    const unsigned char *value,size_t length){
+    ASN1_OBJECT *object=OBJ_txt2obj(oid,1);int index=-1,next;X509_EXTENSION *extension;
+    const ASN1_OCTET_STRING *data;int ok=0;
+    if(!object)goto end;
+    index=X509_get_ext_by_OBJ(certificate,object,-1);
+    if(index<0||(next=X509_get_ext_by_OBJ(certificate,object,index))>=0)goto end;
+    extension=X509_get_ext(certificate,index);
+    if(!extension)goto end;
+    data=X509_EXTENSION_get_data(extension);
+    if(!data||!X509_EXTENSION_get_critical(extension)||
+       ASN1_STRING_length(data)!=(int)length||
+       CRYPTO_memcmp(ASN1_STRING_get0_data(data),value,length))goto end;
+    ok=1;
+end:
+    ASN1_OBJECT_free(object);return ok;
+}
+
+static int mtc_ca_extension(X509 *certificate,EVP_PKEY *key,
+                            uint64_t *minimum,uint64_t *maximum){
+    ASN1_OBJECT *object=OBJ_txt2obj("1.3.6.1.5.5.7.1.38",1);X509_EXTENSION *extension;
+    const ASN1_OCTET_STRING *data;const unsigned char *p;X509_ALGOR *algorithm=NULL;
+    const ASN1_OBJECT *algorithm_object;int parameter_type,index=-1,next,n,ok=0;char text[80];
+    Slice s;TLV sequence,encoded_algorithm,min_value,max_value;const char *expected;
+    if(!object||!key||(index=X509_get_ext_by_OBJ(certificate,object,-1))<0||
+       (next=X509_get_ext_by_OBJ(certificate,object,index))>=0)goto end;
+    extension=X509_get_ext(certificate,index);
+    if(!extension)goto end;
+    data=X509_EXTENSION_get_data(extension);
+    if(!data||!X509_EXTENSION_get_critical(extension))goto end;
+    s=(Slice){ASN1_STRING_get0_data(data),(size_t)ASN1_STRING_length(data)};
+    if(!tlv(&s,&sequence)||s.n||sequence.tag!=0x30)goto end;
+    s=sequence.body;
+    if(!tlv(&s,&encoded_algorithm)||encoded_algorithm.tag!=0x30||
+       !tlv(&s,&min_value)||!tlv(&s,&max_value)||s.n||
+       !positive_integer_u64(min_value,minimum)||
+       !positive_integer_u64(max_value,maximum)||
+       *minimum<((uint64_t)1<<48)||*maximum<*minimum)goto end;
+    p=encoded_algorithm.raw.p;n=(int)encoded_algorithm.raw.n;
+    algorithm=d2i_X509_ALGOR(NULL,&p,n);
+    if(!algorithm||p!=encoded_algorithm.raw.p+encoded_algorithm.raw.n)goto end;
+    X509_ALGOR_get0(&algorithm_object,&parameter_type,NULL,algorithm);
+    expected=signer_algorithm_oid(key);
+    if(!expected||parameter_type!=V_ASN1_UNDEF||
+       OBJ_obj2txt(text,sizeof(text),algorithm_object,1)<=0||strcmp(text,expected))goto end;
+    ok=1;
+end:
+    X509_ALGOR_free(algorithm);ASN1_OBJECT_free(object);return ok;
+}
+
+static X509 *load_certificate(const char *path){
+    BIO *bio=NULL;X509 *certificate=NULL;unsigned char *data=NULL;size_t length=0;
+    const unsigned char *p;
+    if(!path||(bio=BIO_new_file(path,"rb"))==NULL)return NULL;
+    certificate=PEM_read_bio_X509(bio,NULL,NULL,NULL);BIO_free(bio);
+    if(certificate)return certificate;
+    if(read_v2_file(path,&data,&length)){
+        p=data;certificate=d2i_X509(NULL,&p,(long)length);
+        if(!certificate||p!=data+length){X509_free(certificate);certificate=NULL;}
+    }
+    OPENSSL_free(data);return certificate;
+}
+
+static int verify_mtc_ca_chain(X509 *certificate,const char *root_path){
+    X509_STORE *store=NULL;X509_STORE_CTX *context=NULL;int ok=0;
+    if(!certificate||!root_path||(store=X509_STORE_new())==NULL||
+       !X509_STORE_load_locations(store,root_path,NULL)||
+       (context=X509_STORE_CTX_new())==NULL||
+       !X509_STORE_CTX_init(context,store,certificate,NULL)||
+       !X509_VERIFY_PARAM_set_flags(X509_STORE_CTX_get0_param(context),
+                                    X509_V_FLAG_IGNORE_CRITICAL))goto end;
+    ok=X509_verify_cert(context)==1;
+end:
+    X509_STORE_CTX_free(context);X509_STORE_free(store);return ok;
+}
+
+static int supported_critical_extensions(X509 *certificate){
+    static const char *allowed[]={"2.5.29.19","2.5.29.15","1.3.6.1.5.5.7.1.38"};
+    int count=X509_get_ext_count(certificate);
+    if(count<0)return 0;
+    for(int i=0;i<count;i++){
+        X509_EXTENSION *extension=X509_get_ext(certificate,i);char text[80];int known=0;
+        if(!extension)return 0;
+        if(!X509_EXTENSION_get_critical(extension))continue;
+        if(OBJ_obj2txt(text,sizeof(text),X509_EXTENSION_get_object(extension),1)<=0)return 0;
+        for(size_t j=0;j<sizeof(allowed)/sizeof(allowed[0]);j++)
+            if(!strcmp(text,allowed[j])){known=1;break;}
+        if(!known)return 0;
+    }
+    return 1;
+}
+
+static int authority_matches_mtc_ca(const MTCAuthorityV2 *authority,
+                                    const char *certificate_path,
+                                    const char *root_path){
+    static const unsigned char basic_constraints[]={0x30,0x03,0x01,0x01,0xff};
+    static const unsigned char key_usage[]={0x03,0x02,0x02,0x04};
+    X509 *certificate=NULL;EVP_PKEY *certificate_key=NULL,*authority_key=NULL;
+    const unsigned char *p;uint64_t minimum=0,maximum=0;int ok=0;
+    certificate=load_certificate(certificate_path);
+    if(!authority||!certificate||!supported_critical_extensions(certificate)||
+       !verify_mtc_ca_chain(certificate,root_path)||!authority->count||
+       strcmp(authority->caid,authority->signers[0].id)||
+       !name_matches_id(X509_get_subject_name(certificate),authority->caid)||
+       !exact_critical_extension(certificate,"2.5.29.19",basic_constraints,sizeof(basic_constraints))||
+       !exact_critical_extension(certificate,"2.5.29.15",key_usage,sizeof(key_usage)))goto end;
+    certificate_key=X509_get_pubkey(certificate);
+    p=authority->signers[0].spki;
+    authority_key=d2i_PUBKEY(NULL,&p,(long)authority->signers[0].spki_len);
+    if(!certificate_key||!authority_key||p!=authority->signers[0].spki+authority->signers[0].spki_len||
+       EVP_PKEY_eq(certificate_key,authority_key)!=1||
+       !mtc_ca_extension(certificate,certificate_key,&minimum,&maximum)||
+       minimum!=authority->min||maximum!=authority->max)goto end;
+    ok=1;
+end:
+    EVP_PKEY_free(authority_key);EVP_PKEY_free(certificate_key);X509_free(certificate);return ok;
+}
+
+MTCConfig *mtc_load_authority_config_with_ca_v2(const char *path,
+                                                const char *certificate_path,
+                                                const char *root_path){
+    MTCAuthorityV2 *authority=NULL;MTCConfig *config=NULL;
+    authority=mtc_load_authority_v2(path);
+    config=mtc_load_authority_config_v2(path);
+    if(!config||!authority_matches_mtc_ca(authority,certificate_path,root_path))goto bad;
+    goto end;
+bad:
+    mtc_free(config);config=NULL;
+end:
+    mtc_free_authority_v2(authority);return config;
+}
 MTCCheckpointV2 *mtc_load_checkpoint_v2(const char *path){
     unsigned char *data=NULL;size_t length=0;MTCCheckpointV2 *result=NULL;
     if(read_v2_file(path,&data,&length))result=parse_checkpoint_v2((Slice){data,length});
@@ -435,6 +613,15 @@ invalid:
     if(file)fclose(file);
     mtc_free(config);config=NULL;
 end:
+    mtc_free_trust_bundle_v2(bundle);return config;
+}
+MTCConfig *mtc_load_trust_config_with_ca_v2(const char *path,
+                                            const char *certificate_path,
+                                            const char *root_path){
+    MTCTrustBundleV2 *bundle=mtc_load_trust_bundle_v2(path);
+    MTCConfig *config=NULL;
+    if(bundle&&authority_matches_mtc_ca(bundle->authority,certificate_path,root_path))
+        config=mtc_load_trust_config_v2(path);
     mtc_free_trust_bundle_v2(bundle);return config;
 }
 int mtc_add_trusted_subtree(MTCConfig *c,uint64_t log_number,
@@ -561,24 +748,9 @@ static int serial_revoked(const MTCConfig *c,uint64_t serial){
         if(serial>=c->revoked[i].first&&serial<=c->revoked[i].last)return 1;
     return 0;
 }
-static int algorithm(const X509_ALGOR *a){const ASN1_OBJECT *o;int type;char text[80];X509_ALGOR_get0(&o,&type,NULL,a);return type==V_ASN1_UNDEF&&OBJ_obj2txt(text,sizeof(text),o,1)>0&&!strcmp(text,"1.3.6.1.4.1.44363.47.0");}
+static int algorithm(const X509_ALGOR *a){const ASN1_OBJECT *o;int type;char text[80];X509_ALGOR_get0(&o,&type,NULL,a);return type==V_ASN1_UNDEF&&OBJ_obj2txt(text,sizeof(text),o,1)>0&&!strcmp(text,"1.3.6.1.5.5.7.6.67");}
 static int issuer(X509 *x,const char *id){
-    /* Check the DER tag directly: providers may expose RELATIVE-OID as OTHER. */
-    static const unsigned char oid[]={0x2b,0x06,0x01,0x04,0x01,0x82,0xda,0x4b,0x2f,0x03};
-    unsigned char expected[80],*der=NULL;size_t length;int ok=0;
-    int n=i2d_X509_NAME(X509_get_issuer_name(x),&der);Slice s;TLV t;
-    if(n<=0||!id_encode(id,expected,&length))goto end;
-    s=(Slice){der,(size_t)n};
-    if(!tlv(&s,&t)||s.n||t.tag!=0x30)goto end;
-    s=t.body;
-    if(!tlv(&s,&t)||s.n||t.tag!=0x31)goto end;
-    s=t.body;
-    if(!tlv(&s,&t)||s.n||t.tag!=0x30)goto end;
-    s=t.body;
-    if(!tlv(&s,&t)||t.tag!=6||t.body.n!=sizeof(oid)||memcmp(t.body.p,oid,sizeof(oid)))goto end;
-    if(!tlv(&s,&t)||s.n||t.tag!=0x0d||t.body.n!=length||memcmp(t.body.p,expected,length))goto end;
-    ok=1;
-end:OPENSSL_free(der);return ok;
+    return x&&name_matches_id(X509_get_issuer_name(x),id);
 }
 static int leaf_hash(X509 *x,Slice extensions,unsigned char out[32]){
     unsigned char *der=NULL,keyhash[32],header[3],octet[2]={4,32};int n=i2d_re_X509_tbs(x,&der),ok=0;unsigned count=0,size;
@@ -607,7 +779,8 @@ int mtc_verify(X509 *x,MTCConfig *c){
     if(!vector(&p,2,&extensions)||!mtc_extensions(extensions)||!number(&p,6,&start)||!number(&p,6,&end)||!vector(&p,2,&proof)||!vector(&p,3,&sigs)||p.n)return 0;
     if(!leaf_hash(x,extensions,leaf)||!mtc_eval(leaf,index,start,end,proof.p,proof.n,root))return 0;
     if(c->landmark){
-        if(sigs.n)return 0;
+        size_t ignored_signature_count;
+        if(!signature_block_v2(sigs,&ignored_signature_count))return 0;
         for(unsigned i=0;i<c->ntrusted;i++)
             if(c->trusted[i].log==c->log&&
                c->trusted[i].start==start&&c->trusted[i].end==end)

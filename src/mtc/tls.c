@@ -142,7 +142,7 @@ static int landmark_id_parts(const unsigned char *id,size_t id_n,
     return 1;
 }
 
-/* MTC -06 Section 8.2.1: caID.2.N.L contains caID and every
+/* MTC-07 Section 8.2.1: caID.2.N.L contains caID and every
    caID.1.N.M for M <= L.  Both inputs are exact canonical wire IDs. */
 static int requested_landmark_group_contains(
         const unsigned char *group,size_t group_n,
@@ -556,7 +556,7 @@ static int proof_algorithm(const X509_ALGOR *alg){
     if(!alg)return 0;
     X509_ALGOR_get0(&obj,NULL,NULL,alg);
     return obj && OBJ_obj2txt(oid,sizeof(oid),obj,1)>0
-        && strcmp(oid,"1.3.6.1.4.1.44363.47.0")==0;
+        && strcmp(oid,"1.3.6.1.5.5.7.6.67")==0;
 }
 static int mtc_security(const SSL *ssl,const SSL_CTX *ctx,int op,int bits,int nid,void *other,void *ex){
     const SSL_CTX *active=ctx?ctx:(ssl?SSL_get_SSL_CTX(ssl):NULL);
@@ -755,15 +755,16 @@ static int rp_landmark_path(const char *mts1,char **metadata){
     *metadata=path;
     return 1;
 }
-int mtc_client(SSL_CTX *ctx,const char *path,int landmark,
-               const char *trusted_subtrees){
+static int mtc_client_configure(SSL_CTX *ctx,const char *path,int landmark,
+                                const char *trusted_subtrees,
+                                const char *certificate,const char *root){
     TLSConfig *c=OPENSSL_zalloc(sizeof(*c));
     char request[120],*canonical=NULL,*metadata=NULL;int request_n,recognized;
     uint64_t retained_landmark=0;struct stat st;
     if(!c)return 0;
 
-    c->trust=landmark?mtc_load_trust_config_v2(path)
-                     :mtc_load_authority_config_v2(path);
+    c->trust=landmark?mtc_load_trust_config_with_ca_v2(path,certificate,root)
+                     :mtc_load_authority_config_with_ca_v2(path,certificate,root);
     if(!c->trust){
         OPENSSL_free(c);
         return 0;
@@ -819,14 +820,23 @@ error:
     OPENSSL_free(c);
     return 0;
 }
+int mtc_client(SSL_CTX *ctx,const char *path,int landmark,
+               const char *trusted_subtrees,const char *certificate,
+               const char *root){
+    if(!certificate||!root)return 0;
+    return mtc_client_configure(ctx,path,landmark,trusted_subtrees,certificate,root);
+}
 int mtc_server(SSL_CTX *ctx,const char *id){
     TLSConfig *c=OPENSSL_zalloc(sizeof(*c));if(!c)return 0;c->role=MTC_ROLE_SERVER_PRESENT;
     if(!id_encode(id,c->id,&c->n)){OPENSSL_free(c);return 0;}c->has_group=initial_group(c);c->group_n=c->has_group?c->n:0;return install(ctx,c);
 }
-int mtc_server_verify_client(SSL_CTX *ctx,const char *path,int landmark){
+static int mtc_server_verify_client_configure(SSL_CTX *ctx,const char *path,
+                                              int landmark,
+                                              const char *certificate,
+                                              const char *root){
     TLSConfig *c=OPENSSL_zalloc(sizeof(*c));if(!c)return 0;
-    c->trust=landmark?mtc_load_trust_config_v2(path)
-                     :mtc_load_authority_config_v2(path);
+    c->trust=landmark?mtc_load_trust_config_with_ca_v2(path,certificate,root)
+                     :mtc_load_authority_config_with_ca_v2(path,certificate,root);
     if(!c->trust){OPENSSL_free(c);return 0;}
     c->role=MTC_ROLE_SERVER_VERIFY_CLIENT;c->purpose=X509_PURPOSE_SSL_CLIENT;
     SSL_CTX_set_verify(ctx,SSL_VERIFY_PEER|SSL_VERIFY_FAIL_IF_NO_PEER_CERT,NULL);
@@ -837,6 +847,11 @@ int mtc_server_verify_client(SSL_CTX *ctx,const char *path,int landmark){
         c->group_n=c->n;
     }
     return install(ctx,c);
+}
+int mtc_server_verify_client(SSL_CTX *ctx,const char *path,int landmark,
+                             const char *certificate,const char *root){
+    if(!certificate||!root)return 0;
+    return mtc_server_verify_client_configure(ctx,path,landmark,certificate,root);
 }
 
 int mtc_client_present(SSL_CTX *ctx,const char *id,int landmark){

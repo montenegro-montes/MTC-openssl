@@ -119,7 +119,7 @@ int main(int argc,char **argv) {
     assert(!group_text(&landmark_range,"32473.101.1.7.129"));
 
     /*
-     * draft-06 permits landmark numbers through 2^48-1.  Exercise the
+     * draft-07 permits landmark numbers through 2^48-1.  Exercise the
      * first value above the former 32-bit implementation limit and the
      * protocol maximum.
      */
