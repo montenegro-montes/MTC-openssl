@@ -104,7 +104,7 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
             actual = measurements.profile_run_preconditions(
                 REPO, 'unused-image', 'ecdsa-p256', 3,
                 measurements.FORMAL_X509_FIXTURE_SET)
-        self.assertEqual(actual, ({'mtc': {'profile': 'ecdsa-p256'}, 'x509': selected}, metadata))
+        self.assertEqual(actual, ({'mtc_landmark': {'profile': 'ecdsa-p256'}, 'mtc_standalone': {'profile': 'ecdsa-p256'}, 'x509': selected}, metadata))
         precheck.assert_called_once_with(
             REPO, 'ecdsa-p256', 3, measurements.FORMAL_X509_FIXTURE_SET)
         validate.assert_called_once_with(
@@ -123,7 +123,7 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
              patch.object(measurements.bv, 'DockerOpenSSLBatch', batch), \
              patch.object(measurements.bv, 'discover') as discover:
             actual = measurements.existing_mtc(REPO, 'image', 'mldsa44')
-        preselect.assert_called_once_with(REPO, 'mldsa44')
+        preselect.assert_called_once_with(REPO, 'mldsa44', 'landmark')
         validate.assert_called_once_with(
             Path('/mtc/selected'), 'mldsa44', 'image',
             openssl=batch.return_value.__enter__.return_value)
@@ -134,7 +134,7 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
         policy = {'policy_applied': True}
         batch = self.openssl_batch()
         with patch.object(measurements, 'existing_mtc',
-                          side_effect=lambda repo, image, profile: {'profile': profile}) as mtc, \
+                          side_effect=lambda repo, image, profile, trust_mode: {'profile': profile, 'trust_mode': trust_mode}) as mtc, \
              patch.object(measurements.bv, 'precheck_formal_x509_fixture',
                           side_effect=lambda repo, profile, depth, fixture_set:
                           Path('/formal')/profile/f'd{depth}'), \
@@ -147,8 +147,16 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
                 REPO, 'image', measurements.CAMPAIGN_PROFILES, 3,
                 measurements.FORMAL_X509_FIXTURE_SET)
         self.assertEqual(set(prepared), set(measurements.CAMPAIGN_PROFILES))
-        self.assertEqual(mtc.call_count, 5)
-        self.assertEqual(x509.call_count, 5)
+        self.assertEqual(mtc.call_count, 12)
+        self.assertEqual(x509.call_count, 6)
+        self.assertEqual(
+            {call.args[2:] for call in mtc.call_args_list},
+            {(profile, mode)
+             for profile in measurements.CAMPAIGN_PROFILES
+             for mode in ('landmark', 'standalone')})
+        self.assertEqual(
+            len({call.args[2:] for call in mtc.call_args_list}),
+            mtc.call_count)
 
     def test_preconditions_precede_capture_lock_and_result_directory(self):
         source = (REPO/'campaigns/browser_client/chromium_mtc/browser_measurements.py').read_text()
@@ -166,13 +174,13 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
         self.assertEqual(measurements.CAMPAIGN_PROFILES,
             ('ecdsa-p256', 'ecdsa-p384', 'ecdsa-p521', 'mldsa44', 'mldsa65', 'mldsa87'))
         self.assertEqual(measurements.campaign_totals(measurements.CAMPAIGN_PROFILES, 3),
-                         {'pairs_per_profile': 3, 'total_pairs': 18, 'total_measurements': 36,
+                         {'pairs_per_profile': 3, 'total_pairs': 18, 'total_measurements': 54,
                           'warmups_per_profile': 0, 'total_warmup_pairs': 0,
                           'total_warmup_runs': 0})
         self.assertEqual(measurements.campaign_totals(measurements.CAMPAIGN_PROFILES, 30, 5),
-                         {'pairs_per_profile': 30, 'total_pairs': 150, 'total_measurements': 300,
-                          'warmups_per_profile': 5, 'total_warmup_pairs': 25,
-                          'total_warmup_runs': 50})
+                         {'pairs_per_profile': 30, 'total_pairs': 180, 'total_measurements': 540,
+                          'warmups_per_profile': 5, 'total_warmup_pairs': 30,
+                          'total_warmup_runs': 90})
 
     def test_warmup_and_measured_phases_keep_balanced_pair_order(self):
         self.assertEqual(measurements.campaign_phases(0, 30),
@@ -180,12 +188,16 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
         self.assertEqual(measurements.campaign_phases(5, 30),
                          (('warmup', 5), ('measured', 30)))
         self.assertEqual(measurements.order(1),
-                         ('mtc-positive', 'x509-positive'))
+                         ('x509', 'mtc-landmark', 'mtc-standalone'))
         self.assertEqual(measurements.order(2),
-                         ('x509-positive', 'mtc-positive'))
+                         ('mtc-landmark', 'mtc-standalone', 'x509'))
+        self.assertEqual(measurements.order(3),
+                         ('mtc-standalone', 'x509', 'mtc-landmark'))
+        self.assertEqual(measurements.order(4),
+                         ('x509', 'mtc-landmark', 'mtc-standalone'))
 
-    def test_fifth_profile_failure_aborts_global_precheck_without_generation(self):
-        successes = [({'mtc': {}, 'x509': {}}, {})] * 4
+    def test_last_profile_failure_aborts_global_precheck_without_generation(self):
+        successes = [({'mtc_landmark': {}, 'mtc_standalone': {}, 'x509': {}}, {})] * 5
         with patch.object(measurements, 'profile_run_preconditions',
                           side_effect=[*successes, ValueError('missing mldsa87')]) as check, \
              patch.object(measurements.bv, 'generate_mtc') as generate_mtc, \
@@ -194,7 +206,7 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
                 measurements.campaign_preconditions(
                     REPO, 'unused-image', measurements.CAMPAIGN_PROFILES, 3,
                     measurements.FORMAL_X509_FIXTURE_SET)
-        self.assertEqual(check.call_count, 5)
+        self.assertEqual(check.call_count, 6)
         generate_mtc.assert_not_called()
         generate_x509.assert_not_called()
 
@@ -206,7 +218,7 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
         self.assertIn('key_establishment', measurements.PAIR_FIELDS)
         self.assertIn('depth', measurements.PAIR_FIELDS)
 
-    def test_one_campaign_writes_30_measurements_and_15_pairs(self):
+    def test_one_campaign_writes_54_measurements_and_18_pairs(self):
         rows = []
         paired_rows = []
         for profile in measurements.CAMPAIGN_PROFILES:
@@ -223,9 +235,14 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
                 paired.update(pair=pair, pair_index=pair, signature_profile=profile,
                               key_establishment='x25519-mlkem768', depth=3)
                 for metric in measurements.PRIMARY:
-                    paired[metric+'_delta'] = 0
+                    for suffix in (
+                        'mtc_landmark_vs_x509_delta',
+                        'mtc_standalone_vs_x509_delta',
+                        'mtc_landmark_vs_mtc_standalone_delta',
+                    ):
+                        paired[metric+'_'+suffix] = 0
                 paired_rows.append(paired)
-        summary = dict(status='PASS', requested_pairs=15,
+        summary = dict(status='PASS', requested_pairs=18,
                        profiles=list(measurements.CAMPAIGN_PROFILES),
                        tls=dict(version='TLS 1.3', group='X25519MLKEM768',
                                 cipher='TLS_AES_256_GCM_SHA384'),
@@ -242,15 +259,15 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
                 saved_pairs = list(csv.DictReader(stream))
             with (root/'warmups.csv').open(newline='') as stream:
                 saved_warmups = list(csv.DictReader(stream))
-        self.assertEqual(len(saved_rows), 30)
-        self.assertEqual(len(saved_pairs), 15)
+        self.assertEqual(len(saved_rows), 54)
+        self.assertEqual(len(saved_pairs), 18)
         self.assertEqual(len(saved_warmups), 1)
         self.assertEqual(saved_warmups[0]['phase'], 'warmup')
         self.assertEqual(summary['attempted_warmup_runs'], 1)
         self.assertEqual(summary['warmup_results'][0]['status'], 'PASS')
         self.assertEqual(summary['warmup_results'][0]['phase'], 'warmup')
         self.assertEqual(
-            summary['descriptive_statistics']['ecdsa-p256']['mtc-positive']
+            summary['descriptive_statistics']['ecdsa-p256']['mtc-landmark']
                   [measurements.METRICS[0]]['mean'], 1)
         self.assertEqual({row['signature_profile'] for row in saved_rows},
                          set(measurements.CAMPAIGN_PROFILES))
@@ -367,10 +384,10 @@ class BrowserMeasurementFixtureSelectionTests(unittest.TestCase):
 
     def test_measurement_menu_uses_one_paired_run_with_explicit_inputs(self):
         text = (REPO/'bin/browser_client/mt-chromium-menu.sh').read_text()
-        self.assertIn("labels=('Status' 'Run paired comparison')", text)
+        self.assertIn("labels=('Status' 'Run paired comparison (ALL profiles)')", text)
         self.assertIn("commands=(readiness run)", text)
         self.assertIn('args+=(--key-establishment "$kem" --depth "$depth")', text)
-        self.assertIn('args+=(--pairs "$pairs" --all-profiles)', text)
+        self.assertIn('args+=(--pairs "$pairs" --warmups "$warmups" --all-profiles)', text)
         self.assertNotIn('matrix-smoke', text)
         self.assertNotIn('depth=all', text)
 

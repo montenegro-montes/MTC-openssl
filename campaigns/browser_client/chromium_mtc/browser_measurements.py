@@ -15,7 +15,7 @@ import browser_pcap as pcap
 
 PREFIX = 'chromium-browser-measurements-'
 FORMAL_X509_FIXTURE_SET = 'chromium-x509-depth-matrix-v1'
-CAMPAIGN_PROFILES = ('ecdsa-p256', 'ecdsa-p384', 'mldsa44', 'mldsa65', 'mldsa87')
+CAMPAIGN_PROFILES = ('ecdsa-p256', 'ecdsa-p384', 'ecdsa-p521', 'mldsa44', 'mldsa65', 'mldsa87')
 CASES = ('x509', 'mtc-landmark', 'mtc-standalone')
 MTC_CASES = ('mtc-landmark', 'mtc-standalone')
 PRIMARY = tuple('url_linked_'+name for name in pcap.METRICS)

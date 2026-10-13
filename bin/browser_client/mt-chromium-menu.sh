@@ -72,17 +72,17 @@ menu_validation_all() {
 
 menu_measurement_summary() {
  local kem=$1 depth=$2 pairs=$3 warmups=$4
- printf '\nProfiles: ALL (5)\n'
+ printf '\nProfiles: ALL (6)\n'
  printf 'Scenarios: 3\n'
  printf 'Key establishment: %s\n' "$kem"
  printf 'X.509 depth: %s\n' "$depth"
  printf 'Measured pairs per profile: %s\n' "$pairs"
  printf 'Warmup pairs per profile: %s\n' "$warmups"
  printf 'Total measured runs: %s × %s × %s = %s\n\n' \
-  5 3 "$pairs" "$((5*3*pairs))"
+  6 3 "$pairs" "$((6*3*pairs))"
  printf 'Total warmup runs: %s × %s × %s = %s\n' \
-  5 3 "$warmups" "$((5*3*warmups))"
- printf 'Total TLS runs: %s\n\n' "$((5*3*(pairs+warmups)))"
+  6 3 "$warmups" "$((6*3*warmups))"
+ printf 'Total TLS runs: %s\n\n' "$((6*3*(pairs+warmups)))"
 }
 
 menu_measurements_run_prepared() {
