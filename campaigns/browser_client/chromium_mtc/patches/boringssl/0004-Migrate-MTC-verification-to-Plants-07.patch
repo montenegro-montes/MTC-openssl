@@ -1,0 +1,280 @@
+diff --git a/pki/signature_algorithm.cc b/pki/signature_algorithm.cc
+index 0c390134d33073b46cff2acb692a4ffd3edfe056..3a25d16507c1449bd2076764c21739d96daa1234 100644
+--- a/pki/signature_algorithm.cc
++++ b/pki/signature_algorithm.cc
+@@ -157,17 +157,13 @@ const uint8_t kOidAlgMldsa65[] = {OBJ_ENC_ML_DSA_65};
+ // In dotted notation: 2.16.840.1.101.3.4.3.19
+ const uint8_t kOidAlgMldsa87[] = {OBJ_ENC_ML_DSA_87};
+ 
+-// From draft-ietf-plants-merkle-tree-certs-04:
++// From draft-ietf-plants-merkle-tree-certs-07:
+ //
+ //   id-alg-mtcProof OBJECT IDENTIFIER ::= {
+ //       iso(1) identified-organization(3) dod(6) internet(1) security(5)
+-//       mechanisms(5) pkix(7) algorithms(6) TBD}
+-//
+-// Also from said draft:
+-//   For initial experimentation, early implementations of this design will use
+-//   the OID 1.3.6.1.4.1.44363.47.0 instead of id-alg-mtcProof.
+-const uint8_t kOidAlgMtcProofDraftPlants04[] = {0x2b, 0x06, 0x01, 0x04, 0x01,
+-                                                0x82, 0xda, 0x4b, 0x2f, 0x00};
++//       mechanisms(5) pkix(7) algorithms(6) 67 }
++const uint8_t kOidAlgMtcProof[] = {0x2b, 0x06, 0x01, 0x05, 0x05,
++                                   0x07, 0x06, 0x43};
+ 
+ // Returns true if the entirety of the input is a NULL value.
+ [[nodiscard]] bool IsNull(der::Input input) {
+@@ -439,8 +435,8 @@ std::optional<SignatureAlgorithm> ParseSignatureAlgorithm(
+     return ParseRsaPss(params);
+   }
+ 
+-  if (oid == der::Input(kOidAlgMtcProofDraftPlants04) && params.empty()) {
+-    return SignatureAlgorithm::kMtcProofDraftPlants04;
++  if (oid == der::Input(kOidAlgMtcProof) && params.empty()) {
++    return SignatureAlgorithm::kMtcProof;
+   }
+ 
+   // Unknown signature algorithm.
+@@ -484,7 +480,7 @@ std::optional<DigestAlgorithm> GetTlsServerEndpointDigestAlgorithm(
+ 
+     // RFC 5929 (nor other references) does not define digests to use for these
+     // signature algorithms:
+-    case SignatureAlgorithm::kMtcProofDraftPlants04:
++    case SignatureAlgorithm::kMtcProof:
+     case SignatureAlgorithm::kMldsa44:
+     case SignatureAlgorithm::kMldsa65:
+     case SignatureAlgorithm::kMldsa87:
+diff --git a/pki/signature_algorithm.h b/pki/signature_algorithm.h
+index 7069237111294a77ee23e4ffd2614d0e77b48c48..f68b4fe4d3767a6217193326e1f893b99815c89e 100644
+--- a/pki/signature_algorithm.h
++++ b/pki/signature_algorithm.h
+@@ -55,7 +55,7 @@ enum class SignatureAlgorithm {
+   kRsaPssSha256,
+   kRsaPssSha384,
+   kRsaPssSha512,
+-  kMtcProofDraftPlants04,
++  kMtcProof,
+   kMldsa44,
+   kMldsa65,
+   kMldsa87,
+diff --git a/pki/simple_path_builder_delegate.cc b/pki/simple_path_builder_delegate.cc
+index dc572a6a9b6b31e6ed5d9b13f214c7ddfe3cc40e..9797f447d28366700cb6dc8e81ed74bf09724151 100644
+--- a/pki/simple_path_builder_delegate.cc
++++ b/pki/simple_path_builder_delegate.cc
+@@ -101,7 +101,7 @@ bool SimplePathBuilderDelegate::IsSignatureAlgorithmAcceptable(
+     case SignatureAlgorithm::kRsaPssSha256:
+     case SignatureAlgorithm::kRsaPssSha384:
+     case SignatureAlgorithm::kRsaPssSha512:
+-    case SignatureAlgorithm::kMtcProofDraftPlants04:
++    case SignatureAlgorithm::kMtcProof:
+     case SignatureAlgorithm::kMldsa44:
+     case SignatureAlgorithm::kMldsa65:
+     case SignatureAlgorithm::kMldsa87:
+diff --git a/pki/trust_store.cc b/pki/trust_store.cc
+index 839931997338cc0403761a51431b13bba4e92a6e..9ea8bba7768c9184650907bb5759b6cbe576f4d0 100644
+--- a/pki/trust_store.cc
++++ b/pki/trust_store.cc
+@@ -221,7 +221,7 @@ bool MTCAnchor::IsValid() const {
+   if (!synthetic_cert_) {
+     return false;
+   }
+-  if (spec_version_ != kPlants04 && spec_version_ != kPlants06) {
++  if (spec_version_ != kPlants04 && spec_version_ != kPlants07) {
+     return false;
+   }
+   if (min_serial_ > max_serial_) {
+@@ -345,19 +345,20 @@ void MTCAnchor::CreateSyntheticCert(bssl::Span<const uint8_t> ca_id) {
+   BSSL_CHECK(CBB_add_asn1(&subject_set, &subject_log, CBS_ASN1_SEQUENCE));
+ 
+   // Plants-04 used an early experimental attribute OID and a textual CA ID.
+-  // Plants-06 uses id-rdna-trustAnchorID with the binary RELATIVE-OID value.
++  // Plants-07 uses id-rdna-trustAnchorID with the binary RELATIVE-OID value.
+   static const uint8_t plants04_tai_attr_oid[] = {
+       0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0xda, 0x4b, 0x2f, 0x01};
+-  static const uint8_t plants05_tai_attr_oid[] = {
+-      0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0xda, 0x4b, 0x2f, 0x03};
+-  const auto tai_attr_oid = spec_version_ == kPlants06
+-                                ? MakeConstSpan(plants05_tai_attr_oid)
+-                                : MakeConstSpan(plants04_tai_attr_oid);
++  static const uint8_t plants07_tai_attr_oid[] = {
++      0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x19, 0x03};
++  Span<const uint8_t> tai_attr_oid = MakeConstSpan(plants04_tai_attr_oid);
++  if (spec_version_ == kPlants07) {
++    tai_attr_oid = MakeConstSpan(plants07_tai_attr_oid);
++  }
+   BSSL_CHECK(CBB_add_asn1_element(&subject_log, CBS_ASN1_OBJECT,
+                                   tai_attr_oid.data(),
+                                   tai_attr_oid.size()));
+ 
+-  if (spec_version_ == kPlants06) {
++  if (spec_version_ == kPlants07) {
+     constexpr unsigned kAsn1RelativeOid = 0x0d;
+     BSSL_CHECK(CBB_add_asn1_element(&subject_log, kAsn1RelativeOid,
+                                     ca_id.data(), ca_id.size()));
+diff --git a/pki/trust_store.h b/pki/trust_store.h
+index 5865e9ead59ca63feb689031c3bf0fd38cc9de32..f648806fc04abe9f41da401a1f32c4392829ffde 100644
+--- a/pki/trust_store.h
++++ b/pki/trust_store.h
+@@ -155,7 +155,7 @@ class OPENSSL_EXPORT MTCAnchor {
+     kPlants04,
+ 
+     // draft-ietf-plants-merkle-tree-certs-06
+-    kPlants06
++    kPlants07
+   };
+ 
+   // Create an MTCAnchor with spec version kPlants04 for a trusted CA with
+@@ -169,7 +169,7 @@ class OPENSSL_EXPORT MTCAnchor {
+             UniquePtr<CRYPTO_BUFFER> ca_key,
+             std::vector<LogTrustedSubtrees> log_trusted_subtrees);
+ 
+-  // Experimental Plants-06 constructor. The existing constructor above
++  // Experimental Plants-07 constructor. The existing constructor above
+   // retains Plants-04 semantics for all existing Chromium callers.
+   MTCAnchor(MtcSpecVersion spec_version,
+             Span<const uint8_t> ca_id,
+diff --git a/pki/trust_store_in_memory_unittest.cc b/pki/trust_store_in_memory_unittest.cc
+index 358b94368e6e9c0a1d885bc050372a2659af3a8a..d59e9332870a913c2818c4be9e00f897016221f4 100644
+--- a/pki/trust_store_in_memory_unittest.cc
++++ b/pki/trust_store_in_memory_unittest.cc
+@@ -251,15 +251,16 @@ TEST_F(TrustStoreInMemoryTest, MTCAnchors) {
+   }
+ }
+ 
+-TEST_F(TrustStoreInMemoryTest, Plants06AnchorMatchesRelativeOidIssuer) {
++TEST_F(TrustStoreInMemoryTest, Plants07AnchorMatchesRelativeOidIssuer) {
+   static constexpr uint8_t kCaId[] = {0x81, 0xfd, 0x59, 0x01};
+   static constexpr uint8_t kIssuerName[] = {
+-      0x31, 0x14, 0x30, 0x12, 0x06, 0x0a, 0x2b, 0x06, 0x01, 0x04, 0x01,
+-      0x82, 0xda, 0x4b, 0x2f, 0x03, 0x0d, 0x04, 0x81, 0xfd, 0x59, 0x01};
++      0x31, 0x12, 0x30, 0x10, 0x06, 0x08,
++      0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x19, 0x03,
++      0x0d, 0x04, 0x81, 0xfd, 0x59, 0x01};
+ 
+   UniquePtr<CRYPTO_BUFFER> ca_spki(CRYPTO_BUFFER_new({}, 0, nullptr));
+   auto anchor = std::make_shared<MTCAnchor>(
+-      MTCAnchor::kPlants06, kCaId, SignatureAlgorithm::kMldsa44,
++      MTCAnchor::kPlants07, kCaId, SignatureAlgorithm::kMldsa44,
+       std::move(ca_spki), 0, ~uint64_t{0},
+       std::vector<LogTrustedSubtrees>());
+   ASSERT_TRUE(anchor->IsValid());
+diff --git a/pki/verify_certificate_chain.cc b/pki/verify_certificate_chain.cc
+index ee2d243523bac6fece45e66322402aac6ff6f0c5..badf94bc999762c42bc3760bc46a3b1205579423 100644
+--- a/pki/verify_certificate_chain.cc
++++ b/pki/verify_certificate_chain.cc
+@@ -1264,14 +1264,14 @@ static VerifyMTCResult VerifyMTC(const ParsedCertificate &cert,
+ 
+   const MTCAnchor::MtcSpecVersion spec_version = mtc_anchor->spec_version();
+   if (spec_version != MTCAnchor::kPlants04 &&
+-      spec_version != MTCAnchor::kPlants06) {
++      spec_version != MTCAnchor::kPlants07) {
+     return VerifyMTCResult::kFailed;
+   }
+ 
+   // Step 1: Check that the TBSCertificate's signature field is id-alg-mtcProof
+-  // (kMtcProofDraftPlants04) with omitted parameters.
++  // (kMtcProof) with omitted parameters.
+   if (cert.signature_algorithm() !=
+-      SignatureAlgorithm::kMtcProofDraftPlants04) {
++      SignatureAlgorithm::kMtcProof) {
+     // When we parse the signature algorithm, we check that the parameters are
+     // omitted.
+     return VerifyMTCResult::kFailed;
+@@ -1288,7 +1288,7 @@ static VerifyMTCResult VerifyMTC(const ParsedCertificate &cert,
+     return VerifyMTCResult::kFailed;
+   }
+   const bool signatures_ok =
+-      spec_version == MTCAnchor::kPlants06
++      spec_version == MTCAnchor::kPlants07
+           ? CBS_get_u24_length_prefixed(&mtc_proof, &signatures)
+           : CBS_get_u16_length_prefixed(&mtc_proof, &signatures);
+   if (!signatures_ok || CBS_len(&mtc_proof) != 0) {
+@@ -1302,9 +1302,9 @@ static VerifyMTCResult VerifyMTC(const ParsedCertificate &cert,
+     return VerifyMTCResult::kFailed;
+   }
+ 
+-  // Plants-06 constrains MTC serial numbers to the range configured by the
++  // Plants-07 constrains MTC serial numbers to the range configured by the
+   // issuing MTC CA. Plants-04 anchors retain the historical unrestricted range.
+-  if (spec_version == MTCAnchor::kPlants06 &&
++  if (spec_version == MTCAnchor::kPlants07 &&
+       !mtc_anchor->IsSerialInRange(serial)) {
+     return VerifyMTCResult::kFailed;
+   }
+@@ -1476,9 +1476,9 @@ static VerifyMTCResult VerifyMTC(const ParsedCertificate &cert,
+     );
+   }
+   if (trusted_subtree_hash) {
+-    // This initial Plants-06 path intentionally supports landmark-relative
++    // This initial Plants-07 path intentionally supports landmark-relative
+     // verification only. A landmark proof carries no subtree signatures.
+-    if (spec_version == MTCAnchor::kPlants06 &&
++    if (spec_version == MTCAnchor::kPlants07 &&
+         CBS_len(&signatures) != 0) {
+       return VerifyMTCResult::kFailed;
+     }
+diff --git a/pki/verify_signed_data.cc b/pki/verify_signed_data.cc
+index 541c98cab5ce0548c9f3d95c700534b2bbd1f6bd..520f9ba742841876c863033af7aa1622be5e9bf2 100644
+--- a/pki/verify_signed_data.cc
++++ b/pki/verify_signed_data.cc
+@@ -238,7 +238,7 @@ bool VerifySignedData(SignatureAlgorithm algorithm, der::Input signed_data,
+       is_rsa_pss = true;
+       break;
+ 
+-    case SignatureAlgorithm::kMtcProofDraftPlants04:
++    case SignatureAlgorithm::kMtcProof:
+       // This function can't verify MTC proofs.
+       return false;
+ 
+diff --git a/pki/verify_unittest.cc b/pki/verify_unittest.cc
+index 705b2b9dc901c9b44f6aca37afbcfe1777fd3a8c..343db84b916440f0e8e53ea5b94cd6af1576cc54 100644
+--- a/pki/verify_unittest.cc
++++ b/pki/verify_unittest.cc
+@@ -319,32 +319,28 @@ TEST_F(VerifyMTCTest, SignaturelessMTC) {
+   EXPECT_TRUE(CertificateVerify(opts, &error)) << error.DiagnosticString();
+ }
+ 
+-TEST_F(VerifyMTCTest, Plants06SignaturelessMTCUsesUint24Signatures) {
++TEST_F(VerifyMTCTest, Plants07SignaturelessMTCUsesUint24Signatures) {
+   static constexpr char kLeafBase64[] =
+-      "MIIB0zCCAUugAwIBAgIHAQAAAAAAADAMBgorBgEEAYLaSy8AMBYxFDASBgorBgEE"
+-      "AYLaSy8DDQSB/VllMB4XDTI2MTAwMTE5NDY0M1oXDTI2MTAzMTE5NDY0M1owITEf"
+-      "MB0GA1UEAwwWc2VydmVyLm10Yy5leGFtcGxlLmNvbTBZMBMGByqGSM49AgEGCCqG"
+-      "SM49AwEHA0IABEV0MZFN70w4u2CcbOG5mpJa+uoTga5N2TUrg/SVLjG1lj/gWbgE"
+-      "HGKJLFLW7rEROZNkcYxVxV2NNgoUekpRXm6jdzB1MAwGA1UdEwEB/wQCMAAwDgYD"
+-      "VR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMBMCEGA1UdEQQaMBiCFnNl"
+-      "cnZlci5tdGMuZXhhbXBsZS5jb20wHQYDVR0OBBYEFL3ZC1qv5DkZxJpYXNd91TIS"
+-      "UWgEMAwGCisGAQQBgtpLLwADdAAAAAAAAAAAAAAAAAAACABgDJ58Ba9FYCKMHjdD"
+-      "B5JKBo1BFMXCaWkVOIOscsasIM8QYXV3lgCNMmKZ2VW7y00UFqvoK7fETN8CZ2CB"
+-      "MICzMn4CWestZ5r6SVK2LFOFLOhy73MIo9eBGOzIglxssJShAAAA";
++      "MIIBijCCAWSgAwIBAgIHAQAAAAAAADAKBggrBgEFBQcGQzATMREwDwYIKwYBBQUH"
++      "GQMNAwkIBzAeFw02OTEyMjgxNjI0MzlaFw03MDAxMTExNjI0MzlaMCMxITAfBgNV"
++      "BAMMGDMyMTYxNTdFNDFGRDlCQkVBOTUxN0NERTBZMBMGByqGSM49AgEGCCqGSM49"
++      "AwEHA0IABH/eyCnqZCp0AoZzJ7cMoWyWGn9IiHdBR4Og8vRzzTWlMrXv0JwKc6lb"
++      "s4RWFAfCcMHJ0fQnedQRJkOJXf9giFGjgZIwgY8wHQYDVR0OBBYEFFYGP543tgCf"
++      "5EcDBbT6LnxovTmfMA4GA1UdDwEB/wQEAwIHgDAaBgNVHREEEzARgg93d3cuZXhh"
++      "bXBsZS5jb20wDAYDVR0TAQH/BAIwADAfBgNVHSMEGDAWgBRWBj+eN7YAn+RHAwW0"
++      "+i58aL05nzATBgNVHSUEDDAKBggrBgEFBQcDATAKBggrBgEFBQcGQwMUAAAAAAAA"
++      "AAAAAAAAAAABAAAAAAA=";
+   std::string leaf;
+   ASSERT_TRUE(string_util::Base64Decode(kLeafBase64, &leaf));
+ 
+   TrustedSubtree subtree;
+-  subtree.range = Subtree{0, 8};
+-  subtree.hash = {0xf3, 0xfc, 0xfb, 0xd3, 0xa8, 0xf0, 0x87, 0x41,
+-                  0x98, 0x98, 0xd7, 0x16, 0x4c, 0x9e, 0xb9, 0xa1,
+-                  0x7c, 0x47, 0x8b, 0xe6, 0x7b, 0xf2, 0x73, 0x0a,
+-                  0xd7, 0x7f, 0x90, 0x46, 0xfd, 0xa5, 0xd4, 0xad};
+-  static constexpr uint8_t kCaId[] = {0x81, 0xfd, 0x59, 0x65};
++  subtree.range = Subtree{0, 1};
++  subtree.hash = {0x53, 0x55, 0xd2, 0xff, 0xff, 0x9e, 0x58, 0x46, 0xe5, 0xfd, 0xf8, 0x67, 0x67, 0x91, 0x64, 0x8a, 0x00, 0x2b, 0x22, 0xfb, 0x31, 0x30, 0xe7, 0x8e, 0x57, 0x93, 0x55, 0x59, 0x28, 0xe4, 0x42, 0xdc};
++  static constexpr uint8_t kCaId[] = {0x09, 0x08, 0x07};
+   UniquePtr<CRYPTO_BUFFER> ca_spki(CRYPTO_BUFFER_new({}, 0, nullptr));
+   auto anchor = std::make_shared<MTCAnchor>(
+-      MTCAnchor::kPlants06, kCaId, SignatureAlgorithm::kEcdsaSha256,
+-      std::move(ca_spki), 1ULL << 48, (1ULL << 48) + 15,
++      MTCAnchor::kPlants07, kCaId, SignatureAlgorithm::kEcdsaSha256,
++      std::move(ca_spki), 1ULL << 48, 1ULL << 48,
+       std::vector<LogTrustedSubtrees>{{1, {subtree}}});
+ 
+   std::unique_ptr<VerifyTrustStore> trust_store = EmptyTrustStore();
