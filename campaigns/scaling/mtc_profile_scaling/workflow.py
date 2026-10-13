@@ -211,7 +211,8 @@ def generate(args):
 
 def check_fixture(directory,name,n):
     p=SIGNATURE_PROFILES[name];meta=read(directory/'manifest.json');saved=read(directory/'fixture-sha256.json')
-    required={'manifest.json','authority.bin','trust.bin','cosigner-0.spki','cosigner-1.spki'}
+    required={'manifest.json','authority.bin','trust.bin','cosigner-0.spki','cosigner-1.spki',
+              'mtc-ca.pem','mtc-ca.der','mtc-representation-root.pem'}
     required.update(f'{mode}-{i:04d}.der' for mode in ('landmark','standalone') for i in range(n))
     if not required<=saved.keys():raise ValueError('Incomplete fixture hash manifest')
     for key,value in saved.items():
@@ -238,6 +239,8 @@ def tls_once(directory,population,name,mode,output,server_hostname='server'):
             '-key',str(population/'0.key'),'-mtc_id',ident,'-num_tickets','0','-www','-naccept','1',*common]
     client=[TLS_OPENSSL,'s_client','-connect',f'127.0.0.1:{port}','-servername',server_hostname,'-verify_hostname',server_hostname,
             '-verify_return_error','-mtc_trust',str(directory/('trust.bin' if mode=='landmark' else 'authority.bin')),
+            '-mtc_ca',str(directory/'mtc-ca.pem'),
+            '-mtc_ca_root',str(directory/'mtc-representation-root.pem'),
             '-no_ticket','-ign_eof',*common]+(['-mtc_landmark'] if mode=='landmark' else [])
     dump(output/'commands.json',{'server':server,'client':client})
     with (output/'server.log').open('w') as stream:

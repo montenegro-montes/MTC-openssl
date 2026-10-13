@@ -363,6 +363,12 @@ def case_definitions(profiles=None, sizes_by_profile=None, include_x509=True):
                     "-mtc_client_trust",
                     "/client-mtc/trust.bin",
 
+                    "-mtc_ca",
+                    "/client-mtc/mtc-ca.pem",
+
+                    "-mtc_ca_root",
+                    "/client-mtc/mtc-representation-root.pem",
+
                     "-mtc_landmark",
 
                     "-Verify", "1",
@@ -384,6 +390,12 @@ def case_definitions(profiles=None, sizes_by_profile=None, include_x509=True):
 
                     "-mtc_trust",
                     "/server-mtc/trust.bin",
+
+                    "-mtc_ca",
+                    "/server-mtc/mtc-ca.pem",
+
+                    "-mtc_ca_root",
+                    "/server-mtc/mtc-representation-root.pem",
 
                     "-cert",
                     "/client-mtc/landmark-0000.pem",

@@ -239,8 +239,12 @@ def case_definitions(profile, n):
         # MTC.
         server_mtc / "landmark-0000.pem",
         server_mtc / "trust.bin",
+        server_mtc / "mtc-ca.pem",
+        server_mtc / "mtc-representation-root.pem",
         client_mtc / "landmark-0000.pem",
         client_mtc / "trust.bin",
+        client_mtc / "mtc-ca.pem",
+        client_mtc / "mtc-representation-root.pem",
         server_mtc_source / "server-0000.key",
         client_mtc_source / "client-0000.key",
     ])
@@ -405,6 +409,12 @@ def case_definitions(profile, n):
                 "-mtc_client_trust",
                 "/client-mtc/trust.bin",
 
+                "-mtc_ca",
+                "/client-mtc/mtc-ca.pem",
+
+                "-mtc_ca_root",
+                "/client-mtc/mtc-representation-root.pem",
+
                 "-mtc_landmark",
 
                 "-Verify", "1",
@@ -425,6 +435,12 @@ def case_definitions(profile, n):
 
                 "-mtc_trust",
                 "/server-mtc/trust.bin",
+
+                "-mtc_ca",
+                "/server-mtc/mtc-ca.pem",
+
+                "-mtc_ca_root",
+                "/server-mtc/mtc-representation-root.pem",
 
                 "-cert",
                 "/client-mtc/landmark-0000.pem",

@@ -72,7 +72,9 @@ def main():
         population_key = mtc_root / "population" / profile / "0.key"
         manifest = mtc_dir / "manifest.json"
 
-        for required in [manifest, mtc_dir / "landmark-0000.pem", mtc_dir / "trust.bin", population_key]:
+        for required in [manifest, mtc_dir / "landmark-0000.pem", mtc_dir / "trust.bin",
+                         mtc_dir / "mtc-ca.pem", mtc_dir / "mtc-representation-root.pem",
+                         population_key]:
             if not required.is_file():
                 raise SystemExit(f"Missing MTC fixture file: {required}")
 

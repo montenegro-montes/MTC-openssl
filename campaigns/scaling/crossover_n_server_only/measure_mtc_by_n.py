@@ -36,6 +36,8 @@ def main() -> None:
     mtc_dir = mtc_root / f"batch{tree_size}" / "mtc" / profile_name
     manifest = mtc_dir / "manifest.json"
     trust = mtc_dir / "trust.bin"
+    mtc_ca = mtc_dir / "mtc-ca.pem"
+    mtc_ca_root = mtc_dir / "mtc-representation-root.pem"
     meta = json.loads(manifest.read_text())
 
     out.mkdir(parents=True, exist_ok=False)
@@ -61,6 +63,10 @@ def main() -> None:
                     "-verify_return_error",
                     "-mtc_trust",
                     str(trust),
+                    "-mtc_ca",
+                    str(mtc_ca),
+                    "-mtc_ca_root",
+                    str(mtc_ca_root),
                     "-mtc_landmark",
                     "-no_ticket",
                     "-ign_eof",

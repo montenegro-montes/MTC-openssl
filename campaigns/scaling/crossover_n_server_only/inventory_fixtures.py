@@ -48,6 +48,8 @@ def main() -> None:
                 "manifest_exists": manifest.is_file(),
                 "landmark_pem_exists": (fixture / "landmark-0000.pem").is_file(),
                 "trust_bin_exists": (fixture / "trust.bin").is_file(),
+                "mtc_ca_exists": (fixture / "mtc-ca.pem").is_file(),
+                "mtc_representation_root_exists": (fixture / "mtc-representation-root.pem").is_file(),
                 "server_key_exists": (population / "0.key").is_file(),
                 "tree_size_manifest": "",
                 "status": "",
@@ -77,6 +79,8 @@ def main() -> None:
                 "manifest_exists",
                 "landmark_pem_exists",
                 "trust_bin_exists",
+                "mtc_ca_exists",
+                "mtc_representation_root_exists",
                 "server_key_exists",
             ]:
                 if not row[key]:
