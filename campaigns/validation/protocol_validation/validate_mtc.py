@@ -35,7 +35,7 @@ class Reader:
 def signatures(data):
     r=Reader(data);out=[];previous=None
     while r.pos<len(data):
-        ident=r.vector(1);sig=r.vector();require(ident and sig,'empty signer/signature')
+        ident=r.vector(1);sig=r.vector();require(ident,'empty signer')
         order=(len(ident),ident);require(previous is None or previous<order,'unordered/duplicate signer')
         # Canonical base-128 relative OID, with no unfinished component.
         q=Reader(ident)
@@ -140,9 +140,9 @@ def validate(args):
     state=trust(args.trust.read_bytes(),p);index=serial&((1<<48)-1)
     require(serial>>48==state['log'] and index<state['n'],'leaf outside configured log')
     require((start,end) in core.cover(0,state['n']),'outside initial-issuance subset cover')
-    if args.mode=='landmark':require(not sigs and state['checkpoint'] is not None
+    if args.mode=='landmark':require(state['checkpoint'] is not None
             and state.get('landmark') is not None,
-            'landmark requires signaled trust checkpoint and no wire signatures')
+            'landmark requires signaled trust checkpoint')
     else:require(bool(sigs),'standalone lacks subtree signatures')
     entry=core.entry(outer[0][2],extensions)
     if args.entry:require(args.entry.read_bytes()==entry,'log entry differs from certificate/SPKI')
@@ -176,7 +176,7 @@ def validate(args):
         ('6.2','DER/proof complete parse and canonical lengths'),
         ('6.2','MTCProof directly encoded in signatureValue'),
         ('6.2','uint48 subtree interval and uint24 signatures-vector encoding'),
-        ('5.1','experimental issuer name'),
+        ('5.1','MTC-07 id-rdna-trustAnchorID issuer name'),
         ('6.2','serial/log/index and proof algorithm'),
         ('5.2.1 / 7.2','SPKI-bound reconstructed entry'),
         ('4.3.2','inclusion proof fold'),

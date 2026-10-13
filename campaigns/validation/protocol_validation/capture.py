@@ -51,6 +51,8 @@ def inside(a):
 
         command=[OPENSSL,'s_client','-connect','server:4433','-servername',hostname,'-verify_hostname',hostname,
                  '-verify_return_error','-mtc_trust',str(fixture/('trust.bin' if a.mode=='landmark' else 'authority.bin')),
+                 '-mtc_ca',str(fixture/'mtc-ca.pem'),
+                 '-mtc_ca_root',str(fixture/'mtc-representation-root.pem'),
                  '-no_ticket','-ign_eof','-showcerts','-keylogfile','/capture/tls.keys',*COMMON]
         if a.mode=='landmark':command+=['-mtc_landmark']
         save(out/'client-command.json',command)
@@ -87,6 +89,8 @@ def main():
     selected_pem=fixture/f'{a.mode}-{leaf4}.pem'
     selected_der=fixture/f'{a.mode}-{leaf4}.der'
     if not selected_pem.is_file() or not selected_der.is_file():p.error('Selected leaf fixture missing')
+    for required in ('mtc-ca.pem','mtc-representation-root.pem'):
+        if not (fixture/required).is_file():p.error(f'MTC-07 authority file missing: {required}')
     m=json.loads((fixture/'manifest.json').read_text())
     if m['tree_size']!=16 or m.get('profile',m['crypto_family'])!=a.profile:p.error('Wrong fixture profile/N')
     source_files=[repo/'src/mtc'/name for name in ('core.py','mtc.c','mtc.h','tls.c','patch.py','prepare.py')]
