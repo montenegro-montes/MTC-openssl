@@ -3,7 +3,7 @@
 
 MTB2 remains a local laboratory storage format. This exporter does not turn
 MTB2 into a protocol format; it only creates an explicit interoperability
-configuration for the controlled Chromium Plants-06 experiment.
+configuration for the controlled Chromium Plants-07 experiment.
 """
 
 import argparse
@@ -42,9 +42,9 @@ def parse_anchor(raw):
     log_number = authority.log_number
     min_serial, max_serial = authority.min_serial, authority.max_serial
     return bundle, {
-        "format": "chromium-mtc-plants06-lab",
+        "format": "chromium-mtc-plants07-lab",
         "version": 1,
-        "spec": "plants-06",
+        "spec": "plants-07",
         "source_format": "MTB2",
         "ca_id": ca_id,
         "ca_id_hex": core.relid(ca_id).hex(),

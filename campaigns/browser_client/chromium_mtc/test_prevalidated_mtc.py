@@ -35,6 +35,10 @@ class PrevalidatedMtcTests(unittest.TestCase):
         (self.directory/'standalone-0000.pem').write_bytes(
             c.pem(c.seq(tbs, c.ALG, c.der(3, b'\0'+proof))))
         (self.directory/'trust.bin').write_bytes(b'test-trust')
+        # Synthetic MTC Plants07 CA hierarchy.
+        (self.directory/'mtc-ca.der').write_bytes(b'test-mtc-ca')
+        (self.directory/'mtc-representation-root.pem').write_bytes(b'test-mtc-root')
+
         self.save(self.directory/'fixture-sha256.json', bv.hashes(self.directory))
         self.validation = self.root/'validation.json'
         self.evidence = dict(passed=True, server_hostname=bv.HOST, fixture=str(self.fixture),
@@ -155,6 +159,15 @@ class PrevalidatedMtcTests(unittest.TestCase):
             bv.prepare_credentials(
                 self.root, self.root, 'image', mtc_trust_mode='standalone')
 
+    def test_missing_mtc_ca_rejected(self):
+        (self.directory / 'mtc-ca.der').unlink()
+        with self.assertRaises(ValueError):
+            self.selected()
+
+    def test_missing_representation_root_rejected(self):
+        (self.directory / 'mtc-representation-root.pem').unlink()
+        with self.assertRaises(ValueError):
+            self.selected()
 
 if __name__ == '__main__':
     unittest.main()

@@ -31,16 +31,28 @@ class Mts1IntegrationTests(unittest.TestCase):
         self.validate(mts1(entry()))
         command = bv.browser_command(
             "chrome", self.root / "profile", self.root, self.root / "anchor.json",
-            "https://example.test/", trusted_subtrees=self.path)
-        self.assertIn("--mtc-plants06-trusted-subtrees=" + str(self.path), command)
+            "https://example.test/", trusted_subtrees=self.path,
+            mtc_ca=self.root / "mtc-ca.der",
+            mtc_ca_root=self.root / "mtc-representation-root.pem")
+        self.assertIn("--mtc-plants07-trusted-subtrees=" + str(self.path), command)
+        self.assertIn("--mtc-plants07-ca=" + str(self.root / "mtc-ca.der"), command)
+        self.assertIn("--mtc-plants07-ca-root=" +
+                      str(self.root / "mtc-representation-root.pem"), command)
 
     def test_absent_override_preserves_fallback(self):
         command = bv.browser_command(
             "chrome", self.root / "profile", self.root, self.root / "anchor.json",
-            "https://example.test/")
-        self.assertTrue(any(value.startswith("--mtc-plants06-trust=") for value in command))
-        self.assertFalse(any(value.startswith("--mtc-plants06-trusted-subtrees=")
+            "https://example.test/", mtc_ca=self.root / "mtc-ca.der",
+            mtc_ca_root=self.root / "mtc-representation-root.pem")
+        self.assertTrue(any(value.startswith("--mtc-plants07-trust=") for value in command))
+        self.assertFalse(any(value.startswith("--mtc-plants07-trusted-subtrees=")
                              for value in command))
+
+    def test_anchor_without_ca_hierarchy_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "requires CA certificate"):
+            bv.browser_command(
+                "chrome", self.root / "profile", self.root,
+                self.root / "anchor.json", "https://example.test/")
 
     def test_bad_magic(self):
         with self.assertRaisesRegex(ValueError, "magic"):
@@ -64,7 +76,7 @@ class Mts1IntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not match"):
             self.validate(mts1(entry(log_number=2)), log_number=1)
 
-    def test_draft06_mtcproof_uses_uint24_signatures_vector(self):
+    def test_draft07_mtcproof_uses_uint24_signatures_vector(self):
         proof = (
             b"\x00\x00" +
             (0).to_bytes(6, "big") +

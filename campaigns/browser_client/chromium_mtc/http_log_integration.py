@@ -268,7 +268,7 @@ def run(args):
                              output, args.timeout, False, trusted_subtrees=mts1)
         bv.write(case_output / "result.json", result)
         command_line = bv.read(case_output / "chromium-command.json")["command"]
-        expected_switch = "--mtc-plants06-trusted-subtrees=" + str(mts1)
+        expected_switch = "--mtc-plants07-trusted-subtrees=" + str(mts1)
         bv.require(expected_switch in command_line,
                    "effective Chromium command does not select the published MTS1")
 

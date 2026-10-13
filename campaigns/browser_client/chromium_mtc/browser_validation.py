@@ -332,6 +332,10 @@ def validate_mtc(fixture, profile=PROFILE, image='mt-tls-mtc:local', *,
             meta.get('draft') == core.DRAFT and meta.get('merkle_hash') == 'SHA-256', 'MTC metadata mismatch')
     check_saved_hashes(directory, read(directory / 'fixture-sha256.json'))
     cert_path, key_path = directory / 'landmark-0000.pem', fixture / 'population' / profile / '0.key'
+    mtc_ca = directory / 'mtc-ca.der'
+    mtc_ca_root = directory / 'mtc-representation-root.pem'
+    require(mtc_ca.is_file() and mtc_ca_root.is_file(),
+            'Missing MTC-07 CA certificate or representation root')
     cert, leaf = web_leaf(cert_path, key_path, profile=profile, image=image,
                           openssl=openssl)
     raw = (directory / 'trust.bin').read_bytes()
@@ -402,12 +406,16 @@ def validate_mtc(fixture, profile=PROFILE, image='mt-tls-mtc:local', *,
     image = (read(evidence) if evidence else manifest).get('provenance', {}).get('image_id')
     require(isinstance(image, str) and re.fullmatch(r'sha256:[0-9a-f]{64}', image), 'Missing pinned MTC image')
     return dict(fixture=str(fixture.resolve()), cert=str(cert_path.resolve()), key=str(key_path.resolve()),
-                trust=str((directory/'trust.bin').resolve()), profile=profile, tree_size=16, mode='landmark', leaf=0,
+                trust=str((directory/'trust.bin').resolve()),
+                mtc_ca=str(mtc_ca.resolve()), mtc_ca_root=str(mtc_ca_root.resolve()),
+                profile=profile, tree_size=16, mode='landmark', leaf=0,
                 hostname=HOST, validation_evidence=str(evidence.resolve()) if evidence else None,
                 complete_evidence=bool(evidence and 'fixture_hashes' in read(evidence)),
                 fixture_hash_status='MATCH' if evidence and 'fixture_hashes' in read(evidence) else 'LOCAL_HASHES_AND_CRYPTO_VERIFIED',
                 ca_id=ca_id, requested_tai=requested_tai, selected_tai=selected_tai, image_id=image,
-                cert_sha256=sha(cert_path), key_sha256=sha(key_path), trust_sha256=sha(directory/'trust.bin'), **leaf)
+                cert_sha256=sha(cert_path), key_sha256=sha(key_path),
+                trust_sha256=sha(directory/'trust.bin'), mtc_ca_sha256=sha(mtc_ca),
+                mtc_ca_root_sha256=sha(mtc_ca_root), **leaf)
 
 
 def prevalidated_mtc(fixture, validation, profile=PROFILE,
@@ -454,7 +462,11 @@ def prevalidated_mtc(fixture, validation, profile=PROFILE,
     require(isinstance(ca_id, str) and bool(ca_id), 'Missing MTC CA identity')
     cert_path = directory/(trust_mode+'-0000.pem')
     key_path, trust = fixture/'population'/profile/'0.key', directory/'trust.bin'
-    require(all(p.is_file() for p in (cert_path, key_path, trust)), 'Missing selected MTC credential/trust')
+    mtc_ca = directory/'mtc-ca.der'
+    mtc_ca_root = directory/'mtc-representation-root.pem'
+    require(all(p.is_file() for p in (cert_path, key_path, trust, mtc_ca,
+                                      mtc_ca_root)),
+            'Missing selected MTC credential/trust/CA hierarchy')
     anchor = (parse_landmark(trust.read_bytes()) if trust_mode == 'landmark'
               else parse_standalone(trust.read_bytes()))
     requested = (anchor['landmark']['requested_trust_anchor_id']
@@ -490,11 +502,15 @@ def prevalidated_mtc(fixture, validation, profile=PROFILE,
     before, after = [datetime.strptime(t[1].decode(), '%y%m%d%H%M%SZ' if t[0] == 23 else '%Y%m%d%H%M%SZ').replace(tzinfo=timezone.utc) for t in dates]
     require(before <= datetime.now(timezone.utc) <= after, 'Expired/not-yet-valid certificate')
     return dict(fixture=str(fixture.resolve()), cert=str(cert_path.resolve()), key=str(key_path.resolve()),
-                trust=str(trust.resolve()), profile=profile, tree_size=16, mode=trust_mode, leaf=0, hostname=HOST,
+                trust=str(trust.resolve()), mtc_ca=str(mtc_ca.resolve()),
+                mtc_ca_root=str(mtc_ca_root.resolve()), profile=profile,
+                tree_size=16, mode=trust_mode, leaf=0, hostname=HOST,
                 validation_evidence=str(validation.resolve()), validation_sha256=sha(validation),
                 complete_evidence=True, fixture_hash_status='MATCH', origin='reused-prevalidated',
                 ca_id=ca_id, requested_tai=requested, selected_tai=selected, image_id=image,
-                cert_sha256=sha(cert_path), key_sha256=sha(key_path), trust_sha256=sha(trust),
+                cert_sha256=sha(cert_path), key_sha256=sha(key_path),
+                trust_sha256=sha(trust), mtc_ca_sha256=sha(mtc_ca),
+                mtc_ca_root_sha256=sha(mtc_ca_root),
                 SAN=[HOST], KU=['Digital Signature'], EKU=['serverAuth'],
                 not_before=before.isoformat(), not_after=after.isoformat(), hostname_validation=True, key_match=True,
                 verification_source='Selected successful functional validation and matching complete fixture hashes')
@@ -1258,7 +1274,10 @@ def validate_mts1(path, expected_log_number):
         seen.add(key)
 
 
-def browser_command(executable, profile, case_dir, anchor, url, enable_mtc=False, browser_mode='headless', disable_trust_anchor_ids=False, trusted_subtrees=None, trusted_subtrees_url=None):
+def browser_command(executable, profile, case_dir, anchor, url, enable_mtc=False,
+                    browser_mode='headless', disable_trust_anchor_ids=False,
+                    trusted_subtrees=None, trusted_subtrees_url=None,
+                    mtc_ca=None, mtc_ca_root=None):
     require(browser_mode in ('headless', 'headed'), 'Invalid browser mode')
     flags = [str(executable), '--headless=new', '--remote-debugging-port=0',
              '--remote-debugging-address=127.0.0.1', '--no-first-run', '--no-default-browser-check',
@@ -1273,17 +1292,21 @@ def browser_command(executable, profile, case_dir, anchor, url, enable_mtc=False
         flags.remove('--log-net-log='+str(case_dir/'netlog.json'))
         flags.remove('--net-log-capture-mode=Everything')
     if enable_mtc:
-        flags.append('--enable-features=MtcPlants06Lab,VerifyMTCs')
+        flags.append('--enable-features=MtcPlants07Lab,VerifyMTCs')
     if disable_trust_anchor_ids:
         flags.append('--disable-features=TLSTrustAnchorIDs')
     if anchor:
-        flags.append('--mtc-plants06-trust='+str(anchor))
+        require(mtc_ca and mtc_ca_root,
+                'MTC-07 trust config requires CA certificate and representation root')
+        flags.append('--mtc-plants07-trust='+str(anchor))
+        flags.append('--mtc-plants07-ca='+str(mtc_ca))
+        flags.append('--mtc-plants07-ca-root='+str(mtc_ca_root))
     require(not (trusted_subtrees and trusted_subtrees_url),
             'MTC trusted-subtrees FILE and URL modes are mutually exclusive')
     if trusted_subtrees:
-        flags.append('--mtc-plants06-trusted-subtrees='+str(trusted_subtrees))
+        flags.append('--mtc-plants07-trusted-subtrees='+str(trusted_subtrees))
     if trusted_subtrees_url:
-        flags.append('--mtc-plants06-trusted-subtrees-url='+str(trusted_subtrees_url))
+        flags.append('--mtc-plants07-trusted-subtrees-url='+str(trusted_subtrees_url))
     return flags + [('about:blank' if browser_mode == 'headless' else url)]
 
 
@@ -1415,7 +1438,7 @@ def classify(case, case_dir, url, process, *, positive_control=False, requested_
     netflight = all(t in received for t in (11, 15, 20))
     config_error = (
         trusted_subtrees_url is None
-        and ('without a valid trust config' in stderr or 'Invalid MTC Plants-06' in stderr)
+        and ('without a valid trust config' in stderr or 'Invalid MTC Plants-07' in stderr)
     )
     cert_error = any(-299 <= e <= -200 for e in errors)
     positive = result['expected_outcome'] == 'accept'
@@ -1445,7 +1468,7 @@ def classify(case, case_dir, url, process, *, positive_control=False, requested_
                 and not result['selected_tai_observed']
                 and server_handshake_failure
                 and -113 in errors
-                and 'Invalid MTC Plants-06' not in stderr
+                and 'Invalid MTC Plants-07' not in stderr
                 and process != 'timeout'
             )
             success_reason = (
@@ -1916,6 +1939,8 @@ def run_case(case, credentials, browser, output, run_root, timeout, positive_con
                 disable_trust_anchor_ids=case == 'x509-positive',
                 trusted_subtrees=trusted_subtrees if anchor else None,
                 trusted_subtrees_url=trusted_subtrees_url if anchor else None,
+                mtc_ca=credentials['mtc']['mtc_ca'] if anchor else None,
+                mtc_ca_root=credentials['mtc']['mtc_ca_root'] if anchor else None,
             )
             if x509_spki is not None:
                 cmd.insert(-1, '--ignore-certificate-errors-spki-list='+x509_spki)
@@ -2087,7 +2112,7 @@ def main(argv=None):
     parser.add_argument('--mtc-validation', type=Path, help='Existing validation.json for the selected MTC fixture')
     parser.add_argument('--mtc-trust-mode', choices=('landmark', 'standalone'),
                         default='landmark',
-                        help='Plants-06 trust mode (default: landmark)')
+                        help='Plants-07 trust mode (default: landmark)')
     parser.add_argument('--x509-fixture-set')
     parser.add_argument('--chromium', type=Path)
     parser.add_argument('--mtc-trusted-subtrees', type=Path,

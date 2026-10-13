@@ -2,7 +2,14 @@
 
 import unittest
 
+import sys
+from pathlib import Path
+
+MTC_SOURCE = Path(__file__).resolve().parents[3] / "src" / "mtc"
+sys.path.insert(0, str(MTC_SOURCE))
+
 import core
+
 from config_formats import (MCA2Authority, MCP2Checkpoint, MTB2Bundle,
                             encode_mtb2)
 from export_chromium_anchor import parse_landmark, parse_standalone
