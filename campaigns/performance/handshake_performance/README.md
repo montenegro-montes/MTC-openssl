@@ -42,6 +42,15 @@ client invocation in the host launcher.
 | `tcp_connect_wall_ms_native` | ms | Monotonic time from entry into the instrumented client connection operation until successful `BIO_do_connect()` return. It measures TCP connection establishment from inside the native client, not packet timestamps. |
 | `handshake_wall_ms` | ms | Monotonic time from OpenSSL's `SSL_CB_HANDSHAKE_START` callback to `SSL_CB_HANDSHAKE_DONE`. It is the native TLS handshake interval and excludes the preceding TCP connect interval. |
 | `connection_establishment_wall_ms_native` | ms | Monotonic time from native connection entry, before TCP connect, through TLS handshake completion. This is the value labelled `complete` in progress output. It is measured directly and should not be reconstructed by adding independently rounded columns. |
+| `x509_verification_ms` | ms | Historical compatibility name for the complete `ssl_verify_internal()` interval. In MTC cases this includes the custom MTC callback and its nested suboperations, so it is not exclusively X.509 work. It has exactly the same value as `credential_verification_total_ms`. |
+| `credential_verification_total_ms` | ms | Inclusive credential-validation interval measured by `ssl_verify_internal()`. It measures X.509 chain validation in X.509 cases and the complete MTC callback plus local leaf checks in MTC cases. |
+| `client_authentication_verification_total_ms` | ms | Per-connection total accumulated directly in C from two independent monotonic intervals: entry/exit of `ssl_verify_internal()` plus entry/exit of `tls_process_cert_verify()`. It excludes the TLS state transition, socket reads and network/server wait between those functions; it is not reconstructed from CSV columns. It is unavailable if both regions do not complete, including a handshake without CertificateVerify. |
+| `mtc_credential_auth_ms` | ms | Complete MTC credential callback interval emitted by `MTC_VERIFY`. Empty for X.509. It is nested inside `credential_verification_total_ms`. |
+| `merkle_proof_ms` | ms | Nested MTC suboperation covering leaf-hash construction and Merkle inclusion-proof evaluation. Empty for X.509. |
+| `landmark_validation_ms` | ms | Nested MTC Landmark suboperation covering signature-block structure, trusted subtree/landmark lookup and root comparison. Empty for X.509 and Standalone. |
+| `standalone_validation_ms` | ms | Nested MTC Standalone signature-validation suboperation. Empty for X.509 and Landmark. |
+| `certificate_verify_ms` | ms | Processing and cryptographic verification of the peer TLS 1.3 CertificateVerify message in `tls_process_cert_verify()`. |
+| `credential_verification_other_ms` | ms | Derived exclusive residual: credential total minus the applicable Merkle, Landmark and Standalone suboperations. Missing suboperations count as zero only for this calculation; their original CSV fields remain empty. Negative values beyond rounding tolerance emit a warning and remain available for diagnosis. |
 | `process_wall_ms` | ms | Host monotonic time immediately before launching the Docker client command through command completion. It includes process/container invocation, TCP, TLS, the piped HTTP request/response handling, output and shutdown overhead. It is broader than connection establishment. |
 | `tls_bytes_read` | bytes | OpenSSL `s_client`'s reported “SSL handshake has read … bytes”: handshake bytes received by the client from the server. It is captured after successful verification and does not represent Ethernet/IP/TCP headers or the later HTTP response body. |
 | `tls_bytes_written` | bytes | OpenSSL `s_client`'s reported handshake bytes written by the client to the server. It excludes Ethernet/IP/TCP headers and the piped HTTP request. |
@@ -60,6 +69,21 @@ client invocation in the host launcher.
 These values have different boundaries. In particular, `process` must not be
 treated as TLS latency, and `tls_bytes_total` must not be compared directly
 with PCAP on-wire bytes that include network headers and retransmissions.
+
+The credential total is inclusive: do not add it to Merkle, Landmark or
+Standalone. For a non-overlapping breakdown, use `credential_verification_other_ms`
+plus the applicable nested components and `certificate_verify_ms`. Component
+medians are calculated independently, so their sum need not equal the median
+of `client_authentication_verification_total_ms`.
+
+Generate the stacked PNG/PDF figure (historical CSVs fall back to
+`x509_verification_ms`) with:
+
+```bash
+python3 campaigns/performance/handshake_performance/native_verification_plot.py \
+  --input artifacts/results/RUN/native.csv \
+  --output-dir artifacts/results/RUN/plots
+```
 
 ## PCAP CSV: Data Dictionary
 

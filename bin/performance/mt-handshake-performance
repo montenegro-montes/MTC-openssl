@@ -471,6 +471,8 @@ for root in (repo/'artifacts/mtc').glob('n16-*'):
         if not all(
             (root/'batch16/mtc'/profile/'trust.bin').read_bytes()[:4] == b'MTB2'
             and (root/'batch16/mtc'/profile/'authority.bin').read_bytes()[:4] == b'MCA2'
+            and (root/'batch16/mtc'/profile/'mtc-ca.pem').is_file()
+            and (root/'batch16/mtc'/profile/'mtc-representation-root.pem').is_file()
             for profile in sys.argv[2:]
         ):
             continue
@@ -688,6 +690,8 @@ PYMUTUAL
       mtc-n16/standalone-0000.pem \
       mtc-n16/trust.bin \
       mtc-n16/authority.bin \
+      mtc-n16/mtc-ca.pem \
+      mtc-n16/mtc-representation-root.pem \
       mtc-n16/manifest.json
     do
       [[ -f "$REPO/$MUTUAL_CLIENT_ROOT/profiles/$profile/$relative" ]] \
@@ -720,11 +724,11 @@ case_args() {
       ;;
     mtc-simple-landmark)
       server_args=(-cert "$(inside "$mtc/landmark-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id.1.1.1" -mtc_landmark)
-      client_args=(-mtc_trust "$(inside "$mtc/trust.bin")" -mtc_landmark)
+      client_args=(-mtc_trust "$(inside "$mtc/trust.bin")" -mtc_ca "$(inside "$mtc/mtc-ca.pem")" -mtc_ca_root "$(inside "$mtc/mtc-representation-root.pem")" -mtc_landmark)
       ;;
     mtc-simple-standalone)
       server_args=(-cert "$(inside "$mtc/standalone-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id")
-      client_args=(-mtc_trust "$(inside "$mtc/authority.bin")")
+      client_args=(-mtc_trust "$(inside "$mtc/authority.bin")" -mtc_ca "$(inside "$mtc/mtc-ca.pem")" -mtc_ca_root "$(inside "$mtc/mtc-representation-root.pem")")
       ;;
     x509-mutual|mtc-mutual-landmark|mtc-mutual-standalone)
       [[ "${MUTUAL_CLIENT_ROOT:-}" == artifacts/* ]] \
@@ -750,12 +754,12 @@ case_args() {
           fi
           ;;
         mtc-mutual-landmark)
-          server_args=(-cert "$(inside "$mtc/landmark-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id.1.1.1" -mtc_client_trust "$(inside "$client_mtc/trust.bin")" -mtc_landmark -Verify 1 -verify_return_error)
-          client_args=(-mtc_trust "$(inside "$mtc/trust.bin")" -mtc_landmark -cert "$(inside "$client_mtc/landmark-0000.pem")" -key "$(inside "$client/mtc-source/client-0000.key")" -mtc_client_id "$client_id.1.1.1")
+          server_args=(-cert "$(inside "$mtc/landmark-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id.1.1.1" -mtc_client_trust "$(inside "$client_mtc/trust.bin")" -mtc_ca "$(inside "$client_mtc/mtc-ca.pem")" -mtc_ca_root "$(inside "$client_mtc/mtc-representation-root.pem")" -mtc_landmark -Verify 1 -verify_return_error)
+          client_args=(-mtc_trust "$(inside "$mtc/trust.bin")" -mtc_ca "$(inside "$mtc/mtc-ca.pem")" -mtc_ca_root "$(inside "$mtc/mtc-representation-root.pem")" -mtc_landmark -cert "$(inside "$client_mtc/landmark-0000.pem")" -key "$(inside "$client/mtc-source/client-0000.key")" -mtc_client_id "$client_id.1.1.1")
           ;;
         mtc-mutual-standalone)
-          server_args=(-cert "$(inside "$mtc/standalone-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id" -mtc_client_trust "$(inside "$client_mtc/authority.bin")" -Verify 1 -verify_return_error)
-          client_args=(-mtc_trust "$(inside "$mtc/authority.bin")" -cert "$(inside "$client_mtc/standalone-0000.pem")" -key "$(inside "$client/mtc-source/client-0000.key")" -mtc_client_id "$client_id")
+          server_args=(-cert "$(inside "$mtc/standalone-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id" -mtc_client_trust "$(inside "$client_mtc/authority.bin")" -mtc_ca "$(inside "$client_mtc/mtc-ca.pem")" -mtc_ca_root "$(inside "$client_mtc/mtc-representation-root.pem")" -Verify 1 -verify_return_error)
+          client_args=(-mtc_trust "$(inside "$mtc/authority.bin")" -mtc_ca "$(inside "$mtc/mtc-ca.pem")" -mtc_ca_root "$(inside "$mtc/mtc-representation-root.pem")" -cert "$(inside "$client_mtc/standalone-0000.pem")" -key "$(inside "$client/mtc-source/client-0000.key")" -mtc_client_id "$client_id")
           ;;
       esac
       ;;
@@ -807,9 +811,9 @@ prepare_run() {
 }
 
 measure_native() {
-  local output=$1 profile case_name phase count repetition log start end elapsed read written tcp_ms handshake_ms establishment_ms done_count=0 total_count started now eta
+  local output=$1 profile case_name phase count repetition log start end elapsed read written tcp_ms handshake_ms establishment_ms x509_ms mtc_credential_ms merkle_ms landmark_ms standalone_ms certificate_verify_ms credential_ms authentication_ms credential_other_ms done_count=0 total_count started now eta
   total_count=$(( ${#PROFILES[@]} * ${#ACTIVE_CASES[@]} * (WARMUPS + RUNS) )); started=$(date +%s)
-  printf 'profile,case,key_establishment,openssl_group,phase,repetition,tcp_connect_wall_ms_native,handshake_wall_ms,connection_establishment_wall_ms_native,process_wall_ms,tls_bytes_read,tls_bytes_written,tls_bytes_total\n' > "$output/native.csv"
+  printf 'profile,case,key_establishment,openssl_group,phase,repetition,tcp_connect_wall_ms_native,handshake_wall_ms,connection_establishment_wall_ms_native,x509_verification_ms,mtc_credential_auth_ms,merkle_proof_ms,landmark_validation_ms,standalone_validation_ms,certificate_verify_ms,credential_verification_total_ms,client_authentication_verification_total_ms,credential_verification_other_ms,process_wall_ms,tls_bytes_read,tls_bytes_written,tls_bytes_total\n' > "$output/native.csv"
   printf '\nNATIVE MEASUREMENTS — 9 profiles × %d authentication cases\n' "${#ACTIVE_CASES[@]}"
   for profile in "${PROFILES[@]}"; do
    for case_name in "${ACTIVE_CASES[@]}"; do
@@ -829,7 +833,7 @@ measure_native() {
         read=$(sed -nE 's/.*SSL handshake has read ([0-9]+) bytes and written ([0-9]+) bytes.*/\1/p' "$log" | tail -1)
         written=$(sed -nE 's/.*SSL handshake has read ([0-9]+) bytes and written ([0-9]+) bytes.*/\2/p' "$log" | tail -1)
         [[ -n "$read" && -n "$written" ]] || fail "$case_name byte counters missing"
-        read -r tcp_ms handshake_ms establishment_ms < <(python3 - "$log" <<'PYMETRICS'
+        IFS='|' read -r tcp_ms handshake_ms establishment_ms x509_ms mtc_credential_ms merkle_ms landmark_ms standalone_ms certificate_verify_ms credential_ms authentication_ms credential_other_ms < <(python3 - "$log" "$case_name" <<'PYMETRICS'
 import json,re,sys
 text=open(sys.argv[1],errors='replace').read(); matches=re.findall(r'NATIVE_METRICS\s+(\{[^\n]+\})',text)
 valid=[]
@@ -840,17 +844,37 @@ if valid:
  d=valid[-1]
 else:
  # Docker may interleave stderr metrics with buffered stdout from s_client.
- broken=re.search(r'NATIVE_METRICS\s+\{\"tcp_connect_wall_ms_native\":.*?([0-9]+(?:\.[0-9]+)?),\"handshake_wall_ms\":([0-9]+(?:\.[0-9]+)?),\"connection_establishment_wall_ms_native\":([0-9]+(?:\.[0-9]+)?)\}',text,re.S)
+ broken=re.search(r'NATIVE_METRICS\s+\{\"tcp_connect_wall_ms_native\":.*?([0-9]+(?:\.[0-9]+)?),\"handshake_wall_ms\":([0-9]+(?:\.[0-9]+)?),\"connection_establishment_wall_ms_native\":([0-9]+(?:\.[0-9]+)?),\"x509_verification_ms\":([0-9]+(?:\.[0-9]+)?),\"credential_verification_total_ms\":([0-9]+(?:\.[0-9]+)?),\"certificate_verify_ms\":([0-9]+(?:\.[0-9]+)?),\"client_authentication_verification_total_ms\":([0-9]+(?:\.[0-9]+)?)\}',text,re.S)
  if not broken: raise SystemExit('ERROR: NATIVE_METRICS record missing')
- d=dict(zip(('tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native'),map(float,broken.groups())))
+ d=dict(zip(('tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native','x509_verification_ms','credential_verification_total_ms','certificate_verify_ms','client_authentication_verification_total_ms'),map(float,broken.groups())))
+required=('tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native','x509_verification_ms','credential_verification_total_ms','certificate_verify_ms','client_authentication_verification_total_ms')
+if any(d.get(k) is None for k in required): raise SystemExit('ERROR: native TCP/TLS/verification metric is unavailable')
+if abs(d['x509_verification_ms']-d['credential_verification_total_ms'])>1e-9:
+ raise SystemExit('ERROR: x509_verification_ms compatibility alias differs from credential_verification_total_ms')
+mtc={'mtc_credential_auth_ms':None,'merkle_proof_ms':None,'landmark_validation_ms':None,'standalone_validation_ms':None}
+if sys.argv[2].startswith('mtc-'):
+ records=[]
+ for match in re.findall(r'MTC_VERIFY\s+(\{[^\n]+\})',text):
+  try: records.append(json.loads(match))
+  except json.JSONDecodeError: pass
+ if not records: raise SystemExit('ERROR: MTC verification metrics missing')
+ mtc=records[-1]
+ if mtc.get('mtc_credential_auth_ms') is None: raise SystemExit('ERROR: MTC credential authentication metric is unavailable')
+ if mtc.get('merkle_proof_ms') is None: raise SystemExit('ERROR: Merkle proof metric is unavailable')
+ expected='landmark_validation_ms' if '-landmark' in sys.argv[2] else 'standalone_validation_ms'
+ if mtc.get(expected) is None: raise SystemExit(f'ERROR: {expected} is unavailable')
 values=[d.get(k) for k in ('tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native')]
-if any(v is None for v in values): raise SystemExit('ERROR: native TCP/TLS metric is unavailable')
-print(*values)
+suboperations=sum(mtc.get(k) or 0.0 for k in ('merkle_proof_ms','landmark_validation_ms','standalone_validation_ms'))
+other=d['credential_verification_total_ms']-suboperations
+if other < -1e-6:
+ print(f'WARNING: negative credential_verification_other_ms={other:.9f} for {sys.argv[2]}',file=sys.stderr)
+values += [d['x509_verification_ms'],mtc.get('mtc_credential_auth_ms'),mtc.get('merkle_proof_ms'),mtc.get('landmark_validation_ms'),mtc.get('standalone_validation_ms'),d['certificate_verify_ms'],d['credential_verification_total_ms'],d['client_authentication_verification_total_ms'],other]
+print('|'.join('' if value is None else str(value) for value in values))
 PYMETRICS
 )
-        [[ -n "$tcp_ms" && -n "$handshake_ms" && -n "$establishment_ms" ]] || fail "$profile $case_name native TCP/TLS metrics missing; inspect $log"
+        [[ -n "$tcp_ms" && -n "$handshake_ms" && -n "$establishment_ms" && -n "$x509_ms" && -n "$certificate_verify_ms" && -n "$credential_ms" && -n "$authentication_ms" && -n "$credential_other_ms" ]] || fail "$profile $case_name native TCP/TLS/verification metrics missing; inspect $log"
         elapsed=$(python3 -c "print(($end-$start)/1000000)")
-        printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$profile" "$case_name" "$KEM_LABEL" "$KEM_GROUP" "$phase" "$repetition" "$tcp_ms" "$handshake_ms" "$establishment_ms" "$elapsed" "$read" "$written" "$((read+written))" >> "$output/native.csv"
+        printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$profile" "$case_name" "$KEM_LABEL" "$KEM_GROUP" "$phase" "$repetition" "$tcp_ms" "$handshake_ms" "$establishment_ms" "$x509_ms" "$mtc_credential_ms" "$merkle_ms" "$landmark_ms" "$standalone_ms" "$certificate_verify_ms" "$credential_ms" "$authentication_ms" "$credential_other_ms" "$elapsed" "$read" "$written" "$((read+written))" >> "$output/native.csv"
         done_count=$((done_count+1)); now=$(date +%s); eta=$(( done_count ? (now-started)*(total_count-done_count)/done_count : 0 ))
         printf '[NATIVE] %d/%d profile=%s case=%s %s=%d tcp=%sms tls=%sms complete=%sms process=%sms tls_bytes=%d elapsed=%ds eta=%ds\n' "$done_count" "$total_count" "$profile" "$case_name" "$phase" "$repetition" "$tcp_ms" "$handshake_ms" "$establishment_ms" "$elapsed" "$((read+written))" "$((now-started))" "$eta"
       done
@@ -983,6 +1007,15 @@ root=Path(sys.argv[1]); result={
  'process_wall_ms':'host monotonic time around one Docker client process; includes process/container overhead',
  'tcp_connect_wall_ms_native':'native client connection entry through successful TCP connect return',
  'handshake_wall_ms':'native TLS handshake start through handshake completion',
+ 'x509_verification_ms':'client wall time in the native peer-certificate verification path; inclusive of the custom MTC callback for MTC credentials',
+ 'credential_verification_total_ms':'compatibility-equivalent value for x509_verification_ms; the inclusive ssl_verify_internal interval for X.509 or MTC credentials',
+ 'client_authentication_verification_total_ms':'per-connection sum accumulated directly in C from two local monotonic intervals: ssl_verify_internal and tls_process_cert_verify; it excludes the TLS state transition and network wait between them',
+ 'mtc_credential_auth_ms':'complete MTC credential callback interval; unavailable for X.509',
+ 'merkle_proof_ms':'client wall time to reconstruct the MTC leaf and evaluate its Merkle inclusion proof; unavailable for X.509',
+ 'landmark_validation_ms':'client wall time to validate the reconstructed root against trusted landmark/subtree state; available only for MTC landmark credentials',
+ 'standalone_validation_ms':'client wall time to validate the standalone MTC root signatures; available only for MTC standalone credentials',
+ 'certificate_verify_ms':'client wall time to process and cryptographically verify the peer TLS CertificateVerify message',
+ 'credential_verification_other_ms':'credential_verification_total_ms minus applicable Merkle, Landmark and Standalone suboperations; missing suboperations count as zero only for this derived value',
  'connection_establishment_wall_ms_native':'native connection entry through TLS handshake completion',
  'tls_bytes_total':'OpenSSL TLS handshake bytes read plus written; excludes IP/TCP headers',
  'tcp_handshake_ms':'PCAP time from initial client TCP SYN to the corresponding client ACK completing the three-way handshake',
@@ -1022,7 +1055,7 @@ for source,key in [('native.csv','native'),('pcap.csv','pcap')]:
   cases[profile]={}
   for name in sorted({r['case'] for r in measured if r['profile']==profile}):
    group=[r for r in measured if r['profile']==profile and r['case']==name]
-   fields=['tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native','process_wall_ms','tls_bytes_total'] if key=='native' else ['tcp_handshake_ms','tcp_syn_to_clienthello_ms','tls_clienthello_to_client_finished_ms','tcp_syn_to_first_application_request_ms','tls_client_handshake_bytes','tls_server_handshake_bytes','tls_handshake_bytes','tls_client_handshake_wire_bytes','tls_server_handshake_wire_bytes','tls_handshake_wire_bytes','tcp_handshake_wire_bytes','connection_handshake_wire_bytes','tls_client_handshake_packets','tls_server_handshake_packets','tls_handshake_packets','tls_client_certificate_bytes','tls_server_certificate_bytes','tls_client_certificate_verify_bytes','tls_server_certificate_verify_bytes','tls_client_certificate_verify_signature_bytes','tls_server_certificate_verify_signature_bytes','tls_client_mtc_proof_bytes','tls_server_mtc_proof_bytes','tls_client_mtc_merkle_path_bytes','tls_server_mtc_merkle_path_bytes','tls_client_mtc_merkle_path_hashes','tls_server_mtc_merkle_path_hashes','tls_client_sct_bytes','tls_server_sct_bytes','tls_client_authentication_bytes','tls_server_authentication_bytes','tls_authentication_bytes','tcp_retransmission_packets']
+   fields=['tcp_connect_wall_ms_native','handshake_wall_ms','connection_establishment_wall_ms_native','x509_verification_ms','mtc_credential_auth_ms','merkle_proof_ms','landmark_validation_ms','standalone_validation_ms','certificate_verify_ms','credential_verification_total_ms','client_authentication_verification_total_ms','credential_verification_other_ms','process_wall_ms','tls_bytes_total'] if key=='native' else ['tcp_handshake_ms','tcp_syn_to_clienthello_ms','tls_clienthello_to_client_finished_ms','tcp_syn_to_first_application_request_ms','tls_client_handshake_bytes','tls_server_handshake_bytes','tls_handshake_bytes','tls_client_handshake_wire_bytes','tls_server_handshake_wire_bytes','tls_handshake_wire_bytes','tcp_handshake_wire_bytes','connection_handshake_wire_bytes','tls_client_handshake_packets','tls_server_handshake_packets','tls_handshake_packets','tls_client_certificate_bytes','tls_server_certificate_bytes','tls_client_certificate_verify_bytes','tls_server_certificate_verify_bytes','tls_client_certificate_verify_signature_bytes','tls_server_certificate_verify_signature_bytes','tls_client_mtc_proof_bytes','tls_server_mtc_proof_bytes','tls_client_mtc_merkle_path_bytes','tls_server_mtc_merkle_path_bytes','tls_client_mtc_merkle_path_hashes','tls_server_mtc_merkle_path_hashes','tls_client_sct_bytes','tls_server_sct_bytes','tls_client_authentication_bytes','tls_server_authentication_bytes','tls_authentication_bytes','tcp_retransmission_packets']
    cases[profile][name]={
     'key_establishment':result['key_establishment'],
     **({'depth_including_root':int(sys.argv[5]),'transmitted_certificates':int(sys.argv[5])-1,
