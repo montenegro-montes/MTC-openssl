@@ -1,5 +1,6 @@
 from core import *
 import core
+from crypto_profiles import SIGNATURE_PROFILES
 D=[bytes([i]) for i in range(130)];h=hashlib.sha256();p=hashlib.sha256();count=0
 for end in range(131):
     for start in range(end+1):
@@ -53,8 +54,28 @@ assert signatures(sigs)==uint(len(block),2)+block  # Default wrapper width remai
 assert core.proof(0,1,[],sigs)[16:]==uint(len(block),3)+block
 large=core.proof(0,1,[],[('1',b'x'*40000),('2',b'y'*40000)])[16:]
 assert int.from_bytes(large[:3],'big')==len(large)-3>65535
-expected=bytes.fromhex('301631143012060a2b0601040182da4b2f030d0481fd5965')
+expected=bytes.fromhex('30143112301006082b060105050719030d0481fd5965')
 assert name('32473.101')==expected
+
+# MTC-07 Section 5.5 critical SHA-256 CA extension.
+ecdsa_sha256=seq(oid('1.2.840.10045.4.3.2'))
+first,last=1<<48,(1<<48)+15
+ca_extension=core.mtc_ca_extension(ecdsa_sha256,first,last)
+assert core.parse_mtc_ca_extension(ca_extension)==(ecdsa_sha256,first,last)
+for malformed in (
+        seq(oid(core.MTC_CA_OID),der(1,b'\0'),der(4,core.mtc_ca_extension_value(ecdsa_sha256,first,last))),
+        seq(oid(core.MTC_CA_OID),der(4,core.mtc_ca_extension_value(ecdsa_sha256,first,last))),
+        seq(oid(core.MTC_CA_OID),der(1,b'\xff'),
+            der(4,seq(ecdsa_sha256,integer(first-1),integer(last))))):
+    try:core.parse_mtc_ca_extension(malformed)
+    except ValueError:pass
+    else:raise AssertionError('accepted malformed MTC CA extension')
+assert {profile['signature_algorithm_oid'] for profile in SIGNATURE_PROFILES.values()} == {
+    '1.2.840.10045.4.3.2','1.2.840.10045.4.3.3','1.2.840.10045.4.3.4',
+    '2.16.840.1.101.3.4.3.17','2.16.840.1.101.3.4.3.18',
+    '2.16.840.1.101.3.4.3.19','2.16.840.1.101.3.4.3.20',
+    '2.16.840.1.101.3.4.3.22','2.16.840.1.101.3.4.3.24'}
+
 # Minimal structural input; the original bytes must remain unchanged.
 original=certificate(seq(der(160,integer(2)),integer(1),ALG,seq(),seq(),seq(),
                          seq(ALG,der(3,b'\0x'))),b'')
@@ -65,9 +86,9 @@ old=seq(*fields)
 assert original==before and old!=new and entry(old)!=entry(new)
 assert root([entry(old)])!=root([entry(new)])
 assert root([entry(old),b'x'])!=root([entry(new),b'x'])
-print('draft-06 wire/issuer/empty/singleton/boundary tests PASS; issuer DER:',expected.hex())
+print('draft-07 wire/issuer/empty/singleton/boundary tests PASS; issuer DER:',expected.hex())
 
-# Draft-06 Section 6.2 certificate-format/MTCProof encoding.
+# Draft-07 Section 6.2 certificate-format/MTCProof encoding.
 # Keep this byte-level and deterministic: no OpenSSL or generated fixtures.
 exts = b'\x12\x34\x00\x00'
 path = [b'a' * 32, b'b' * 32]
@@ -118,6 +139,12 @@ assert q == len(sig_block)
 assert seen == sorted(seen, key=lambda x: (len(x), x))
 assert len(seen) == len(set(seen))
 
+# MTC-07 Section 6.2 permits GREASE cosignatures with arbitrary, including
+# empty, signature bytes. They retain the normal canonical ID ordering rules.
+grease = core.proof(start, end, path, [('32473.1000', b'')], exts)
+components = core.proof_components(grease)
+assert components['signatures'] == (('32473.1000', b''),)
+
 try:core.proof(start,end,path,sigs,b'\x12\x34')
 except ValueError:pass
 else:raise AssertionError('accepted legacy incomplete MTC extension')
@@ -139,12 +166,12 @@ bit_string = outer[2][1]
 assert bit_string[0] == 0
 assert bit_string[1:] == p
 
-# Draft-06 serial construction and proof AlgorithmIdentifier.
+# Draft-07 serial construction and proof AlgorithmIdentifier.
 assert cert_tbs[1][2] == integer((1 << 48) | 0)
 assert cert_tbs[2][2] == ALG
 assert outer[1][2] == ALG
 
-print('draft-06 certificate-format/MTCProof encoding tests PASS')
+print('draft-07 certificate-format/MTCProof encoding tests PASS')
 
 # RFC 9162 prefix consistency; deterministic entries, no generated fixtures.
 history=[bytes([i]) for i in range(16)]

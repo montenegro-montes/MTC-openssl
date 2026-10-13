@@ -1,12 +1,12 @@
 """Create immutable MTC issuance snapshots from an explicit X.509 population."""
-import json,shutil,subprocess,tempfile,time
+import json,os,shutil,subprocess,tempfile,time
 from datetime import datetime, timezone
 from pathlib import Path
 from core import *
 from config_formats import (MCA2Authority, MCP2Checkpoint, MTB2Bundle,
                             encode_mca2, encode_mcp2, encode_mtb2)
 from crypto_profiles import crypto_profile, SIGNATURE_PROFILES, TREE_HASH
-OPENSSL='/opt/openssl/bin/openssl'
+OPENSSL=os.environ.get('MTC_OPENSSL','/opt/openssl/bin/openssl')
 def command(*args,data=None):return subprocess.run([OPENSSL,*map(str,args)],input=data,capture_output=True,check=True).stdout
 def keygen(path,family):
     profile=crypto_profile(family)
@@ -21,6 +21,42 @@ def cosign(ident,key,caid,start,end,subtree_hash,family,timestamp=0,log=1):
     return ident,sign(key,message(ident,caid,start,end,subtree_hash,timestamp,log),family)
 def checkpoint_signature(ident,key,caid,n,checkpoint,timestamp,family,log=1):
     return cosign(ident,key,caid,0,n,checkpoint,family,timestamp,log)
+def signature_algorithm_identifier(family):
+    """MTC-07 CA-cosigner AlgorithmIdentifier with absent parameters."""
+    return seq(oid(crypto_profile(family)['signature_algorithm_oid']))
+def generate_mtc_ca_hierarchy(out,family,caid,ca_cosigner_key,min_serial,max_serial):
+    """Create a dedicated representation root and its MTC-07 CA certificate."""
+    out=Path(out);out.mkdir(parents=True,exist_ok=True)
+    profile=crypto_profile(family)
+    root_key=out/'mtc-representation-root.key'
+    root_pem=out/'mtc-representation-root.pem'
+    ca_der=out/'mtc-ca.der';ca_pem=out/'mtc-ca.pem'
+    keygen(root_key,family)
+    digest_option=['-'+profile['digest']] if profile['digest'] else []
+    command('req','-new','-x509','-key',root_key,
+            '-subj',f'/CN=MTC Representation Root {family}',
+            '-days','3650','-addext','basicConstraints=critical,CA:TRUE',
+            '-addext','keyUsage=critical,keyCertSign,cRLSign',
+            *digest_option,'-out',root_pem)
+    root_der=command('x509','-in',root_pem,'-outform','DER')
+    _,root_tbs=certificate_parts(root_der)
+    if len(root_tbs)<7:raise ValueError('representation root certificate')
+    issuer_algorithm=signature_algorithm_identifier(family)
+    if root_tbs[2][2]!=issuer_algorithm:
+        raise ValueError('representation root signature algorithm')
+    ca_spki=command('pkey','-in',ca_cosigner_key,'-pubout','-outform','DER')
+    basic_constraints=seq(oid('2.5.29.19'),der(1,b'\xff'),der(4,seq(der(1,b'\xff'))))
+    key_usage=seq(oid('2.5.29.15'),der(1,b'\xff'),der(4,der(3,b'\x02\x04')))
+    mtc_extension=mtc_ca_extension(
+        signature_algorithm_identifier(family),min_serial,max_serial)
+    tbs=seq(der(0xa0,integer(2)),integer(1),issuer_algorithm,
+            root_tbs[5][2],root_tbs[4][2],name(caid),ca_spki,
+            der(0xa3,seq(basic_constraints,key_usage,mtc_extension)))
+    signature=sign(root_key,tbs,family)
+    cert=seq(tbs,issuer_algorithm,der(3,b'\0'+signature))
+    ca_der.write_bytes(cert);ca_pem.write_bytes(pem(cert))
+    return dict(root_key=root_key,root_certificate=root_pem,
+                ca_certificate_der=ca_der,ca_certificate=ca_pem)
 def authority_config_v2(caid,ids,public,n,*,log_number=1):
     """Canonical MCA2 authority.bin from the same authority source data."""
     return encode_mca2(authority_value_v2(
@@ -204,6 +240,9 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
     # This file is a lab storage format, never sent as an MTC certificate.
     authority_v2=authority_value_v2(
         caid,ids,public,n,log_number=log_number)
+    mtc_ca_paths=generate_mtc_ca_hierarchy(
+        out,family,caid,keys[0],authority_v2.min_serial,
+        authority_v2.max_serial)
     checkpoint_v2=checkpoint_value_v2(entries,timestamp,cp_sigs)
     (out/'authority.bin').write_bytes(encode_mca2(authority_v2))
     config=encode_mtb2(MTB2Bundle(
@@ -244,9 +283,12 @@ def prepare(out,batch,family,n,*,originals=None,signer_keys=None,metadata=None,
         'subtrees':subtrees,'landmarks':list(published_landmarks),'checkpoint':{'tree_size':n,'timestamp':timestamp,'hash':checkpoint.hex()},
         'latest_landmark':latest_landmark,'landmark_expirations':list(landmark_expirations),
         'ca_spki_sha256':H(public[0]).hex(),'cosigner_spki_sha256':H(public[1]).hex(),
+        'mtc_ca_certificate_sha256':H(mtc_ca_paths['ca_certificate_der'].read_bytes()).hex(),
+        'mtc_representation_root_sha256':H(command(
+            'x509','-in',mtc_ca_paths['root_certificate'],'-outform','DER')).hex(),
         'input_sha256':{str(p):H(p.read_bytes()).hex() for p in originals},**source_metadata,
         'setup_ms':(time.perf_counter()-begin)*1000,'sizes':sizes,'trust_file_bytes':len(config),
-        'ca_key_note':'Separate from directly-signing X509 CA as required by MTC -06 section 5.4',
+        'ca_key_note':'Separate from directly-signing X509 CA as required by MTC-07 section 5.4',
         'changed_fields':['issuer','serialNumber','signature algorithm','signatureValue','old authorityKeyIdentifier omitted']}
     profile_modes=['landmark','standalone'] if landmark_certificates else ['standalone']
     if family in SIGNATURE_PROFILES:meta.update(profile=family,standard_name=profile['standard_name'],implementation_algorithm=profile['implementation_algorithm'],security_level=profile['security_level'],merkle_hash=TREE_HASH,mtc_modes=profile_modes)

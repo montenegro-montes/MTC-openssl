@@ -1,12 +1,13 @@
 """Strict codecs for the experimental MCA2, MCP2, and MTB2 local formats.
 
-These are local storage formats, not draft-06 wire structures.
+These are local storage formats, not draft-07 wire structures.
 """
 
 from dataclasses import dataclass
 
-from core import (H, cover, decode_subtree_signature_block,
-                  encode_subtree_signature_block, uint)
+from core import (H, content, cover, decode_subtree_signature_block,
+                  encode_subtree_signature_block, items, oid,
+                  parse_mtc_ca_certificate, seq, uint)
 from trust_anchor_ids import decode_identifier, encode_identifier
 
 
@@ -39,6 +40,50 @@ class MTB2Bundle:
     authority: MCA2Authority
     checkpoint: MCP2Checkpoint
     signaling_landmark: int | None = None
+
+
+def reconcile_mtc_ca_certificate(authority, certificate):
+    """Require duplicated MCA2 fields to match the authoritative MTC CA cert."""
+    if not isinstance(authority,MCA2Authority) or not authority.signers:
+        raise ValueError("MTC CA reconciliation")
+    parsed=parse_mtc_ca_certificate(certificate)
+    ca_signer_id,ca_spki=authority.signers[0]
+    expected_algorithm=_signature_algorithm_for_spki(ca_spki)
+    if (parsed["ca_id"]!=authority.ca_id or ca_signer_id!=authority.ca_id
+            or parsed["spki"]!=ca_spki
+            or parsed["signature_algorithm"]!=expected_algorithm
+            or parsed["min_serial"]!=authority.min_serial
+            or parsed["max_serial"]!=authority.max_serial):
+        raise ValueError("MTC CA certificate and MCA2 disagree")
+    return parsed
+
+
+def _signature_algorithm_for_spki(spki):
+    """Return the parameter-free MTC signing AlgorithmIdentifier for an SPKI."""
+    try:
+        fields=items(content(spki,0x30))
+        if len(fields)!=2 or fields[0][0]!=0x30 or fields[1][0]!=3:raise ValueError
+        algorithm=items(content(fields[0][2],0x30))
+        if not algorithm or algorithm[0][0]!=6:raise ValueError
+        if algorithm[0][2]==oid('1.2.840.10045.2.1'):
+            if len(algorithm)!=2 or algorithm[1][0]!=6:raise ValueError
+            curves={
+                oid('1.2.840.10045.3.1.7'):'1.2.840.10045.4.3.2',
+                oid('1.3.132.0.34'):'1.2.840.10045.4.3.3',
+                oid('1.3.132.0.35'):'1.2.840.10045.4.3.4',
+            }
+            signature_oid=curves[algorithm[1][2]]
+        else:
+            if len(algorithm)!=1:raise ValueError
+            signature_oid={
+                oid(value):value for value in (
+                    '2.16.840.1.101.3.4.3.17','2.16.840.1.101.3.4.3.18',
+                    '2.16.840.1.101.3.4.3.19','2.16.840.1.101.3.4.3.20',
+                    '2.16.840.1.101.3.4.3.22','2.16.840.1.101.3.4.3.24')
+            }[algorithm[0][2]]
+        return seq(oid(signature_oid))
+    except (IndexError,KeyError,TypeError,ValueError):
+        raise ValueError('unsupported MTC CA SPKI algorithm') from None
 
 
 class _Reader:

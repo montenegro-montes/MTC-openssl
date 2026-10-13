@@ -1,4 +1,4 @@
-"""Draft-06 landmark sequence semantics.
+"""Draft-07 landmark sequence semantics.
 
 This module models Section 6.4 landmarks only.  It does not authenticate
 checkpoints, persist log state, distribute trusted subtrees, or implement
@@ -20,7 +20,7 @@ class Landmark:
 
 
 def validate_sequence(sequence):
-    """Validate the mandatory draft-06 Section 6.4.1 sequence invariants."""
+    """Validate the mandatory draft-07 Section 6.4.1 sequence invariants."""
     if not sequence:
         raise ValueError("empty landmark sequence")
 
@@ -88,7 +88,7 @@ def select(sequence, index):
 
 
 def relative_proof(entries, index, sequence):
-    """Construct draft-06 Section 6.4.4 landmark-relative proof inputs."""
+    """Construct draft-07 Section 6.4.4 landmark-relative proof inputs."""
     landmark = select(sequence, index)
     if landmark is None:
         raise ValueError("landmark not allocated")
@@ -113,7 +113,7 @@ def relative_proof(entries, index, sequence):
 
 
 def encode_publication(sequence, now):
-    """Encode draft-06 Section 6.4.3 active-landmark publication."""
+    """Encode draft-07 Section 6.4.3 active-landmark publication."""
     validate_sequence(sequence)
     if now < 0:
         raise ValueError("time")
@@ -133,7 +133,7 @@ def encode_publication(sequence, now):
 
 
 def decode_publication(data, now):
-    """Strictly decode draft-06 Section 6.4.3 publication format."""
+    """Strictly decode draft-07 Section 6.4.3 publication format."""
     if now < 0:
         raise ValueError("time")
     if not isinstance(data, bytes):

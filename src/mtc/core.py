@@ -1,4 +1,4 @@
-"""Independent MTC -06 wire and DER construction, SHA-256 profile.
+"""Independent MTC-07 wire and DER construction, SHA-256 profile.
 No code or wire formats imported from the older experimental Merkle protocol.
 """
 import base64
@@ -6,10 +6,11 @@ import hashlib
 import struct
 from dataclasses import dataclass
 from trust_anchor_ids import decode_identifier, encode_identifier
-DRAFT='draft-ietf-plants-merkle-tree-certs-06'
+DRAFT='draft-ietf-plants-merkle-tree-certs-07'
 TA_DRAFT='draft-ietf-tls-trust-anchor-ids-04'
-PROOF_OID='1.3.6.1.4.1.44363.47.0'
-NAME_OID='1.3.6.1.4.1.44363.47.3'
+PROOF_OID='1.3.6.1.5.5.7.6.67'
+NAME_OID='1.3.6.1.5.5.7.25.3'
+MTC_CA_OID='1.3.6.1.5.5.7.1.38'
 H=lambda x:hashlib.sha256(x).digest()
 def uint(n,size):return n.to_bytes(size,'big')
 def vec(x,size=2):return uint(len(x),size)+x
@@ -45,6 +46,81 @@ def integer(n):
 def seq(*x):return der(0x30,b''.join(x))
 ALG=seq(oid(PROOF_OID))
 def name(caid):return seq(der(0x31,seq(oid(NAME_OID),der(13,relid(caid)))))
+
+def mtc_ca_extension_value(signature_algorithm,min_serial,max_serial):
+    """Encode the MTC-07 MTCCertificationAuthority extension value."""
+    if (not isinstance(signature_algorithm,bytes)
+            or not (1<<48)<=min_serial<=max_serial<(1<<64)):
+        raise ValueError('MTCCertificationAuthority')
+    try:
+        content(signature_algorithm,0x30)
+        _validate_der(signature_algorithm)
+    except ValueError:
+        raise ValueError('MTCCertificationAuthority signature algorithm') from None
+    return seq(signature_algorithm,integer(min_serial),integer(max_serial))
+
+def mtc_ca_extension(signature_algorithm,min_serial,max_serial):
+    """Encode the required critical id-pe-mtcCertificationAuthority-SHA256 extension."""
+    value=mtc_ca_extension_value(signature_algorithm,min_serial,max_serial)
+    return seq(oid(MTC_CA_OID),der(1,b'\xff'),der(4,value))
+
+def parse_mtc_ca_extension(extension):
+    """Decode a critical MTC-07 SHA-256 CA extension, rejecting noncanonical DER."""
+    try:
+        _validate_der(extension)
+        fields=items(content(extension,0x30))
+        if (len(fields)!=3 or fields[0][2]!=oid(MTC_CA_OID)
+                or fields[1][2]!=der(1,b'\xff') or fields[2][0]!=4):
+            raise ValueError
+        values=items(content(fields[2][1],0x30))
+        if len(values)!=3 or values[0][0]!=0x30 or values[1][0]!=2 or values[2][0]!=2:
+            raise ValueError
+        signature_algorithm=values[0][2]
+        min_serial=int.from_bytes(values[1][1],'big',signed=True)
+        max_serial=int.from_bytes(values[2][1],'big',signed=True)
+        expected=mtc_ca_extension(
+            signature_algorithm,min_serial,max_serial)
+        if extension!=expected:raise ValueError
+        return signature_algorithm,min_serial,max_serial
+    except (TypeError,ValueError,OverflowError):
+        raise ValueError('MTCCertificationAuthority extension') from None
+
+def parse_mtc_ca_certificate(cert):
+    """Extract authoritative MTC-07 CA configuration from an X.509 certificate."""
+    try:
+        _,tbs=certificate_parts(cert)
+        subject=tbs[5][2];rdns=items(content(subject,0x30))
+        if len(rdns)!=1 or rdns[0][0]!=0x31:raise ValueError
+        attributes=items(content(rdns[0][2],0x31))
+        if len(attributes)!=1 or attributes[0][0]!=0x30:raise ValueError
+        attribute=items(content(attributes[0][2],0x30))
+        if (len(attribute)!=2 or attribute[0][2]!=oid(NAME_OID)
+                or attribute[1][0]!=13):raise ValueError
+        ca_id=decode_identifier(attribute[1][1])
+        extensions=[value for value in tbs[7:] if value[0]==0xa3]
+        if len(extensions)!=1:raise ValueError
+        containers=items(content(extensions[0][2],0xa3))
+        if len(containers)!=1 or containers[0][0]!=0x30:raise ValueError
+        encoded=items(content(containers[0][2],0x30));seen=set();mtc=None
+        basic_constraints=seq(oid('2.5.29.19'),der(1,b'\xff'),der(4,seq(der(1,b'\xff'))))
+        key_usage=seq(oid('2.5.29.15'),der(1,b'\xff'),der(4,der(3,b'\x02\x04')))
+        has_basic_constraints=False;has_key_usage=False
+        for value in encoded:
+            fields=items(content(value[2],0x30))
+            if not fields or fields[0][0]!=6 or fields[0][2] in seen:raise ValueError
+            seen.add(fields[0][2])
+            if fields[0][2]==oid(MTC_CA_OID):mtc=parse_mtc_ca_extension(value[2])
+            elif fields[0][2]==oid('2.5.29.19'):
+                has_basic_constraints=value[2]==basic_constraints
+            elif fields[0][2]==oid('2.5.29.15'):
+                has_key_usage=value[2]==key_usage
+        if mtc is None or not has_basic_constraints or not has_key_usage:raise ValueError
+        signature_algorithm,min_serial,max_serial=mtc
+        return dict(ca_id=ca_id,spki=tbs[6][2],
+                    signature_algorithm=signature_algorithm,
+                    min_serial=min_serial,max_serial=max_serial)
+    except (IndexError,TypeError,ValueError):
+        raise ValueError('MTC CA certificate') from None
 def from_pem(data):return base64.b64decode(b''.join(data.splitlines()[1:-1]))
 def pem(data):
     b=base64.b64encode(data)
@@ -62,7 +138,7 @@ TBS_CERT_ENTRY=1
 def parse_mtc_extensions(data):
     """Parse MTCLogEntryExtension vector *contents* (without uint16 length).
 
-    Received encodings are never reordered or repaired.  Draft-06 Section
+    Received encodings are never reordered or repaired.  Draft-07 Section
     5.2.1 requires strictly increasing extension_type values and no duplicates.
     Unknown, well-formed extensions remain opaque and byte-exact.
     """
@@ -146,7 +222,7 @@ def _validate_der(data):
 
 @dataclass(frozen=True)
 class TBSCertificateLogEntry:
-    """Draft-06 Section 5.2.1 ASN.1 value, stored as exact DER fields."""
+    """Draft-07 Section 5.2.1 ASN.1 value, stored as exact DER fields."""
     version: bytes|None
     issuer: bytes
     validity: bytes
@@ -223,7 +299,7 @@ class TBSCertificateLogEntry:
 
 @dataclass(frozen=True)
 class MTCLogEntry:
-    """Canonical Draft-06 Section 5.2.1 log entry."""
+    """Canonical Draft-07 Section 5.2.1 log entry."""
     extensions: bytes
     entry_type: int
     entry_data: bytes=b''
@@ -295,7 +371,7 @@ def root(entries):
 def consistency(entries,m):
     """RFC 9162 §2.1.4.1 PROOF(m, entries); n = len(entries).
 
-    Empty prefixes use the empty proof (MTC draft-06 §4.4.1).
+    Empty prefixes use the empty proof (MTC draft-07 §4.4.1).
     Sizes are bounded by the existing MTC uint48 tree-size limit.
     """
     if not isinstance(m,int) or not 0<=m<=len(entries)<1<<48:raise ValueError('tree sizes')
@@ -306,7 +382,7 @@ def consistency(entries,m):
         return subproof(data[k:],size-k,False)+[root(data[:k])]
     return subproof(entries,m,True) if m else []
 def valid_subtree(start,end):
-    """MTC draft-06 Section 4.1 subtree validity, within uint48."""
+    """MTC draft-07 Section 4.1 subtree validity, within uint48."""
     if (not isinstance(start,int) or not isinstance(end,int)
             or not 0<=start<=end<1<<48):
         return False
@@ -316,7 +392,7 @@ def valid_subtree(start,end):
 
 
 def subtree_consistency(entries,start,end):
-    """MTC draft-06 Section 4.4.1 SUBTREE_PROOF(start, end, D_n)."""
+    """MTC draft-07 Section 4.4.1 SUBTREE_PROOF(start, end, D_n)."""
     n=len(entries)
     if not valid_subtree(start,end) or end>n:
         raise ValueError('subtree')
@@ -347,7 +423,7 @@ def subtree_consistency(entries,start,end):
 
 
 def verify_subtree_consistency(start,end,n,node_hash,root_hash,path):
-    """MTC draft-06 Section 4.4.3 subtree consistency verification."""
+    """MTC draft-07 Section 4.4.3 subtree consistency verification."""
     if (not isinstance(n,int) or not 0<=n<1<<48
             or not valid_subtree(start,end) or end>n):
         return False
