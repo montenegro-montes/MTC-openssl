@@ -48,6 +48,18 @@ struct mtc_config {
     unsigned char request_signal[90];size_t request_signal_len; /* CA or group */
 };
 static double tick(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec*1000.0+t.tv_nsec/1e6;}
+static int elapsed_monotonic_ns(const struct timespec *start,uint64_t *elapsed){
+    struct timespec end;uint64_t seconds,nanoseconds;
+    if(!start||!elapsed||clock_gettime(CLOCK_MONOTONIC,&end)||
+       end.tv_sec<start->tv_sec)return 0;
+    seconds=(uint64_t)(end.tv_sec-start->tv_sec);
+    if(end.tv_nsec<start->tv_nsec){
+        if(!seconds)return 0;
+        seconds--;nanoseconds=1000000000ULL+(uint64_t)end.tv_nsec-(uint64_t)start->tv_nsec;
+    }else nanoseconds=(uint64_t)(end.tv_nsec-start->tv_nsec);
+    if(seconds>UINT64_MAX/1000000000ULL)return 0;
+    *elapsed=seconds*1000000000ULL+nanoseconds;return 1;
+}
 static int take(Slice *s,size_t n,Slice *out){if(n>s->n)return 0;out->p=s->p;out->n=n;s->p+=n;s->n-=n;return 1;}
 static int number(Slice *s,unsigned n,uint64_t *v){Slice x;if(!take(s,n,&x))return 0;*v=0;for(unsigned i=0;i<n;i++)*v=(*v<<8)|x.p[i];return 1;}
 static int vector(Slice *s,unsigned width,Slice *out){uint64_t n;return number(s,width,&n)&&take(s,(size_t)n,out);}
@@ -173,7 +185,23 @@ static const char *signer_algorithm_oid(EVP_PKEY *key){
     if(EVP_PKEY_is_a(key,"slhdsasha2256s")||EVP_PKEY_is_a(key,"SLH-DSA-SHA2-256s"))return "2.16.840.1.101.3.4.3.24";
     return NULL;
 }
-static int sigcheck(MTCConfig *c,Slice sigs,uint64_t start,uint64_t end,const unsigned char root[32],uint64_t timestamp){
+static void add_signature_timing(MTCVerificationTiming *timing,uint64_t elapsed){
+    if(!timing||timing->standalone_signatures_overflow)return;
+    if(timing->standalone_signature_count==UINT64_MAX||
+       (timing->has_standalone_signatures_ns&&
+        elapsed>UINT64_MAX-timing->standalone_signatures_ns)){
+        timing->has_standalone_signatures_ns=0;
+        timing->standalone_signatures_overflow=1;
+        return;
+    }
+    if(!timing->has_standalone_signatures_ns){
+        timing->standalone_signatures_ns=0;
+        timing->has_standalone_signatures_ns=1;
+    }
+    timing->standalone_signatures_ns+=elapsed;
+    timing->standalone_signature_count++;
+}
+static int sigcheck(MTCConfig *c,Slice sigs,uint64_t start,uint64_t end,const unsigned char root[32],uint64_t timestamp,MTCVerificationTiming *timing){
     Slice prev={NULL,0},id,sig;unsigned valid=0;unsigned char msg[400];size_t n;
     while(sigs.n){
         if(!vector(&sigs,1,&id)||!id.n||!vector(&sigs,2,&sig))return 0;
@@ -183,8 +211,19 @@ static int sigcheck(MTCConfig *c,Slice sigs,uint64_t start,uint64_t end,const un
         prev=id;
         for(unsigned i=0;i<c->count;i++)if(id.n==c->signers[i].idlen&&!memcmp(id.p,c->signers[i].binary,id.n)){
             EVP_MD_CTX *md=EVP_MD_CTX_new();Signer *s=&c->signers[i];int ok=0;
-            if(md&&supported_signer_key(s->key)&&message(c,s,start,end,root,timestamp,msg,&n)&&EVP_DigestVerifyInit_ex(md,NULL,ec_signer_digest(s->key),NULL,NULL,s->key,NULL))
+            if(md&&supported_signer_key(s->key)&&message(c,s,start,end,root,timestamp,msg,&n)&&EVP_DigestVerifyInit_ex(md,NULL,ec_signer_digest(s->key),NULL,NULL,s->key,NULL)){
+                struct timespec signature_start;uint64_t elapsed;
+                int clock_ok=clock_gettime(CLOCK_MONOTONIC,&signature_start)==0;
                 ok=EVP_DigestVerify(md,sig.p,sig.n,msg,n)==1;
+                if(timing){
+                    if(clock_ok&&elapsed_monotonic_ns(&signature_start,&elapsed))
+                        add_signature_timing(timing,elapsed);
+                    else{
+                        timing->has_standalone_signatures_ns=0;
+                        timing->standalone_signatures_overflow=1;
+                    }
+                }
+            }
             EVP_MD_CTX_free(md);if(ok)valid|=1u<<i;
         }
     }return valid==((1u<<c->count)-1);
@@ -769,19 +808,48 @@ static int leaf_hash(X509 *x,Slice extensions,unsigned char out[32]){
     ok=EVP_DigestFinal_ex(md,out,&size)&&size==32;
 end:EVP_MD_CTX_free(md);OPENSSL_free(der);return ok;
 }
-int mtc_verify_timed(X509 *x,MTCConfig *c,MTCVerificationTiming *timing){
+static int merkle_verify_timed(X509 *x,Slice extensions,uint64_t index,
+                               uint64_t start,uint64_t end,Slice proof,
+                               unsigned char leaf[32],unsigned char root[32],
+                               MTCVerificationTiming *timing){
+    struct timespec total_start,leaf_start,path_start;int total_clock,leaf_clock,path_clock;
+    int leaf_ok,path_ok;
+    total_clock=timing&&clock_gettime(CLOCK_MONOTONIC,&total_start)==0;
+    if(total_clock){leaf_start=total_start;leaf_clock=1;}
+    else leaf_clock=timing&&clock_gettime(CLOCK_MONOTONIC,&leaf_start)==0;
+    leaf_ok=leaf_hash(x,extensions,leaf);
+    if(timing&&leaf_clock)
+        timing->has_merkle_leaf_hash_ns=
+            elapsed_monotonic_ns(&leaf_start,&timing->merkle_leaf_hash_ns);
+    if(!leaf_ok){
+        if(timing&&total_clock)
+            timing->has_merkle_total_ns=
+                elapsed_monotonic_ns(&total_start,&timing->merkle_total_ns);
+        return 0;
+    }
+    path_clock=timing&&clock_gettime(CLOCK_MONOTONIC,&path_start)==0;
+    path_ok=mtc_eval(leaf,index,start,end,proof.p,proof.n,root);
+    if(timing&&path_clock)
+        timing->has_merkle_path_ns=
+            elapsed_monotonic_ns(&path_start,&timing->merkle_path_ns);
+    if(timing&&total_clock)
+        timing->has_merkle_total_ns=
+            elapsed_monotonic_ns(&total_start,&timing->merkle_total_ns);
+    return path_ok;
+}
+static int mtc_verify_timed_impl(X509 *x,MTCConfig *c,MTCVerificationTiming *timing){
     const ASN1_BIT_STRING *signature;const X509_ALGOR *alg;Slice p,extensions,proof,sigs;
     uint64_t serial,start,end,index;unsigned char leaf[32],root[32];double begin;
-    if(timing)memset(timing,0,sizeof(*timing));
     if(!x||!c||X509_get_version(x)!=2||!issuer(x,c->caid)||!algorithm(X509_get0_tbs_sigalg(x)))return 0;
     X509_get0_signature(&signature,&alg,x);
     if(!algorithm(alg)||(signature->flags&7)||signature->length<0||!ASN1_INTEGER_get_uint64(&serial,X509_get_serialNumber(x))||serial<c->min||serial>c->max||serial_revoked(c,serial)||(serial>>48)!=c->log)return 0;
     index=serial&0xffffffffffffULL;p=(Slice){signature->data,(size_t)signature->length};
     if(!vector(&p,2,&extensions)||!mtc_extensions(extensions)||!number(&p,6,&start)||!number(&p,6,&end)||!vector(&p,2,&proof)||!vector(&p,3,&sigs)||p.n)return 0;
     begin=tick();
-    if(!leaf_hash(x,extensions,leaf)||!mtc_eval(leaf,index,start,end,proof.p,proof.n,root))return 0;
+    if(!merkle_verify_timed(x,extensions,index,start,end,proof,leaf,root,timing))return 0;
     if(timing)timing->merkle_proof_ms=tick()-begin;
     if(c->landmark){
+        if(timing){timing->has_verification_mode=1;timing->verification_mode=MTC_VERIFICATION_MODE_LANDMARK;}
         size_t ignored_signature_count;
         begin=tick();
         if(!signature_block_v2(sigs,&ignored_signature_count))return 0;
@@ -801,12 +869,25 @@ int mtc_verify_timed(X509 *x,MTCConfig *c,MTCVerificationTiming *timing){
         if(timing)timing->landmark_validation_ms=tick()-begin;
         return 0;
     }
+    if(timing){timing->has_verification_mode=1;timing->verification_mode=MTC_VERIFICATION_MODE_STANDALONE;}
     begin=tick();
     {
-        int ok=sigcheck(c,sigs,start,end,root,0);
+        int ok=sigcheck(c,sigs,start,end,root,0,timing);
         if(timing)timing->standalone_validation_ms=tick()-begin;
         return ok;
     }
+}
+int mtc_verify_timed(X509 *x,MTCConfig *c,MTCVerificationTiming *timing){
+    struct timespec start;int clock_ok,result;
+    if(timing)memset(timing,0,sizeof(*timing));
+    clock_ok=timing&&clock_gettime(CLOCK_MONOTONIC,&start)==0;
+    result=mtc_verify_timed_impl(x,c,timing);
+    if(timing){
+        timing->mtc_success=result;
+        if(clock_ok)timing->has_mtc_total_ns=
+            elapsed_monotonic_ns(&start,&timing->mtc_total_ns);
+    }
+    return result;
 }
 int mtc_verify(X509 *x,MTCConfig *c){
     return mtc_verify_timed(x,c,NULL);

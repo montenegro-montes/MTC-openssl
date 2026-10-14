@@ -535,8 +535,10 @@ static int verify(X509_STORE_CTX *store,void *arg){
     TLSConfig *c=arg;SSL *ssl=X509_STORE_CTX_get_ex_data(store,SSL_get_ex_data_X509_STORE_CTX_idx());
     TLSState *s=ssl?state(ssl,c->role):NULL;X509 *x=X509_STORE_CTX_get0_cert(store);int ok=0;
     X509_STORE *trust=NULL;X509_STORE_CTX *check=NULL;double begin=tick();
-    MTCVerificationTiming timing={0};
-    if(!s||!s->confirmed||!x||!mtc_verify_timed(x,c->trust,&timing))goto end;
+    MTCVerificationTiming timing={0};int mtc_attempted=0;
+    if(!s||!s->confirmed||!x)goto end;
+    mtc_attempted=1;
+    if(!mtc_verify_timed(x,c->trust,&timing))goto end;
     if(X509_check_purpose(x,c->purpose,0)!=1||X509_cmp_current_time(X509_get0_notBefore(x))>=0||X509_cmp_current_time(X509_get0_notAfter(x))<=0)goto end;
     /* Restricted direct-CA profile: MTC authenticates this leaf, then native
        X509 validates its applicable leaf constraints with it locally trusted.
@@ -546,13 +548,40 @@ static int verify(X509_STORE_CTX *store,void *arg){
     X509_STORE_CTX_set0_verified_chain(store,X509_STORE_CTX_get1_chain(check));ok=1;
 end:
     X509_STORE_CTX_free(check);X509_STORE_free(trust);X509_STORE_CTX_set_error(store,ok?X509_V_OK:X509_V_ERR_APPLICATION_VERIFICATION);
-    if(ok){
-        if(c->trust->landmark)
-            fprintf(stderr,"MTC verification: OK\nMTC_VERIFY {\"mtc_credential_auth_ms\":%.6f,\"merkle_proof_ms\":%.6f,\"landmark_validation_ms\":%.6f,\"standalone_validation_ms\":null}\n",
-                    tick()-begin,timing.merkle_proof_ms,timing.landmark_validation_ms);
-        else
-            fprintf(stderr,"MTC verification: OK\nMTC_VERIFY {\"mtc_credential_auth_ms\":%.6f,\"merkle_proof_ms\":%.6f,\"landmark_validation_ms\":null,\"standalone_validation_ms\":%.6f}\n",
-                    tick()-begin,timing.merkle_proof_ms,timing.standalone_validation_ms);
+    if(mtc_attempted){
+        if(ok)fprintf(stderr,"MTC verification: OK\n");
+        fputs("MTC_VERIFY {\"timing_schema_version\":2,\"mtc_credential_auth_ms\":",stderr);
+        if(ok)fprintf(stderr,"%.6f",tick()-begin);else fputs("null",stderr);
+        fputs(",\"merkle_proof_ms\":",stderr);
+        if(ok)fprintf(stderr,"%.6f",timing.merkle_proof_ms);else fputs("null",stderr);
+        fputs(",\"landmark_validation_ms\":",stderr);
+        if(ok&&c->trust->landmark)fprintf(stderr,"%.6f",timing.landmark_validation_ms);else fputs("null",stderr);
+        fputs(",\"standalone_validation_ms\":",stderr);
+        if(ok&&!c->trust->landmark)fprintf(stderr,"%.6f",timing.standalone_validation_ms);else fputs("null",stderr);
+        fputs(",\"mtc_total_ns\":",stderr);
+        if(timing.has_mtc_total_ns)fprintf(stderr,"%llu",(unsigned long long)timing.mtc_total_ns);else fputs("null",stderr);
+        fputs(",\"merkle_leaf_hash_ns\":",stderr);
+        if(timing.has_merkle_leaf_hash_ns)fprintf(stderr,"%llu",(unsigned long long)timing.merkle_leaf_hash_ns);else fputs("null",stderr);
+        fputs(",\"merkle_path_ns\":",stderr);
+        if(timing.has_merkle_path_ns)fprintf(stderr,"%llu",(unsigned long long)timing.merkle_path_ns);else fputs("null",stderr);
+        fputs(",\"merkle_total_ns\":",stderr);
+        if(timing.has_merkle_total_ns)fprintf(stderr,"%llu",(unsigned long long)timing.merkle_total_ns);else fputs("null",stderr);
+        fputs(",\"standalone_signatures_ns\":",stderr);
+        if(timing.has_standalone_signatures_ns)
+            fprintf(stderr,"\"%llu\"",(unsigned long long)timing.standalone_signatures_ns);
+        else fputs("null",stderr);
+        fputs(",\"standalone_signature_count\":",stderr);
+        if(timing.has_standalone_signatures_ns)
+            fprintf(stderr,"%llu",(unsigned long long)timing.standalone_signature_count);
+        else fputs("null",stderr);
+        fputs(",\"standalone_signature_cache_ns\":null",stderr);
+        fputs(",\"standalone_signature_cache_hits\":null",stderr);
+        fputs(",\"standalone_signature_cache_misses\":null",stderr);
+        fputs(",\"verification_mode\":",stderr);
+        if(timing.has_verification_mode)
+            fprintf(stderr,"\"%s\"",timing.verification_mode==MTC_VERIFICATION_MODE_LANDMARK?"landmark":"standalone");
+        else fputs("null",stderr);
+        fprintf(stderr,",\"mtc_success\":%s}\n",timing.mtc_success?"true":"false");
     }
     return ok;
 }

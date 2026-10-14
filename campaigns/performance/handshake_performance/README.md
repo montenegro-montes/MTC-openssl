@@ -1,5 +1,8 @@
 # `mt-handshake-performance` CSV data dictionary
 
+The exact native timing boundaries, v2 containment rules, historical aliases
+and Chromium equivalences are documented in [TIMING_V2.md](TIMING_V2.md).
+
 This document describes the CSV files written by
 `bin/performance/mt-handshake-performance`. It reflects the literal headers and
 measurement boundaries in that launcher and in `pcap_handshake.py`.

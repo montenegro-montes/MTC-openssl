@@ -58,10 +58,17 @@ class NativeVerificationPlotTests(unittest.TestCase):
         self.assertIn("'tls_process_cert_verify'", patch)
         self.assertIn("mtc_native_authentication_begin", patch)
         self.assertIn("mtc_native_authentication_end", patch)
-        self.assertIn("'MTC_NATIVE_X509_VERIFY',True,True)", patch)
-        self.assertIn("'MTC_NATIVE_CERTIFICATE_VERIFY',True,True", patch)
+        self.assertIn("mtc_native_credential_validation_begin", patch)
+        self.assertIn("mtc_native_credential_validation_end", patch)
+        self.assertIn("mtc_native_credential_validation_snapshot", patch)
+        self.assertIn("'MTC_NATIVE_X509_VERIFY',True,True,True)", patch)
+        self.assertIn("'MTC_NATIVE_CERTIFICATE_VERIFY',True,True,False", patch)
         components = (root / "src/profiling/native_components.c").read_text()
         self.assertIn("authentication_regions != 2", components)
+        self.assertIn("credential_validation_complete", components)
+        native_metrics = (root / "src/profiling/native_metrics.c").read_text()
+        self.assertIn("credential_validation_total_ns", native_metrics)
+        self.assertIn("handshake_total_ns", native_metrics)
         for field in ("credential_verification_total_ms",
                       "client_authentication_verification_total_ms",
                       "credential_verification_other_ms"):

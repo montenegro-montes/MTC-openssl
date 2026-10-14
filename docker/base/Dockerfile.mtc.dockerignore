@@ -19,4 +19,5 @@
 !src/profiling/native_metrics.h
 !src/profiling/native_components.c
 !src/profiling/native_components.h
+!src/profiling/native_x509_timing.h
 !src/profiling/patch_native_metrics.py

@@ -1,13 +1,13 @@
 FROM mt-tls-lab:local
 COPY src/mtc/mtc.c src/mtc/mtc.h src/mtc/tls.c src/mtc/patch.py src/mtc/openssl.sh /opt/mtc/
-COPY src/profiling/native_metrics.c src/profiling/native_metrics.h src/profiling/native_components.c src/profiling/native_components.h src/profiling/patch_native_metrics.py /opt/native-metrics/
+COPY src/profiling/native_metrics.c src/profiling/native_metrics.h src/profiling/native_components.c src/profiling/native_components.h src/profiling/native_x509_timing.h src/profiling/patch_native_metrics.py /opt/native-metrics/
 RUN cp -a /opt/src/openssl /opt/src/openssl-mtc && \
     python3 /opt/mtc/patch.py /opt/src/openssl-mtc && \
     python3 /opt/native-metrics/patch_native_metrics.py /opt/src/openssl-mtc && \
     cd /opt/src/openssl-mtc && perl configdata.pm --reconfigure && make -j2 apps/openssl && \
     mkdir -p /opt/openssl-mtc/bin && cp apps/openssl /opt/openssl-mtc/bin/ && \
     cp -a /opt/openssl/lib /opt/openssl-mtc/lib && \
-    cp -a libssl.so* /opt/openssl-mtc/lib/ && \
+    cp -a libcrypto.so* libssl.so* /opt/openssl-mtc/lib/ && \
     cp MTC_SHA256 NATIVE_METRICS_SHA256 /opt/openssl-mtc/ && \
     /opt/openssl-mtc/bin/openssl s_client -help 2>&1 | grep -q lab_metrics
 COPY src/mtc/retry_peer.c src/mtc/retry_tls.c src/mtc/check_snapshot.c src/mtc/check_revoked.c src/mtc/check_mtc_ca.c /opt/mtc/

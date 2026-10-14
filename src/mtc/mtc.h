@@ -14,7 +14,26 @@ typedef struct {
     double merkle_proof_ms;
     double landmark_validation_ms;
     double standalone_validation_ms;
+    uint64_t mtc_total_ns;
+    uint64_t merkle_leaf_hash_ns;
+    uint64_t merkle_path_ns;
+    uint64_t merkle_total_ns;
+    uint64_t standalone_signatures_ns;
+    uint64_t standalone_signature_count;
+    int has_mtc_total_ns;
+    int has_merkle_leaf_hash_ns;
+    int has_merkle_path_ns;
+    int has_merkle_total_ns;
+    int has_standalone_signatures_ns;
+    int standalone_signatures_overflow;
+    int has_verification_mode;
+    int verification_mode;
+    int mtc_success;
 } MTCVerificationTiming;
+enum {
+    MTC_VERIFICATION_MODE_LANDMARK = 1,
+    MTC_VERIFICATION_MODE_STANDALONE = 2
+};
 MTCConfig *mtc_load_authority_config_v2(const char *path);
 /* Transitional draft-07 loader: authenticate the MTC CA certificate with the
  * representation root, then reconcile its authoritative duplicated fields. */
