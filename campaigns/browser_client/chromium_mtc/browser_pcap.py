@@ -28,7 +28,20 @@ METRICS = ('tcp_packets_client_to_server', 'tcp_packets_server_to_client', 'tcp_
 HANDSHAKE_FIELDS = ph.METRIC_FIELDS
 BROWSER_TIMING_FIELDS = ('browser_process_wall_ms', 'stabilization_ms', 'browser_ssl_connect_ms',
                          'browser_navigation_to_clienthello_ms', 'browser_request_to_response_headers_ms')
-COMPARISON_FIELDS = (*HANDSHAKE_FIELDS, *BROWSER_TIMING_FIELDS)
+NETLOG_CRYPTO_TIMING_FIELDS = (
+    'credential_validation_total_ns', 'credential_type', 'x509_signatures_ns',
+    'x509_signature_count', 'x509_signature_cache_ns',
+    'x509_signature_cache_hits', 'x509_signature_cache_misses',
+    'mtc_total_ns', 'merkle_leaf_hash_ns', 'merkle_path_ns',
+    'merkle_total_ns', 'merkle_proof_ns', 'standalone_signatures_ns',
+    'standalone_signature_count', 'standalone_signature_cache_ns',
+    'standalone_signature_cache_hits', 'standalone_signature_cache_misses',
+    'mtc_verification_mode', 'mtc_success', 'certificate_verify_crypto_ns',
+    'certificate_verify_elapsed_ns',
+    'certificate_verify_algorithm', 'certificate_verify_success')
+NETLOG_TIMING_DIAGNOSTIC_FIELDS = ('netlog_timing_status', 'netlog_timing_error')
+COMPARISON_FIELDS = (*HANDSHAKE_FIELDS, *BROWSER_TIMING_FIELDS,
+                     *NETLOG_CRYPTO_TIMING_FIELDS, *NETLOG_TIMING_DIAGNOSTIC_FIELDS)
 COMPARISON_DEFINITIONS = {
     'handshake': 'Per TCP stream, exactly campaigns/performance/handshake_performance/pcap_handshake.py fields and semantics: '
         'TCP SYN/SYN-ACK/ACK, TLS ClientHello through client Finished, and first HTTP request. '
@@ -54,6 +67,16 @@ COMPARISON_DEFINITIONS = {
     'browser_request_to_response_headers_ms': 'NetLog HTTP_TRANSACTION_SEND_REQUEST BEGIN to '
         'HTTP_TRANSACTION_READ_RESPONSE_HEADERS END on the same source in the unique URL connection graph; '
         'includes server/HTTP work, not TLS latency.',
+    'netlog_crypto_timings': 'Nanosecond durations emitted by CREDENTIAL_VALIDATION_TIMING, '
+        'MTC_VERIFICATION_TIMING and SSL_CERTIFICATE_VERIFY_TIMING. They retain the instrumented '
+        'regions\' own boundaries and are not an additive partition: credential validation may include '
+        'MTC validation, while CertificateVerify is a separate TLS operation. Effective signature '
+        'cryptography and signature-cache lookup time are exported separately. Optional or unexecuted '
+        'regions are null, never zero.',
+    'netlog_timing_correlation': 'Timing events are accepted only from the NetLog dependency component '
+        'containing the exact ClientHello correlated by client_random to the PCAP stream. Components with '
+        'multiple ClientHellos, duplicate timing event kinds or malformed fields are diagnosed and not '
+        'assigned as timing measurements.',
     'timing': 'NetLog intervals use its millisecond clock only; never subtract PCAP epoch timestamps. '
         'Ambiguous, missing or invalid events are null (blank CSV), never zero.',
     'scope': 'Session totals cover only captured loopback TCP port 4433 traffic, not all browser networking. '
@@ -136,6 +159,7 @@ def browser_metric_values(primary, browser_result, net):
         return values
     entry = primary[0]
     values.update(entry['handshake_metrics'])
+    values.update(entry.get('netlog_timings', {}))
     types = {v: k for k, v in net.get('constants', {}).get('logEventTypes', {}).items()}
     phases = net.get('constants', {}).get('logEventPhase', {})
     begin, end = phases.get('PHASE_BEGIN', 1), phases.get('PHASE_END', 2)
@@ -194,7 +218,8 @@ def save_comparison(output, result):
     """One row per correlated TCP stream; the shared schema keeps its column order."""
     fields = ('case', 'signature_profile', 'key_establishment', 'key_exchange_group',
               'classification', 'client_port',
-              *HANDSHAKE_FIELDS, *METRICS)
+              *HANDSHAKE_FIELDS, *NETLOG_CRYPTO_TIMING_FIELDS,
+              *NETLOG_TIMING_DIAGNOSTIC_FIELDS, *METRICS)
     with (output/'connection-metrics.csv').open('x', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
@@ -203,6 +228,7 @@ def save_comparison(output, result):
                 key_establishment=result.get('key_establishment'),
                 key_exchange_group=result.get('key_exchange_group'), classification=entry['classification'],
                 client_port=entry['client_port'], **entry['handshake_metrics'],
+                **entry.get('netlog_timings', {}),
                 **{key: entry[key] for key in METRICS}))
 
 
@@ -359,6 +385,117 @@ def plaintext_hellos(segments, initial_sequence):
     return found
 
 
+def netlog_crypto_timings(events, types, hello_count):
+    """Extract instrumented values only after dependency-component correlation."""
+    values = dict.fromkeys(NETLOG_CRYPTO_TIMING_FIELDS)
+    problems = []
+    names = {
+        'CREDENTIAL_VALIDATION_TIMING': (
+            ('credential_validation_total_ns', 'uint64'),
+            ('credential_type', ('x509', 'mtc')),
+            ('x509_signatures_ns', 'uint64'), ('x509_signature_count', 'uint64'),
+            ('x509_signature_cache_ns', 'uint64'),
+            ('x509_signature_cache_hits', 'uint64'),
+            ('x509_signature_cache_misses', 'uint64')),
+        'MTC_VERIFICATION_TIMING': (
+            ('mtc_total_ns', 'uint64'), ('merkle_leaf_hash_ns', 'uint64'),
+            ('merkle_path_ns', 'uint64'), ('merkle_total_ns', 'uint64'),
+            ('merkle_proof_ns', 'uint64'),
+            ('standalone_signatures_ns', 'uint64'),
+            ('standalone_signature_count', 'uint64'),
+            ('standalone_signature_cache_ns', 'uint64'),
+            ('standalone_signature_cache_hits', 'uint64'),
+            ('standalone_signature_cache_misses', 'uint64'),
+            ('verification_mode', ('landmark', 'standalone')),
+            ('success', 'bool')),
+        'SSL_CERTIFICATE_VERIFY_TIMING': (
+            ('certificate_verify_crypto_ns', 'uint64'),
+            ('elapsed_ns', 'uint64'), ('signature_algorithm', 'uint64'),
+            ('success', 'bool')),
+    }
+    outputs = {
+        'CREDENTIAL_VALIDATION_TIMING': {
+            'credential_validation_total_ns': 'credential_validation_total_ns',
+            'credential_type': 'credential_type', 'x509_signatures_ns': 'x509_signatures_ns',
+            'x509_signature_count': 'x509_signature_count',
+            'x509_signature_cache_ns': 'x509_signature_cache_ns',
+            'x509_signature_cache_hits': 'x509_signature_cache_hits',
+            'x509_signature_cache_misses': 'x509_signature_cache_misses'},
+        'MTC_VERIFICATION_TIMING': {
+            'mtc_total_ns': 'mtc_total_ns', 'merkle_leaf_hash_ns': 'merkle_leaf_hash_ns',
+            'merkle_path_ns': 'merkle_path_ns', 'merkle_total_ns': 'merkle_total_ns',
+            'merkle_proof_ns': 'merkle_proof_ns',
+            'standalone_signatures_ns': 'standalone_signatures_ns',
+            'standalone_signature_count': 'standalone_signature_count',
+            'standalone_signature_cache_ns': 'standalone_signature_cache_ns',
+            'standalone_signature_cache_hits': 'standalone_signature_cache_hits',
+            'standalone_signature_cache_misses': 'standalone_signature_cache_misses',
+            'verification_mode': 'mtc_verification_mode', 'success': 'mtc_success'},
+        'SSL_CERTIFICATE_VERIFY_TIMING': {
+            'certificate_verify_crypto_ns': 'certificate_verify_crypto_ns',
+            'elapsed_ns': 'certificate_verify_elapsed_ns',
+            'signature_algorithm': 'certificate_verify_algorithm',
+            'success': 'certificate_verify_success'},
+    }
+    required = {
+        'CREDENTIAL_VALIDATION_TIMING': ('credential_validation_total_ns',),
+        'MTC_VERIFICATION_TIMING': ('mtc_total_ns', 'success'),
+        'SSL_CERTIFICATE_VERIFY_TIMING': ('elapsed_ns', 'signature_algorithm', 'success'),
+    }
+
+    selected = {name: [] for name in names}
+    for event in events:
+        name = types.get(event.get('type'), event.get('type'))
+        if name in selected:
+            selected[name].append(event)
+    present = any(selected.values())
+    if hello_count != 1 and present:
+        return {**values, 'netlog_timing_status': 'AMBIGUOUS',
+                'netlog_timing_error': 'Dependency component contains multiple ClientHellos'}
+
+    for event_name, schema in names.items():
+        matches = selected[event_name]
+        if len(matches) > 1:
+            problems.append(f'{event_name}: expected at most one event, found {len(matches)}')
+            continue
+        if not matches:
+            continue
+        params = matches[0].get('params', {})
+        parsed = {}
+        try:
+            if not isinstance(params, dict):
+                raise ValueError('params is not an object')
+            missing = [name for name in required[event_name] if name not in params]
+            if missing:
+                raise ValueError('missing fields: ' + ', '.join(missing))
+            for input_name, kind in schema:
+                if input_name not in params:
+                    continue
+                value = params[input_name]
+                if kind == 'uint64':
+                    if isinstance(value, bool) or not isinstance(value, (int, str)):
+                        raise ValueError(f'{input_name} is not an unsigned integer')
+                    if isinstance(value, str) and (not value or not value.isdecimal()):
+                        raise ValueError(f'{input_name} is not an unsigned integer')
+                    value = int(value)
+                    if not 0 <= value < 1 << 64:
+                        raise ValueError(f'{input_name} is outside uint64')
+                elif kind == 'bool':
+                    if not isinstance(value, bool):
+                        raise ValueError(f'{input_name} is not boolean')
+                elif value not in kind:
+                    raise ValueError(f'{input_name} has unsupported value')
+                parsed[outputs[event_name][input_name]] = value
+        except (TypeError, ValueError) as error:
+            problems.append(f'{event_name}: {error}')
+            continue
+        values.update(parsed)
+
+    status = 'ERROR' if problems else ('OK' if present else 'UNAVAILABLE')
+    return {**values, 'netlog_timing_status': status,
+            'netlog_timing_error': '; '.join(problems) or None}
+
+
 def netlog_connections(net):
     """Index ClientHellos and conservative unused-TLS evidence by dependency component."""
     types = {v: k for k, v in net.get('constants', {}).get('logEventTypes', {}).items()}
@@ -455,7 +592,8 @@ def netlog_connections(net):
                                    aborted_unused_attempt=aborted,
                                    tls_completed=connected_at is not None,
                                    client_finished_observed=client_finished,
-                                   authentication_observed=authentication, http_request_observed=http_request)
+                                   authentication_observed=authentication, http_request_observed=http_request,
+                                   netlog_timings=netlog_crypto_timings(events, types, len(hellos)))
     return indexed
 
 
@@ -482,6 +620,10 @@ def correlation_diagnostics(output, matched, primary, net_connections, completed
                 netlog_http_request_observed=net.get('http_request_observed') if net else None,
                 netlog_auxiliary_tls_only=net.get('auxiliary_tls_only') if net else None,
                 netlog_aborted_unused_attempt=net.get('aborted_unused_attempt') if net else None,
+                netlog_timing_status=(net.get('netlog_timings', {}).get('netlog_timing_status')
+                                      if net else None),
+                netlog_timing_error=(net.get('netlog_timings', {}).get('netlog_timing_error')
+                                     if net else None),
                 server_finished_pair_observed=random in completed))
         connections.append(dict(
             tcp_stream=entry.get('stream'), client_port=entry.get('client_port'),
@@ -661,6 +803,13 @@ def analyze(output, capture, browser_result):
                          rejected_after_server_auth=all(rejected_after),
                          requested_tai_observed=all(item['requested_tai_observed'] for item in items),
                          classification=classifications[0] if len(set(classifications)) == 1 else 'other_correlated')
+            if len(randoms) == 1 and randoms[0] in net_connections:
+                entry['netlog_timings'] = net_connections[randoms[0]]['netlog_timings']
+            else:
+                entry['netlog_timings'] = {
+                    **dict.fromkeys(NETLOG_CRYPTO_TIMING_FIELDS),
+                    'netlog_timing_status': 'AMBIGUOUS',
+                    'netlog_timing_error': 'TCP stream does not map to exactly one NetLog ClientHello'}
             entry['handshake_metrics'] = handshake_metrics(
                 pcap_rows, entry['client_random'], credential_kind(browser_result))
             if (entry['classification'] == 'url_linked' and len(items) == 1

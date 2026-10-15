@@ -761,6 +761,31 @@ NetLog intervals use only its millisecond clock, never PCAP epoch subtraction.
 They are not an additive decomposition of process or handshake time. Missing or
 ambiguous intervals remain null; descriptive statistics report available `n`.
 
+The three cryptographic NetLog events are exported separately in their original
+nanoseconds. `credential_validation_total_ns` covers the selected
+`CertVerifyProc::Verify` path; `x509_signatures_ns` and
+`x509_signature_count` cover only effective certificate-signature cryptography
+on that selected candidate path. Cache lookup time and hit/miss counts use the
+separate `x509_signature_cache_*` fields. `mtc_total_ns` covers `VerifyMTC`,
+the `merkle_*_ns` fields retain the leaf, path, and direct inclusive Merkle
+intervals, and `standalone_signatures_ns` covers only effective Standalone
+signature cryptography. Its cache lookup metrics are likewise separate.
+`certificate_verify_crypto_ns` is the canonical TLS `CertificateVerify`
+cryptographic interval; `certificate_verify_elapsed_ns` remains its historical
+alias. These intervals can be nested or
+separate and must not be summed as an exclusive decomposition. Modes, algorithms
+and operation-local success values are retained alongside them.
+
+The events are not selected by timestamp or event name alone. The analyzer
+first follows NetLog `source_dependency` edges, requires a component with one
+exact ClientHello, and maps its random and bytes to the PCAP `tcp.stream` and
+server transcript. A missing event yields null fields and
+`netlog_timing_status=UNAVAILABLE`. Multiple ClientHellos, duplicate event kinds
+or malformed payloads yield an explicit diagnostic and no values for the
+ambiguous event family. This prevents auxiliary browser connections from
+supplying measurements to the requested navigation and preserves compatibility
+with older NetLogs.
+
 Capture runs enable Chromium's `--ssl-key-log-file` only for the owned
 capture, and `tshark` uses those keys in its single TSV extraction. `tls.keys`
 is created with mode **0600** and contains session secrets: keep it private,

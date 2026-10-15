@@ -76,6 +76,11 @@ def timing_netlog(target):
                 ])
 
 
+def add_timing_event(net, name, source=10, **params):
+    net['events'].append(dict(type=name, source=dict(id=source), time='105',
+                              phase=0, params=params))
+
+
 def auxiliary_netlog(reason, *, used=None, close_time=30, multiple_hellos=False):
     events = [
         dict(type='SSL_HANDSHAKE_MESSAGE_SENT', source=dict(id=1), time='10', phase=0,
@@ -101,6 +106,91 @@ def auxiliary_netlog(reason, *, used=None, close_time=30, multiple_hellos=False)
 
 
 class BrowserComparisonMetricsTests(unittest.TestCase):
+    def test_crypto_timings_follow_the_clienthello_dependency_component(self):
+        target = 'https://' + pcap.bv.HOST + ':4433/'
+        net = timing_netlog(target)
+        add_timing_event(net, 'CREDENTIAL_VALIDATION_TIMING',
+                         credential_validation_total_ns='9000', credential_type='mtc')
+        add_timing_event(net, 'MTC_VERIFICATION_TIMING', mtc_total_ns='7000',
+                         merkle_leaf_hash_ns='100', merkle_path_ns='200',
+                         merkle_total_ns='350', merkle_proof_ns='200',
+                         standalone_signatures_ns='6000',
+                         standalone_signature_count='2',
+                         standalone_signature_cache_ns='50',
+                         standalone_signature_cache_hits='1',
+                         standalone_signature_cache_misses='1',
+                         verification_mode='standalone', success=True)
+        add_timing_event(net, 'SSL_CERTIFICATE_VERIFY_TIMING',
+                         certificate_verify_crypto_ns='3000', elapsed_ns='3000',
+                         signature_algorithm=1027, success=True)
+        # Same event name on a disconnected browser connection must not be mixed in.
+        add_timing_event(net, 'SSL_CERTIFICATE_VERIFY_TIMING', source=99,
+                         elapsed_ns='999999', signature_algorithm=2052, success=False)
+        timings = pcap.netlog_connections(net)[shared.RANDOM]['netlog_timings']
+        self.assertEqual(timings['netlog_timing_status'], 'OK')
+        self.assertEqual(timings['credential_validation_total_ns'], 9000)
+        self.assertEqual(timings['credential_type'], 'mtc')
+        self.assertIsNone(timings['x509_signatures_ns'])
+        self.assertEqual(timings['mtc_total_ns'], 7000)
+        self.assertEqual(timings['merkle_leaf_hash_ns'], 100)
+        self.assertEqual(timings['merkle_path_ns'], 200)
+        self.assertEqual(timings['merkle_total_ns'], 350)
+        self.assertEqual(timings['merkle_proof_ns'], 200)
+        self.assertEqual(timings['standalone_signatures_ns'], 6000)
+        self.assertEqual(timings['standalone_signature_count'], 2)
+        self.assertEqual(timings['standalone_signature_cache_ns'], 50)
+        self.assertEqual(timings['mtc_verification_mode'], 'standalone')
+        self.assertTrue(timings['mtc_success'])
+        self.assertEqual(timings['certificate_verify_crypto_ns'], 3000)
+        self.assertEqual(timings['certificate_verify_elapsed_ns'], 3000)
+        self.assertEqual(timings['certificate_verify_algorithm'], 1027)
+        self.assertTrue(timings['certificate_verify_success'])
+
+    def test_old_netlog_has_null_crypto_timings(self):
+        target = 'https://' + pcap.bv.HOST + ':4433/'
+        timings = pcap.netlog_connections(
+            timing_netlog(target))[shared.RANDOM]['netlog_timings']
+        self.assertEqual(timings['netlog_timing_status'], 'UNAVAILABLE')
+        self.assertIsNone(timings['netlog_timing_error'])
+        for field in pcap.NETLOG_CRYPTO_TIMING_FIELDS:
+            self.assertIsNone(timings[field])
+
+    def test_duplicate_timing_kind_is_not_assigned(self):
+        target = 'https://' + pcap.bv.HOST + ':4433/'
+        net = timing_netlog(target)
+        for elapsed in ('1', '2'):
+            add_timing_event(net, 'SSL_CERTIFICATE_VERIFY_TIMING', elapsed_ns=elapsed,
+                             signature_algorithm=1027, success=True)
+        timings = pcap.netlog_connections(net)[shared.RANDOM]['netlog_timings']
+        self.assertEqual(timings['netlog_timing_status'], 'ERROR')
+        self.assertIn('expected at most one event', timings['netlog_timing_error'])
+        self.assertIsNone(timings['certificate_verify_elapsed_ns'])
+
+    def test_zero_duration_is_distinct_from_unexecuted_optional_region(self):
+        target = 'https://' + pcap.bv.HOST + ':4433/'
+        net = timing_netlog(target)
+        add_timing_event(net, 'CREDENTIAL_VALIDATION_TIMING',
+                         credential_validation_total_ns='0', credential_type='x509',
+                         x509_signatures_ns='0')
+        timings = pcap.netlog_connections(net)[shared.RANDOM]['netlog_timings']
+        self.assertEqual(timings['credential_validation_total_ns'], 0)
+        self.assertEqual(timings['x509_signatures_ns'], 0)
+        self.assertIsNone(timings['mtc_total_ns'])
+
+    def test_unique_primary_exports_component_timings_to_comparison_row(self):
+        target = 'https://' + pcap.bv.HOST + ':4433/'
+        net = timing_netlog(target)
+        add_timing_event(net, 'SSL_CERTIFICATE_VERIFY_TIMING', elapsed_ns='3000',
+                         signature_algorithm=1027, success=True)
+        entry = connection()
+        entry['netlog_timings'] = pcap.netlog_connections(
+            net)[shared.RANDOM]['netlog_timings']
+        values = pcap.browser_metric_values([entry], dict(target_url=target), net)
+        self.assertEqual(values['certificate_verify_elapsed_ns'], 3000)
+        self.assertEqual(values['certificate_verify_algorithm'], 1027)
+        self.assertTrue(values['certificate_verify_success'])
+        self.assertEqual(values['netlog_timing_status'], 'OK')
+
     def test_unused_tls_accepts_only_supported_post_connect_close_reasons(self):
         for reason in ('Socket pool destroyed', 'Network changed'):
             with self.subTest(reason=reason):
@@ -432,7 +522,8 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
                 self.assertEqual(reader.fieldnames,
                                  ['case', 'signature_profile', 'key_establishment', 'key_exchange_group',
                                   'classification', 'client_port',
-                                  *shared.p.METRIC_FIELDS, *pcap.METRICS])
+                                  *shared.p.METRIC_FIELDS, *pcap.NETLOG_CRYPTO_TIMING_FIELDS,
+                                  *pcap.NETLOG_TIMING_DIAGNOSTIC_FIELDS, *pcap.METRICS])
                 rows = list(reader)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['case'], 'mtc-positive')
@@ -440,6 +531,7 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
         self.assertEqual(rows[0]['client_random'], shared.RANDOM)
         self.assertEqual(rows[0]['tls_handshake_wire_bytes'], '')
         self.assertEqual(rows[0]['tls_client_handshake_bytes'], '150')
+        self.assertEqual(rows[0]['credential_validation_total_ns'], '')
 
     def test_pilot_csv_retains_nullable_comparisons_and_available_sample_counts(self):
         rows = []
@@ -549,7 +641,7 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
     def test_all_profile_warmup_and_measurement_totals(self):
         profiles = measurements.CAMPAIGN_PROFILES
         for pairs, warmups, measured, warmup_runs in (
-                (1, 1, 15, 15), (3, 1, 45, 15), (30, 5, 450, 75)):
+                (1, 1, 18, 18), (3, 1, 54, 18), (30, 5, 540, 90)):
             totals = measurements.campaign_totals(
                 profiles, pairs, warmups)
             self.assertEqual(totals['total_measurements'], measured)
