@@ -5,6 +5,12 @@ All v2 durations are measured directly with `CLOCK_MONOTONIC`, stored as
 is `null` in the native JSON record and an empty CSV cell; a measured zero is
 `0`. Historical millisecond fields remain unchanged.
 
+`credential_type` identifies the credential path evidenced by the records from
+the single measured `s_client` connection. It is `mtc` when that invocation
+emits `MTC_VERIFY`, and `x509` for a schema-v2 `NATIVE_METRICS` record without
+an MTC verification record. Historical records without a schema version leave
+the field empty. The value is not inferred from the campaign case name.
+
 | Metric | Start | End | Includes | Excludes | Applies | Chromium relation |
 |---|---|---|---|---|---|---|
 | `credential_validation_total_ns` | Entry to the client `ssl_verify_internal()` wrapper | Return from the same invocation, including failure | Complete selected peer-credential validation: native X.509 path processing or the configured MTC callback and its local constraint checks | TLS `CertificateVerify`, earlier TLS parsing and later handshake states | X.509, Landmark, Standalone | Same logical operation as `credential_validation_total_ns` around `CertVerifyProc::Verify()`, but implementation boundaries are not instruction-identical |
@@ -13,6 +19,7 @@ is `null` in the native JSON record and an empty CSV cell; a measured zero is
 | `merkle_leaf_hash_ns` | Before MTC leaf construction/hash | After `leaf_hash()` | Leaf encoding and hashing | Merkle path evaluation | Landmark, Standalone | `merkle_leaf_hash_ns` |
 | `merkle_path_ns` | Before `mtc_eval()` | After `mtc_eval()` | Merkle inclusion-path evaluation | Leaf hashing and later trust/signature checks | Landmark, Standalone | `merkle_path_ns`; Chromium `merkle_proof_ns` is its historical alias |
 | `merkle_total_ns` | Before leaf hashing | After path evaluation | Inclusive leaf-plus-path region | Landmark comparison and Standalone signatures | Landmark, Standalone | `merkle_total_ns` |
+| `landmark_trust_ns` | After successful Landmark signature-block structural validation | Trusted-subtree match, root mismatch, or completion of the trusted-subtree search | Trusted-subtree lookup and reconstructed-root comparison | Merkle processing, signature-block parsing, debug output and Standalone signatures | Landmark | Same logical trust decision as Chromium `landmark_trust_ns`; implementation-specific lookup structures differ |
 | `x509_signatures_ns` | Immediately before each effective selected-chain `EVP_DigestVerify()` | Immediately after it returns | Successful and failed cryptographic X.509 certificate-signature operations actually executed | Path construction, policy, cache work and MTC | X.509 built-in verifier only | `x509_signatures_ns` |
 | `standalone_signatures_ns` | Immediately before each effective Standalone proof signature primitive | Immediately after it returns | Standalone cryptographic signature operations | Merkle work and unavailable cache measurements | Standalone | `standalone_signatures_ns` |
 | `certificate_verify_crypto_ns` | Immediately before TLS `EVP_DigestVerify()` | Immediately after it returns | Peer TLS 1.3 `CertificateVerify` cryptography | Credential-chain validation | All certificate-authenticated TLS cases | `certificate_verify_crypto_ns`; Chromium keeps `elapsed_ns` as a historical alias |

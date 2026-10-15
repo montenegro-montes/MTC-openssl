@@ -18,12 +18,14 @@ typedef struct {
     uint64_t merkle_leaf_hash_ns;
     uint64_t merkle_path_ns;
     uint64_t merkle_total_ns;
+    uint64_t landmark_trust_ns;
     uint64_t standalone_signatures_ns;
     uint64_t standalone_signature_count;
     int has_mtc_total_ns;
     int has_merkle_leaf_hash_ns;
     int has_merkle_path_ns;
     int has_merkle_total_ns;
+    int has_landmark_trust_ns;
     int has_standalone_signatures_ns;
     int standalone_signatures_overflow;
     int has_verification_mode;

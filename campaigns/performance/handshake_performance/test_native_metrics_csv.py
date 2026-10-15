@@ -30,7 +30,7 @@ def mtc(mode, **updates):
         "merkle_proof_ms": 0.01,
         "landmark_validation_ms": 0.02 if mode == "landmark" else None,
         "standalone_validation_ms": 0.03 if mode == "standalone" else None,
-        "verification_mode": mode,
+        "mtc_verification_mode": mode,
         "mtc_success": True,
     }
     record.update(updates)
@@ -54,6 +54,15 @@ class NativeMetricsCsvTests(unittest.TestCase):
         ]
         self.assertEqual(fields[:len(historical_prefix)], historical_prefix)
         self.assertEqual(fields[len(historical_prefix):], list(metrics.V2_FIELDS))
+        expected_values = len(metrics.HISTORICAL_FIELDS) + len(metrics.V2_FIELDS)
+        expected_array = expected_values + 1
+        self.assertIn(
+            f"-eq {expected_array} && "
+            f"${{native_metrics[{expected_array - 1}]}} == __END__",
+            launcher)
+        self.assertIn(
+            f'"${{native_metrics[@]:12:{len(metrics.V2_FIELDS)}}}"',
+            launcher)
 
     def test_x509_positive_accepts_integer_and_decimal_string(self):
         parsed = metrics.parse_native_metrics(native(
@@ -63,6 +72,7 @@ class NativeMetricsCsvTests(unittest.TestCase):
             credential_validation_total_ns="200",
             handshake_total_ns=500), "x509-simple-d3")
         self.assertEqual(parsed["timing_schema_version"], 2)
+        self.assertEqual(parsed["credential_type"], "x509")
         self.assertEqual(parsed["x509_signatures_ns"], 123)
         self.assertEqual(parsed["x509_signature_count"], 2)
         self.assertEqual(parsed["certificate_verify_crypto_ns"], 45)
@@ -73,13 +83,38 @@ class NativeMetricsCsvTests(unittest.TestCase):
         text = native(credential_validation_total_ns=120,
                       handshake_total_ns=300) + "\n" + mtc(
             "landmark", mtc_total_ns=90, merkle_leaf_hash_ns="10",
-            merkle_path_ns=20, merkle_total_ns="35")
+            merkle_path_ns=20, merkle_total_ns="35",
+            landmark_trust_ns="17")
         parsed = metrics.parse_native_metrics(text, "mtc-simple-landmark")
         self.assertEqual(parsed["mtc_total_ns"], 90)
         self.assertEqual(parsed["merkle_leaf_hash_ns"], 10)
         self.assertEqual(parsed["merkle_path_ns"], 20)
         self.assertEqual(parsed["merkle_total_ns"], 35)
+        self.assertEqual(parsed["landmark_trust_ns"], 17)
+        self.assertEqual(parsed["credential_type"], "mtc")
         self.assertIsNone(parsed.get("standalone_signatures_ns"))
+
+    def test_historical_verification_mode_name_is_accepted(self):
+        historical_mtc = mtc(
+            "landmark", mtc_total_ns=90, landmark_trust_ns=17).replace(
+                '"mtc_verification_mode":"landmark"',
+                '"verification_mode":"landmark"')
+        parsed = metrics.parse_native_metrics(
+            native(credential_validation_total_ns=120,
+                   handshake_total_ns=300) + "\n" + historical_mtc,
+            "mtc-simple-landmark")
+        self.assertEqual(parsed["mtc_verification_mode"], "landmark")
+
+    def test_landmark_trust_zero_is_not_conflated_with_null(self):
+        text = native(credential_validation_total_ns=120,
+                      handshake_total_ns=300) + "\n" + mtc(
+            "landmark", mtc_total_ns=90, landmark_trust_ns=0)
+        parsed = metrics.parse_native_metrics(text, "mtc-simple-landmark")
+        row = dict(zip(
+            (*metrics.HISTORICAL_FIELDS, *metrics.V2_FIELDS),
+            metrics.csv_values(parsed)))
+        self.assertEqual(parsed["landmark_trust_ns"], 0)
+        self.assertEqual(row["landmark_trust_ns"], "0")
 
     def test_standalone_exports_signature_and_cache_fields(self):
         text = native(credential_validation_total_ns=1000,
@@ -91,10 +126,12 @@ class NativeMetricsCsvTests(unittest.TestCase):
             standalone_signature_cache_hits=1,
             standalone_signature_cache_misses="1")
         parsed = metrics.parse_native_metrics(text, "mtc-simple-standalone")
+        self.assertEqual(parsed["credential_type"], "mtc")
         self.assertEqual(parsed["standalone_signatures_ns"], 700)
         self.assertEqual(parsed["standalone_signature_count"], 2)
         self.assertEqual(parsed["standalone_signature_cache_ns"], 11)
         self.assertTrue(parsed["mtc_success"])
+        self.assertIsNone(parsed.get("landmark_trust_ns"))
 
     def test_absent_and_null_fields_produce_empty_cells(self):
         parsed = metrics.parse_native_metrics(
@@ -104,6 +141,7 @@ class NativeMetricsCsvTests(unittest.TestCase):
             metrics.csv_values(parsed)))
         self.assertEqual(row["x509_signatures_ns"], "")
         self.assertEqual(row["x509_signature_cache_ns"], "")
+        self.assertEqual(row["landmark_trust_ns"], "")
 
     def test_zero_is_not_conflated_with_null(self):
         parsed = metrics.parse_native_metrics(native(
@@ -164,6 +202,7 @@ class NativeMetricsCsvTests(unittest.TestCase):
         parsed = metrics.parse_native_metrics(
             old_native + "\n" + old_mtc, "mtc-simple-landmark")
         self.assertIsNone(parsed["timing_schema_version"])
+        self.assertIsNone(parsed["credential_type"])
         self.assertIsNone(parsed.get("mtc_total_ns"))
         self.assertEqual(parsed["mtc_credential_auth_ms"], 0.2)
 

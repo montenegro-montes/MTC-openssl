@@ -566,6 +566,9 @@ end:
         if(timing.has_merkle_path_ns)fprintf(stderr,"%llu",(unsigned long long)timing.merkle_path_ns);else fputs("null",stderr);
         fputs(",\"merkle_total_ns\":",stderr);
         if(timing.has_merkle_total_ns)fprintf(stderr,"%llu",(unsigned long long)timing.merkle_total_ns);else fputs("null",stderr);
+        fputs(",\"landmark_trust_ns\":",stderr);
+        if(timing.has_landmark_trust_ns)fprintf(stderr,"%llu",(unsigned long long)timing.landmark_trust_ns);
+        else fputs("null",stderr);
         fputs(",\"standalone_signatures_ns\":",stderr);
         if(timing.has_standalone_signatures_ns)
             fprintf(stderr,"\"%llu\"",(unsigned long long)timing.standalone_signatures_ns);
@@ -577,7 +580,7 @@ end:
         fputs(",\"standalone_signature_cache_ns\":null",stderr);
         fputs(",\"standalone_signature_cache_hits\":null",stderr);
         fputs(",\"standalone_signature_cache_misses\":null",stderr);
-        fputs(",\"verification_mode\":",stderr);
+        fputs(",\"mtc_verification_mode\":",stderr);
         if(timing.has_verification_mode)
             fprintf(stderr,"\"%s\"",timing.verification_mode==MTC_VERIFICATION_MODE_LANDMARK?"landmark":"standalone");
         else fputs("null",stderr);

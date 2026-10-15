@@ -814,7 +814,7 @@ measure_native() {
   local output=$1 profile case_name phase count repetition log start end elapsed read written tcp_ms handshake_ms establishment_ms x509_ms certificate_verify_ms credential_ms authentication_ms credential_other_ms done_count=0 total_count started now eta metrics_text
   local -a native_metrics
   total_count=$(( ${#PROFILES[@]} * ${#ACTIVE_CASES[@]} * (WARMUPS + RUNS) )); started=$(date +%s)
-  printf 'profile,case,key_establishment,openssl_group,phase,repetition,tcp_connect_wall_ms_native,handshake_wall_ms,connection_establishment_wall_ms_native,x509_verification_ms,mtc_credential_auth_ms,merkle_proof_ms,landmark_validation_ms,standalone_validation_ms,certificate_verify_ms,credential_verification_total_ms,client_authentication_verification_total_ms,credential_verification_other_ms,process_wall_ms,tls_bytes_read,tls_bytes_written,tls_bytes_total,timing_schema_version,mtc_total_ns,merkle_leaf_hash_ns,merkle_path_ns,merkle_total_ns,x509_signatures_ns,x509_signature_count,x509_signatures_scope,x509_signature_cache_ns,x509_signature_cache_hits,x509_signature_cache_misses,standalone_signatures_ns,standalone_signature_count,standalone_signature_cache_ns,standalone_signature_cache_hits,standalone_signature_cache_misses,certificate_verify_crypto_ns,credential_validation_total_ns,handshake_total_ns,verification_mode,mtc_success\n' > "$output/native.csv"
+  printf 'profile,case,key_establishment,openssl_group,phase,repetition,tcp_connect_wall_ms_native,handshake_wall_ms,connection_establishment_wall_ms_native,x509_verification_ms,mtc_credential_auth_ms,merkle_proof_ms,landmark_validation_ms,standalone_validation_ms,certificate_verify_ms,credential_verification_total_ms,client_authentication_verification_total_ms,credential_verification_other_ms,process_wall_ms,tls_bytes_read,tls_bytes_written,tls_bytes_total,timing_schema_version,credential_type,mtc_total_ns,merkle_leaf_hash_ns,merkle_path_ns,merkle_total_ns,landmark_trust_ns,x509_signatures_ns,x509_signature_count,x509_signatures_scope,x509_signature_cache_ns,x509_signature_cache_hits,x509_signature_cache_misses,standalone_signatures_ns,standalone_signature_count,standalone_signature_cache_ns,standalone_signature_cache_hits,standalone_signature_cache_misses,certificate_verify_crypto_ns,credential_validation_total_ns,handshake_total_ns,mtc_verification_mode,mtc_success\n' > "$output/native.csv"
   printf '\nNATIVE MEASUREMENTS — 9 profiles × %d authentication cases\n' "${#ACTIVE_CASES[@]}"
   for profile in "${PROFILES[@]}"; do
    for case_name in "${ACTIVE_CASES[@]}"; do
@@ -841,7 +841,7 @@ measure_native() {
         [[ -n "$read" && -n "$written" ]] || fail "$case_name byte counters missing"
         metrics_text=$(python3 "$REPO/campaigns/performance/handshake_performance/native_metrics_csv.py" "$log" "$case_name") || fail "$profile $case_name native timing metrics invalid; inspect $log"
         IFS='|' read -r -a native_metrics <<< "$metrics_text"
-        [[ ${#native_metrics[@]} -eq 34 && ${native_metrics[33]} == __END__ ]] || fail "$profile $case_name native timing parser returned an invalid field count; inspect $log"
+        [[ ${#native_metrics[@]} -eq 36 && ${native_metrics[35]} == __END__ ]] || fail "$profile $case_name native timing parser returned an invalid field count; inspect $log"
         tcp_ms=${native_metrics[0]}; handshake_ms=${native_metrics[1]}; establishment_ms=${native_metrics[2]}; x509_ms=${native_metrics[3]}
         certificate_verify_ms=${native_metrics[8]}; credential_ms=${native_metrics[9]}; authentication_ms=${native_metrics[10]}; credential_other_ms=${native_metrics[11]}
         [[ -n "$tcp_ms" && -n "$handshake_ms" && -n "$establishment_ms" && -n "$x509_ms" && -n "$certificate_verify_ms" && -n "$credential_ms" && -n "$authentication_ms" && -n "$credential_other_ms" ]] || fail "$profile $case_name native TCP/TLS/verification metrics missing; inspect $log"
@@ -850,7 +850,7 @@ measure_native() {
           printf '%s,%s,%s,%s,%s,%s,' "$profile" "$case_name" "$KEM_LABEL" "$KEM_GROUP" "$phase" "$repetition"
           printf '%s,' "${native_metrics[@]:0:12}"
           printf '%s,%s,%s,%s' "$elapsed" "$read" "$written" "$((read+written))"
-          printf ',%s' "${native_metrics[@]:12:21}"
+          printf ',%s' "${native_metrics[@]:12:23}"
           printf '\n'
         } >> "$output/native.csv"
         done_count=$((done_count+1)); now=$(date +%s); eta=$(( done_count ? (now-started)*(total_count-done_count)/done_count : 0 ))

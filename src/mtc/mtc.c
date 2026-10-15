@@ -853,20 +853,41 @@ static int mtc_verify_timed_impl(X509 *x,MTCConfig *c,MTCVerificationTiming *tim
         size_t ignored_signature_count;
         begin=tick();
         if(!signature_block_v2(sigs,&ignored_signature_count))return 0;
+        struct timespec landmark_start;
+        int landmark_clock=
+            timing&&clock_gettime(CLOCK_MONOTONIC,&landmark_start)==0;
         for(unsigned i=0;i<c->ntrusted;i++)
             if(c->trusted[i].log==c->log&&
                c->trusted[i].start==start&&c->trusted[i].end==end){
                 int ok=!CRYPTO_memcmp(root,c->trusted[i].hash,32);
-                if(timing)timing->landmark_validation_ms=tick()-begin;
+                if(timing){
+                    timing->landmark_validation_ms=tick()-begin;
+                    if(landmark_clock)
+                        timing->has_landmark_trust_ns=
+                            elapsed_monotonic_ns(&landmark_start,
+                                                 &timing->landmark_trust_ns);
+                }
                 return ok;
             }
         for(unsigned i=0;i<c->nsubs;i++)
             if(c->subs[i].start==start&&c->subs[i].end==end){
                 int ok=!CRYPTO_memcmp(root,c->subs[i].hash,32);
-                if(timing)timing->landmark_validation_ms=tick()-begin;
+                if(timing){
+                    timing->landmark_validation_ms=tick()-begin;
+                    if(landmark_clock)
+                        timing->has_landmark_trust_ns=
+                            elapsed_monotonic_ns(&landmark_start,
+                                                 &timing->landmark_trust_ns);
+                }
                 return ok;
             }
-        if(timing)timing->landmark_validation_ms=tick()-begin;
+        if(timing){
+            timing->landmark_validation_ms=tick()-begin;
+            if(landmark_clock)
+                timing->has_landmark_trust_ns=
+                    elapsed_monotonic_ns(&landmark_start,
+                                         &timing->landmark_trust_ns);
+        }
         return 0;
     }
     if(timing){timing->has_verification_mode=1;timing->verification_mode=MTC_VERIFICATION_MODE_STANDALONE;}

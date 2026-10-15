@@ -23,10 +23,12 @@ HISTORICAL_FIELDS = (
 
 V2_FIELDS = (
     "timing_schema_version",
+    "credential_type",
     "mtc_total_ns",
     "merkle_leaf_hash_ns",
     "merkle_path_ns",
     "merkle_total_ns",
+    "landmark_trust_ns",
     "x509_signatures_ns",
     "x509_signature_count",
     "x509_signatures_scope",
@@ -41,7 +43,7 @@ V2_FIELDS = (
     "certificate_verify_crypto_ns",
     "credential_validation_total_ns",
     "handshake_total_ns",
-    "verification_mode",
+    "mtc_verification_mode",
     "mtc_success",
 )
 
@@ -50,6 +52,7 @@ UINT64_FIELDS = {
     "merkle_leaf_hash_ns",
     "merkle_path_ns",
     "merkle_total_ns",
+    "landmark_trust_ns",
     "x509_signatures_ns",
     "x509_signature_count",
     "x509_signature_cache_ns",
@@ -82,12 +85,13 @@ MTC_V2_FIELDS = (
     "merkle_leaf_hash_ns",
     "merkle_path_ns",
     "merkle_total_ns",
+    "landmark_trust_ns",
     "standalone_signatures_ns",
     "standalone_signature_count",
     "standalone_signature_cache_ns",
     "standalone_signature_cache_hits",
     "standalone_signature_cache_misses",
-    "verification_mode",
+    "mtc_verification_mode",
     "mtc_success",
 )
 
@@ -192,13 +196,16 @@ def parse_native_metrics(text, case_name):
         "landmark_validation_ms": None,
         "standalone_validation_ms": None,
     }
-    mtc_record = None
-    if case_name.startswith("mtc-"):
-        mtc_records = _records(text, "MTC_VERIFY")
-        if not mtc_records:
-            raise ValueError("MTC verification metrics missing")
-        mtc_record = mtc_records[-1]
+    mtc_records = _records(text, "MTC_VERIFY")
+    mtc_record = mtc_records[-1] if mtc_records else None
+    if case_name.startswith("mtc-") and mtc_record is None:
+        raise ValueError("MTC verification metrics missing")
+    if mtc_record is not None:
+        if ("mtc_verification_mode" not in mtc_record
+                and "verification_mode" in mtc_record):
+            mtc_record["mtc_verification_mode"] = mtc_record["verification_mode"]
         mtc.update(mtc_record)
+    if case_name.startswith("mtc-"):
         if mtc.get("mtc_credential_auth_ms") is None:
             raise ValueError("MTC credential authentication metric is unavailable")
         if mtc.get("merkle_proof_ms") is None:
@@ -216,6 +223,10 @@ def parse_native_metrics(text, case_name):
             "incompatible timing_schema_version: "
             f"NATIVE_METRICS={native_schema}, MTC_VERIFY={mtc_schema}")
     schema = native_schema if native_schema is not None else mtc_schema
+
+    credential_type = None
+    if schema is not None:
+        credential_type = "mtc" if mtc_record is not None else "x509"
 
     suboperations = sum(mtc.get(field) or 0.0 for field in (
         "merkle_proof_ms", "landmark_validation_ms",
@@ -245,6 +256,7 @@ def parse_native_metrics(text, case_name):
             native["client_authentication_verification_total_ms"],
         "credential_verification_other_ms": other,
         "timing_schema_version": schema,
+        "credential_type": credential_type,
     }
     for field in NATIVE_V2_FIELDS:
         values[field] = native.get(field)
