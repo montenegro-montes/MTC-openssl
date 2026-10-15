@@ -34,7 +34,7 @@ leaf 0's CN and DNS SAN, and both `s_client -servername` and
 `-verify_hostname` during validation. Other leaves retain `member-N.lab`.
 
 The following MTC properties remain unchanged:
-- draft-06 MTC semantics
+- draft-07 MTC semantics
 - CA and registry IDs
 - log and serial-number rules
 - landmark semantics
@@ -155,7 +155,7 @@ OpenSSL/MTC server
    v
 Chromium
    |
-   | draft-06 MTC validation
+   | draft-07 MTC validation
    | hostname = server.mtc.example.com
    | Finished
    v
@@ -473,7 +473,7 @@ If none is valid, `fixtures.py generate` and `fixtures.py validate` are explicit
 called with the canonical hostname into fresh timestamped directories. A failed
 generation/validation stops preparation. The image must already exist; no image
 build is attempted. An anchor is reused only when its full content equals the
-current draft-06 exporter/parser output, including trust-file hash and subtree
+current draft-07 exporter/parser output, including trust-file hash and subtree
 hashes. Otherwise a new anchor is exported into the new result directory; old
 anchors are preserved.
 
@@ -578,7 +578,7 @@ earlier negotiation failure or incomplete evidence remains INCONCLUSIVE.
 Headless suitability is established only by a successful real positive case,
 not by `--headless` being accepted on the command line.
 
-The explicit Plants-06 landmark/standalone functional checks are reuse-only and
+The explicit Plants-07 landmark/standalone functional checks are reuse-only and
 positive-only. Each requires an explicit fixture whose existing validation
 contains a successful `ecdsa-p256`, N=16 cell for the selected mode. Landmark
 uses `landmark-0000.pem` and its trusted subtrees; standalone uses
@@ -590,8 +590,8 @@ bin/browser_client/mt-chromium-tests browser-validation \
   --mtc-trust-mode standalone \
   --profile ecdsa-p256 \
   --key-establishment x25519-mlkem768 \
-  --mtc-fixture artifacts/mtc/chromium-interop-plants06-20261006T070034Z-40065 \
-  --mtc-validation artifacts/mtc/chromium-interop-plants06-20261006T070034Z-40065-validation/validation.json
+  --mtc-fixture artifacts/mtc/chromium-plants07-ecdsa-p256-n16-20261013T125008Z-62935 \
+  --mtc-validation artifacts/mtc/chromium-plants07-ecdsa-p256-n16-20261013T125008Z-62935-validation/validation.json
 ```
 
 Select landmark with the same fixture/evidence pair by replacing the option
@@ -827,7 +827,7 @@ comparability.
 `credential_size_analysis.py` audits the existing formal X.509 fixture and the
 selected N=16 landmark/standalone fixtures for all five measurement profiles.
 It never generates credentials. The component partition uses the existing
-Plants-06 and DER parsers; anchors are reported as out-of-band provisioning
+Plants-07 and DER parsers; anchors are reported as out-of-band provisioning
 bytes. An optional measurements CSV reconciles fixture DER with the complete
 TLS 1.3 Certificate handshake message, including its framing but excluding the
 separate CertificateVerify signature:

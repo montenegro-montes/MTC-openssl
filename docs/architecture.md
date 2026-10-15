@@ -14,6 +14,6 @@ bin/base/mt-lab chromium-test
 ```
 
 This bounded integration follows `RP HTTP -> MTS1 trusted subtrees -> Chromium
-Plants-06 -> MTC verification -> TLS 1.3 -> HTTP`. It uses the exact
+Plants-07 -> MTC verification -> TLS 1.3 -> HTTP`. It uses the exact
 `MT_LAB_FIXTURE` and its matching pre-existing validation evidence; it does not
 generate or select a replacement fixture.
