@@ -49,7 +49,9 @@ class AnchorPersistenceTests(unittest.TestCase):
         result, export = self.choose()
         export.assert_called_once()
         self.assertEqual(bv.read(self.canonical), self.expected)
-        self.assertEqual(bv.read(self.output / 'chromium-anchor.json'), self.expected)
+        self.assertEqual(
+            bv.read(self.output/'chromium-anchor-landmark.json'),
+            self.expected)
         self.assertEqual(result['anchor'], str(self.canonical.resolve()))
         self.assertEqual(result['anchor_origin'], 'generated')
 
@@ -61,7 +63,8 @@ class AnchorPersistenceTests(unittest.TestCase):
         export.assert_not_called()
         self.assertEqual(result['anchor_origin'], 'reused')
         self.assertEqual(result['anchor'], str(self.canonical.resolve()))
-        self.assertFalse((second_output / 'chromium-anchor.json').exists())
+        self.assertFalse(
+            (second_output/'chromium-anchor-landmark.json').exists())
 
     def test_mismatched_canonical_anchor_fails_closed_without_overwrite(self):
         wrong = {'wrong': True}
@@ -80,9 +83,29 @@ class AnchorPersistenceTests(unittest.TestCase):
         result, export = self.choose()
         self.assertEqual(result['anchor'], str(standalone.resolve()))
         self.assertEqual(bv.read(standalone), self.expected)
+        self.assertEqual(
+            bv.read(self.output/'chromium-anchor-standalone.json'),
+            self.expected)
         self.assertIn('--trust-mode', export.call_args.args[0])
         self.assertIn('standalone', export.call_args.args[0])
         self.assertFalse(self.canonical.exists())
+
+    def test_standalone_output_does_not_collide_with_landmark_output(self):
+        bv.write(self.output/'chromium-anchor-landmark.json',
+                 {'mode': 'landmark'})
+        self.mtc['mode'] = 'standalone'
+
+        result, export = self.choose()
+
+        export.assert_called_once()
+        self.assertEqual(
+            bv.read(self.output/'chromium-anchor-landmark.json'),
+            {'mode': 'landmark'})
+        self.assertEqual(
+            bv.read(self.output/'chromium-anchor-standalone.json'),
+            self.expected)
+        self.assertTrue(result['anchor'].endswith(
+            '-chromium-anchor-standalone.json'))
 
     def test_measurements_discovers_canonical_after_result_directory_is_removed(self):
         self.choose()

@@ -479,14 +479,30 @@ MENU
   esac
  done
 )
-case "${1:-help}" in
+case "${1:-menu}" in
  help|--help|-h) cat <<'HELP'
-Usage: mt-chromium-tests menu|menu-status|status|preflight [--strict] [--check-capture] [--profile PROFILE] [--depth D] [--mtc-trust-mode MODE]
-  browser-validation plan|status|run CASE [existing campaign options]
-  browser-validation run-prevalidated-mtc mtc-positive --mtc-fixture PATH --mtc-validation FILE [options]
-  browser-pcap plan|requirements|status|run CASE [existing campaign options]
-  browser-measurements readiness|plan|requirements|status|run [existing campaign options]
-  network-experiments (not implemented)
+Usage: mt-chromium-tests [COMMAND] [OPTIONS]
+
+With no command, the interactive menu is opened.
+
+Commands:
+  menu                  Open the interactive menu
+  menu-status           Show the combined tests/experiments status
+  status                Show validation, PCAP and measurement status
+  preflight             Run the read-only readiness checks
+  browser-validation    Plan, inspect or run functional browser validation
+  browser-pcap          Plan, inspect or run browser PCAP validation
+  browser-measurements  Prepare, inspect or run browser measurements
+  network-experiments   Not implemented
+  help, --help, -h      Show this help
+
+Command forms:
+  mt-chromium-tests preflight [--strict] [--check-capture] [--profile PROFILE] [--depth D] [--mtc-trust-mode MODE]
+  mt-chromium-tests browser-validation plan|status|run CASE [existing campaign options]
+  mt-chromium-tests browser-validation run-prevalidated-mtc mtc-positive --mtc-fixture PATH --mtc-validation FILE [options]
+  mt-chromium-tests browser-pcap plan|requirements|status|run CASE [existing campaign options]
+  mt-chromium-tests browser-measurements readiness|plan|requirements|status|run [existing campaign options]
+
 KEM: x25519 or x25519-mlkem768. DEPTH: 2, 3, 4 or 5.
 Preflight defaults to development/read-only. Strict requires pinned commits and matching build-result.json evidence. --check-capture starts only a temporary permission probe.
 Browser measurements prepare and validate dependencies before starting. Other test workflows require explicit setup.

@@ -184,6 +184,24 @@ class CredentialPreselectionTests(unittest.TestCase):
         self.assertTrue(standalone['anchor'].endswith(
             '-chromium-anchor-standalone.json'))
 
+    def test_choose_anchor_promotes_valid_legacy_landmark_anchor(self):
+        expected = {'anchor': 'exact'}
+        fixture, _ = self.mtc('legacy-landmark')
+        legacy = fixture.with_name(fixture.name+'-chromium.json')
+        bv.write(legacy, expected)
+        output = self.repo/'output'
+        output.mkdir()
+        mtc = dict(fixture=str(fixture), mode='landmark')
+
+        with patch.object(bv, 'expected_anchor', return_value=expected):
+            selected = bv.choose_anchor(mtc, output)
+
+        canonical = fixture.with_name(
+            fixture.name+'-chromium-anchor.json')
+        self.assertEqual(bv.read(canonical), expected)
+        self.assertEqual(Path(selected['anchor']), canonical.resolve())
+        self.assertEqual(selected['anchor_origin'], 'reused')
+
     def test_setup_selection_allows_only_a_missing_canonical_anchor(self):
         expected = {'anchor': 'exact'}
         fixture, _ = self.mtc('standalone-needs-anchor')
@@ -281,6 +299,7 @@ class CredentialPreselectionTests(unittest.TestCase):
         output = self.repo/'output'; output.mkdir()
         selected = dict(fixture='/selected/fixture', ca_id='32473.101',
                         selected_tai='selected', requested_tai='requested',
+                        validation_evidence='/selected-validation/validation.json',
                         anchor='/selected/anchor', anchor_sha256='a'*64,
                         anchor_origin='reused')
         validate = Mock(side_effect=ValueError('cryptographic failure'))
@@ -292,7 +311,9 @@ class CredentialPreselectionTests(unittest.TestCase):
                     self.repo, output, 'image', profile='ecdsa-p256', depth=2,
                     x509_fixture_set='chromium-x509-depth-matrix-v1',
                     optimized_all_profiles=True)
-        validate.assert_called_once_with(Path('/selected/fixture'), 'ecdsa-p256', 'image')
+        validate.assert_called_once_with(
+            Path('/selected/fixture'), 'ecdsa-p256', 'image',
+            validation_evidence='/selected-validation/validation.json')
         fallback.assert_not_called()
 
     def test_dependency_preparation_reuses_both_modes_without_generation(self):

@@ -319,7 +319,7 @@ def web_leaf(cert_path, key_path, *, profile=PROFILE, image='mt-tls-mtc:local',
 
 
 def validate_mtc(fixture, profile=PROFILE, image='mt-tls-mtc:local', *,
-                 openssl=docker_openssl):
+                 validation_evidence=None, openssl=docker_openssl):
     fixture = Path(fixture)
     manifest = read(fixture / 'manifest.json')
     require(manifest.get('server_hostname') == HOST, 'MTC manifest hostname mismatch')
@@ -391,11 +391,24 @@ def validate_mtc(fixture, profile=PROFILE, image='mt-tls-mtc:local', *,
                                 [path[i:i+32] for i in range(0, len(path), 32)])
     require(any(s['start'] == start and s['end'] == end and s['hash'] == calculated.hex()
                 for s in anchor['landmark']['trusted_subtrees']), 'MTC inclusion proof mismatch')
-    evidence_paths = sorted(fixture.parent.glob(fixture.name + '-validation*/validation.json'))
-    failures = sorted(fixture.parent.glob(fixture.name + '-validation*/failure.json'))
-    require(not failures, 'Existing failed functional validation: ' + ', '.join(map(str, failures)))
+    if validation_evidence is None:
+        evidence_paths = sorted(fixture.parent.glob(
+            fixture.name+'-validation*/validation.json'))
+    else:
+        selected_evidence = Path(validation_evidence)
+        require(selected_evidence.is_file() and
+                not selected_evidence.is_symlink() and
+                selected_evidence.name == 'validation.json' and
+                selected_evidence.parent.parent.resolve() ==
+                fixture.parent.resolve() and
+                selected_evidence.parent.name.startswith(
+                    fixture.name+'-validation'),
+                'Selected MTC validation evidence does not belong to fixture')
+        evidence_paths = [selected_evidence]
     evidence = None
     for p in evidence_paths:
+        require(not (p.parent/'failure.json').exists(),
+                'Failed validation evidence present: '+str(p.parent/'failure.json'))
         d = read(p)
         require(d.get('passed') is True and d.get('server_hostname') == HOST and any(
             c.get('profile') == profile and c.get('tree_size') == 16 and c.get('mtc_mode') == 'landmark' and c.get('success') is True
@@ -771,8 +784,31 @@ def choose_anchor(mtc, output):
     good = [Path(r['path']) for r in audit if r['valid']]
     if good:
         anchor, origin = good[0], 'reused'
+        if not canonical.exists():
+            descriptor, temporary = tempfile.mkstemp(
+                prefix='.chromium-anchor-', dir=fixture.parent)
+            try:
+                with os.fdopen(descriptor, 'wb') as destination:
+                    destination.write(anchor.read_bytes())
+                    destination.flush()
+                    os.fsync(destination.fileno())
+                try:
+                    os.link(temporary, canonical)
+                except FileExistsError:
+                    require(not canonical.is_symlink() and
+                            canonical.is_file() and
+                            read(canonical) == expected,
+                            'Canonical Chromium anchor content/provenance mismatch')
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+        require(read(canonical) == expected,
+                'Persisted Chromium anchor mismatch')
+        anchor = canonical
     else:
-        anchor, origin = output / 'chromium-anchor.json', 'generated'
+        output_name = ('chromium-anchor-standalone.json'
+                       if mtc.get('mode') == 'standalone'
+                       else 'chromium-anchor-landmark.json')
+        anchor, origin = output / output_name, 'generated'
         require(not anchor.exists(), 'Anchor output exists')
         command([sys.executable, HERE/'export_chromium_anchor.py', '--trust', mtc['trust'],
                  '--output', anchor, '--trust-mode', mtc.get('mode', 'landmark')])
@@ -1111,7 +1147,9 @@ def prepare_credentials(repo, output, image, profile=PROFILE, depth=2,
         write(output/'mtc-discovery.json', ma)
         if progress: progress('validating MTC')
         if mtc_trust_mode == 'landmark':
-            validated = validate_mtc(Path(mtc['fixture']), profile, image)
+            validated = validate_mtc(
+                Path(mtc['fixture']), profile, image,
+                validation_evidence=mtc['validation_evidence'])
         else:
             validated = prevalidated_mtc(
                 mtc['fixture'], mtc['validation_evidence'], profile,
