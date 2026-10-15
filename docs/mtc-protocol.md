@@ -1,16 +1,17 @@
 # Protocolo implementado: MTC-experimental
 
-Referencia fija: [draft-ietf-plants-merkle-tree-certs-05](https://www.ietf.org/archive/id/draft-ietf-plants-merkle-tree-certs-05.txt),
+Referencia fija: [draft-ietf-plants-merkle-tree-certs-07](https://www.ietf.org/archive/id/draft-ietf-plants-merkle-tree-certs-07.txt),
 con [trust-anchor-ids -04](https://www.ietf.org/archive/id/draft-ietf-tls-trust-anchor-ids-04.txt).
 The validation boundary is documented in [validation](validation.md). It is not an implementation
 integral de IETF MTC ni una variante del formato compacto anterior.
 
 ## Credencial y autenticación
 
-Se genera un certificado DER X509 v3. El issuer utiliza el OID experimental
-1.3.6.1.4.1.44363.47.1 del borrador y un CA ID en UTF8String. El serial combina
-log 1 e índice. Ambas posiciones de AlgorithmIdentifier usan
-1.3.6.1.4.1.44363.47.0 sin parámetros. signatureValue contiene MTCProof sin
+Se genera un certificado DER X509 v3. El issuer utiliza el OID asignado
+1.3.6.1.5.5.7.25.3 (id-rdna-trustAnchorID) y un CA ID codificado como
+RELATIVE-OID. El serial combina log 1 e índice. Ambas posiciones de
+AlgorithmIdentifier usan 1.3.6.1.5.5.7.6.67 (id-alg-mtcProof) sin parámetros.
+signatureValue contiene MTCProof sin
 encapsulado ASN.1 adicional, aparte del BIT STRING del propio Certificate.
 
 TBSCertificateLogEntry conserva versión, emisor, vigencia, sujeto y extensiones;
@@ -27,7 +28,7 @@ no cuatro. N=1 tiene prueba vacía pero contiene todos los demás campos obligat
 
 La CA y un cosigner adicional mantienen copias locales completas del snapshot.
 Cada uno reconstruye el hash antes de firmarlo. Los mensajes de firma usan
-CosignedMessage y separación de dominio de -05. Los certificados standalone
+CosignedMessage y separación de dominio de Draft-07. Los certificados standalone
 incluyen dos firmas de subárbol con timestamp cero. El checkpoint OOB usa
 un timestamp no nulo. La política exige ambas firmas.
 

@@ -1,6 +1,6 @@
 # Implemented-subset field map and decoder specification
 
-Target: local `src/mtc/reference/draft-ietf-plants-merkle-tree-certs-05.txt`.
+Target: local `src/mtc/reference/draft-ietf-plants-merkle-tree-certs-07.txt`.
 This is preparation, not a result or a full IETF compliance claim. Checks without observed evidence remain **NOT_EXECUTED**. Source mappings alone
 do not establish a runtime PASS.
 The table maps the actual initial-issuance prototype, including its restrictions.
@@ -22,13 +22,13 @@ separate blocks for derived and out-of-band data; it is not one concatenated obj
 | subjectPublicKeyInfo | core.py:mtc_tbs | M DER SEQUENCE(algorithm, BIT STRING) | 6.2, 7.2 | actual leaf public key | OpenSSL parse, canonical DER, configured algorithm/curve | yes | Real leaf key; not a profile label in the certificate |
 | unique IDs, extensions | core.py:mtc_tbs | O original context-tagged DER fields after SPKI | 5.2.1, 6.2 | certificate constraints | Covered by entry; original authorityKeyIdentifier removed at issuance | partial | General PKIX extension semantics not independently reimplemented |
 | signatureValue | core.py:certificate | M BIT STRING: unused-bits byte 0 then raw MTCProof | 6.2, 7.2 | MTC proof | No extra ASN.1 wrapper/trailing bytes | yes | Not a conventional X.509 signature |
-| MTCProof.extensions | core.py:proof | M V16, empty | 5.2.1, 6.2 | entry extensions | Reject nonempty (local supported subset) | partial | General sorted TLV entry extensions NOT_IMPLEMENTED |
+| MTCProof.extensions | core.py:proof | M V16 | 5.2.1, 6.2 | entry extensions | Preserve exact bytes; require strictly increasing types without duplicates | yes | Unknown well-formed extensions remain opaque |
 | MTCProof.start/end | core.py:proof | M U48 start then U48 end | 4.1, 6.2 | half-open subtree range | Valid aligned subtree, start<=index<end, initial cover(0,N) | yes | Proof uses selected covering subtree, not always whole tree |
 | inclusion_proof | core.py:proof | M V16 containing consecutive 32-byte hashes | 4.3.2, 6.2 | sibling path | Length multiple of32; exact fold exhaustion | yes | N16/index0 initial cover selects [0,8): 3 hashes, not log2(16) |
-| signatures | core.py:signatures | M V16 concatenating MTCSignature records | 6.2 | cosignatures | Complete parse; strictly increasing (ID length, ID bytes) | yes | Landmark permits canonical unknown GREASE records, including empty signature bytes; standalone requires both configured signatures |
+| signatures | core.py:signatures | M V24 concatenating SubtreeSignature records | 6.2 | cosignatures | Complete parse; strictly increasing (ID length, ID bytes) | yes | Landmark permits canonical unknown GREASE records, including empty signature bytes; standalone requires both configured signatures |
 | cosigner_id | core.py:relid/signatures | M V8 canonical base-128 component encoding | 6.2, 5.3 | binary TrustAnchorID | Nonempty, canonical, no duplicate/out-of-order IDs | yes | Unknown IDs ignored for trust; two known signers still required |
 | signature | core.py:signatures | M V16 opaque signature bytes | 5.3.1, 5.3.3, 6.2 | algorithm-specific signature | OpenSSL verify, no fixed signature-length assumption | yes | EC digest by curve; PQ without external digest |
-| MerkleTreeCertEntry | core.py:entry | Derived V16 extensions + U16 type=1 + DER field concatenation | 5.2.1, 7.2 | tbs_cert_entry | Reconstruct; optionally compare log/*.entry | yes | No outer TBSCertificateLogEntry SEQUENCE wrapper |
+| MTCLogEntry | core.py:entry | Derived V16 extensions + U16 type=1 + DER field concatenation | 5.2.1, 7.2 | tbs_cert_entry | Reconstruct; optionally compare log/*.entry | yes | No outer TBSCertificateLogEntry SEQUENCE wrapper |
 | entry SPKI binding | core.py:entry | Derived algorithm DER + OCTET STRING(H(full SPKI DER)) | 5.2.1, 7.2 | subjectPublicKeyAlgorithm/InfoHash | SPKI hash enters authenticated leaf | yes | Entry omits serial/signature/SPKI itself |
 | leaf / internal hash | core.py:root/evaluate | Derived H(00||entry); H(01||left||right) | 4.3.2, 7.2 (RFC9162) | domain-separated Merkle hash | Report every fold and compare core.evaluate | yes | No primitive cryptography reimplementation |
 | CosignedSubtree | core.py:message | Derived label[12], V8 signer name, U64 timestamp, V8 log origin, U64 start/end, hash[32] | 5.3.1 | signature input | Exact domain `subtree/v1\n\0`; IDs prefixed `oid/1.3.6.1.4.1.`; log CA.0.1 | yes | Signature range widths are 64 bits, unlike proof range's48 |
@@ -109,7 +109,7 @@ Normal landmark clients advertise `32473.112.2.1.1`; the individual
 `32473.112.1.1.1` remains available for exact selection/retry by callers.
 Automatic retry and standalone-CA fallback from a group are not implemented.
 The active provisional `0xca34` is aligned with Chromium/BoringSSL, not final IANA: this is implemented-subset
-conformance, not full MTC-05 conformance. Historical captures retain their observed IDs.
+conformance, not full MTC-07 conformance. Historical captures retain their observed IDs.
 
 ## Wire codepoint migration
 

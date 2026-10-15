@@ -19,7 +19,7 @@ proof-of-possession signature. PQ X.509 uses the same framing.
 
 ## MTC-experimental landmark
 
-The implementation targets `draft-ietf-plants-merkle-tree-certs-05` and
+The implementation targets `draft-ietf-plants-merkle-tree-certs-07` and
 `draft-ietf-tls-trust-anchor-ids-04`. The online CertificateEntry carries one
 DER-shaped MTC certificate whose signatureValue BIT STRING contains:
 
@@ -28,10 +28,10 @@ extensions<0..65535>          2-byte length + data
 start                         6 bytes
 end                           6 bytes
 inclusion_path<0..65535>      2-byte length + 32 bytes per SHA-256 sibling
-signatures<0..65535>          2-byte length; empty in landmark mode
+signatures<0..16777215>       3-byte length; empty in landmark mode
 ```
 
-An empty-extension landmark proof therefore has 18 fixed bytes plus 32 bytes
+An empty-extension landmark proof therefore has 19 fixed bytes plus 32 bytes
 per sibling. For the current initial snapshot at a power-of-two population
 larger than one, `cover(0,N)` creates two covered subtrees and leaf zero belongs
 to `[0,N/2)`, producing `log2(N)-1` sibling hashes. The N=1 proof has none.

@@ -3,7 +3,7 @@
 **No new TLS, Docker, capture, build or fixture generation was executed for the
 2026-09-13 validation refinement. Pure-Python tests and one existing landmark
 PCAP were checked offline; see the supplemental review below.** Wording: protocol-conformance validation
-against the implemented subset of `draft-ietf-plants-merkle-tree-certs-05`.
+against the implemented subset of `draft-ietf-plants-merkle-tree-certs-07`.
 Never interpret an overall PASS as full IETF draft compliance.
 
 [FIELD_MAP.md](FIELD_MAP.md) is the byte-level decoder specification, implementation
@@ -391,7 +391,7 @@ offline group semantics report `landmark_group_advertised: true`, both IDs,
 This is restricted to initial log 1 / landmark 1. General group membership,
 standalone-CA fallback from a group, automatic retry and empty requested lists
 remain unsupported. The active `0xca34` is provisional (not a final IANA assignment); this remains
-**implemented-subset conformance**, not full MTC-05 conformance.
+**implemented-subset conformance**, not full MTC-07 conformance.
 
 Timestamp reports separate (a) zero timestamp used for MTCProof signatures,
 (b) checkpoint uint64 encoding and signed range, (c) unproven actual signing-time
