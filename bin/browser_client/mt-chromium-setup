@@ -753,7 +753,13 @@ ca_policy_action() {
      if [[ -e "$destination" ]]; then
       [[ -f "$destination" && ! -L "$destination" ]] || fail "Conflicting policy path preserved: $destination"
       if cmp -s "$source" "$destination"; then echo 'The exact generated policy is already installed.'; return 0; fi
-      fail "Conflicting Chromium policy preserved: $destination"
+      echo "A different Chromium policy is already installed: $destination"
+      read -r -p 'Replace it with the generated policy? [y/N] ' answer || return 1
+      case "$answer" in
+       y|Y) sudo install -o root -g root -m 0644 "$source" "$destination";;
+       *) echo 'Cancelled.';;
+      esac
+      return 0
      fi
      read -r -p 'Create the managed-policy directory and install this file with sudo? [y/N] ' answer || return 0
      case "$answer" in
