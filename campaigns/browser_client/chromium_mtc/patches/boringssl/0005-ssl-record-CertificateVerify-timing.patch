@@ -1,0 +1,127 @@
+From a88d78395154860a1cb8d9adb77efd40fa23f848 Mon Sep 17 00:00:00 2001
+From: Jose Antonio Montenegro Montes <jmmontes@uma.es>
+Date: Wed, 14 Oct 2026 19:25:37 +0200
+Subject: [PATCH 5/7] ssl: record CertificateVerify timing
+
+---
+ include/openssl/ssl.h |  7 +++++++
+ ssl/internal.h        |  6 ++++++
+ ssl/ssl_lib.cc        | 26 ++++++++++++++++++++++++++
+ ssl/tls13_both.cc     | 22 ++++++++++++++++++++--
+ 4 files changed, 59 insertions(+), 2 deletions(-)
+
+diff --git a/include/openssl/ssl.h b/include/openssl/ssl.h
+index 0d8241c..47f466d 100644
+--- a/include/openssl/ssl.h
++++ b/include/openssl/ssl.h
+@@ -163,6 +163,13 @@ OPENSSL_EXPORT BIO *SSL_get_rbio(const SSL *ssl);
+ OPENSSL_EXPORT BIO *SSL_get_wbio(const SSL *ssl);
+ 
+ // SSL_get_fd calls `SSL_get_rfd`.
++// SSL_get_certificate_verify_timing returns experimental TLS 1.3
++// CertificateVerify signature verification timing for this connection.
++// Returns one if measured, or zero otherwise. Output pointers may be NULL.
++OPENSSL_EXPORT int SSL_get_certificate_verify_timing(
++    const SSL *ssl, uint64_t *elapsed_ns,
++    uint16_t *signature_algorithm, int *success);
++
+ OPENSSL_EXPORT int SSL_get_fd(const SSL *ssl);
+ 
+ // SSL_get_rfd returns the file descriptor that `ssl` is configured to read
+diff --git a/ssl/internal.h b/ssl/internal.h
+index 39c132d..9c40e7f 100644
+--- a/ssl/internal.h
++++ b/ssl/internal.h
+@@ -4375,6 +4375,12 @@ class SSLImpl : public ssl_st {
+   // extra application data
+   CRYPTO_EX_DATA ex_data;
+ 
++  // Experimental TLS CertificateVerify timing.
++  uint64_t certificate_verify_crypto_elapsed_ns = 0;
++  uint16_t certificate_verify_signature_algorithm = 0;
++  bool certificate_verify_measured = false;
++  bool certificate_verify_success = false;
++
+   uint32_t options = 0;  // protocol behaviour
+   uint32_t mode = 0;     // API behaviour
+   uint32_t max_cert_list = 0;
+diff --git a/ssl/ssl_lib.cc b/ssl/ssl_lib.cc
+index 3d429d5..33a6863 100644
+--- a/ssl/ssl_lib.cc
++++ b/ssl/ssl_lib.cc
+@@ -3255,6 +3255,32 @@ int SSL_get_dtls_write_traffic_secret(const SSL *ssl, const uint8_t **out_data,
+                                  out_data, out_len, epoch);
+ }
+ 
++int SSL_get_certificate_verify_timing(
++    const SSL *ssl, uint64_t *elapsed_ns,
++    uint16_t *signature_algorithm, int *success) {
++  if (ssl == nullptr) {
++    return 0;
++  }
++
++  const auto *ssl_impl = FromOpaque(ssl);
++  if (!ssl_impl->certificate_verify_measured) {
++    return 0;
++  }
++
++  if (elapsed_ns != nullptr) {
++    *elapsed_ns = ssl_impl->certificate_verify_crypto_elapsed_ns;
++  }
++  if (signature_algorithm != nullptr) {
++    *signature_algorithm =
++        ssl_impl->certificate_verify_signature_algorithm;
++  }
++  if (success != nullptr) {
++    *success = ssl_impl->certificate_verify_success ? 1 : 0;
++  }
++
++  return 1;
++}
++
+ uint16_t SSL_get_peer_signature_algorithm(const SSL *ssl) {
+   SSL_SESSION *session = SSL_get_session(ssl);
+   if (session == nullptr) {
+diff --git a/ssl/tls13_both.cc b/ssl/tls13_both.cc
+index 68c5ea2..c298dab 100644
+--- a/ssl/tls13_both.cc
++++ b/ssl/tls13_both.cc
+@@ -12,6 +12,7 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++#include <chrono>
+ #include <openssl/ssl.h>
+ 
+ #include <assert.h>
+@@ -396,8 +397,25 @@ bool tls13_process_certificate_verify(SSL_HANDSHAKE *hs,
+     return false;
+   }
+ 
+-  if (!ssl_public_key_verify(ssl, signature, signature_algorithm,
+-                             hs->peer_pubkey.get(), input)) {
++  // Experimental timing: TLS CertificateVerify signature verification.
++  const auto cv_start = std::chrono::steady_clock::now();
++
++  const bool cv_verified =
++      ssl_public_key_verify(ssl, signature, signature_algorithm,
++                            hs->peer_pubkey.get(), input);
++
++  const auto cv_elapsed_ns =
++      std::chrono::duration_cast<std::chrono::nanoseconds>(
++          std::chrono::steady_clock::now() - cv_start)
++          .count();
++
++  ssl->certificate_verify_crypto_elapsed_ns =
++      static_cast<uint64_t>(cv_elapsed_ns);
++  ssl->certificate_verify_signature_algorithm = signature_algorithm;
++  ssl->certificate_verify_measured = true;
++  ssl->certificate_verify_success = cv_verified;
++
++  if (!cv_verified) {
+     OPENSSL_PUT_ERROR(SSL, SSL_R_BAD_SIGNATURE);
+     ssl_send_alert(ssl, SSL3_AL_FATAL, SSL_AD_DECRYPT_ERROR);
+     return false;
+-- 
+2.50.1 (Apple Git-155)
+

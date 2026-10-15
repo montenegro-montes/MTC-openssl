@@ -1,0 +1,91 @@
+From 1886aed1c3e295623845a60a19388d1ee32b8729 Mon Sep 17 00:00:00 2001
+From: Jose Antonio Montenegro Montes <jmmontes@uma.es>
+Date: Wed, 14 Oct 2026 19:26:25 +0200
+Subject: [PATCH 13/16] net: expose CertificateVerify timing in NetLog
+
+---
+ net/log/net_log_event_type_list.h    |  9 +++++++++
+ net/socket/ssl_client_socket_impl.cc | 24 ++++++++++++++++++++++++
+ net/socket/ssl_client_socket_impl.h  |  3 +++
+ third_party/boringssl/src            |  2 +-
+ 4 files changed, 37 insertions(+), 1 deletion(-)
+
+diff --git a/net/log/net_log_event_type_list.h b/net/log/net_log_event_type_list.h
+index c00a1c9cd9..817357c849 100644
+--- a/net/log/net_log_event_type_list.h
++++ b/net/log/net_log_event_type_list.h
+@@ -748,6 +748,15 @@ EVENT_TYPE(SSL_CLIENT_CERT_PROVIDED)
+ //     "ssl_lib_error": <SSL library's integer code for the specific error type>
+ //   }
+ EVENT_TYPE(SSL_HANDSHAKE_ERROR)
++
++// Experimental TLS 1.3 CertificateVerify signature verification timing.
++// Parameters:
++//   "elapsed_ns": Elapsed wall-clock time in nanoseconds, as a string.
++//   "signature_algorithm": TLS signature scheme identifier.
++//   "success": Whether the cryptographic verification succeeded.
++//   "ssl_do_handshake_result": Return value of SSL_do_handshake() when collected.
++// The event is emitted only when CertificateVerify verification was executed.
++EVENT_TYPE(SSL_CERTIFICATE_VERIFY_TIMING)
+ EVENT_TYPE(SSL_READ_ERROR)
+ EVENT_TYPE(SSL_WRITE_ERROR)
+ 
+diff --git a/net/socket/ssl_client_socket_impl.cc b/net/socket/ssl_client_socket_impl.cc
+index f7080e3b0a..07016d68ef 100644
+--- a/net/socket/ssl_client_socket_impl.cc
++++ b/net/socket/ssl_client_socket_impl.cc
+@@ -922,6 +922,30 @@ int SSLClientSocketImpl::DoHandshake() {
+ 
+   int rv = SSL_do_handshake(ssl_.get());
+   int net_error = OK;
++
++  // Experimental TLS CertificateVerify timing.
++  // Emit once per SSL connection, including failed signature verification.
++  if (!certificate_verify_timing_logged_) {
++    uint64_t cv_elapsed_ns = 0;
++    uint16_t cv_signature_algorithm = 0;
++    int cv_success = 0;
++
++    if (SSL_get_certificate_verify_timing(
++            ssl_.get(), &cv_elapsed_ns, &cv_signature_algorithm,
++            &cv_success)) {
++      certificate_verify_timing_logged_ = true;
++
++      net_log_.AddEvent(
++          NetLogEventType::SSL_CERTIFICATE_VERIFY_TIMING, [&] {
++            return base::DictValue()
++                .Set("elapsed_ns", std::to_string(cv_elapsed_ns))
++                .Set("signature_algorithm",
++                     static_cast<int>(cv_signature_algorithm))
++                .Set("success", cv_success != 0)
++                .Set("ssl_do_handshake_result", rv);
++          });
++    }
++  }
+   if (rv <= 0) {
+     int ssl_error = SSL_get_error(ssl_.get(), rv);
+     if (ssl_error == SSL_ERROR_WANT_X509_LOOKUP && !send_client_cert_) {
+diff --git a/net/socket/ssl_client_socket_impl.h b/net/socket/ssl_client_socket_impl.h
+index 3b10cead52..968be8a1bc 100644
+--- a/net/socket/ssl_client_socket_impl.h
++++ b/net/socket/ssl_client_socket_impl.h
+@@ -288,6 +288,9 @@ class NET_EXPORT_PRIVATE SSLClientSocketImpl
+   // True if we are currently confirming the handshake.
+   bool in_confirm_handshake_ = false;
+ 
++  // Experimental: prevent duplicate CertificateVerify timing events.
++  bool certificate_verify_timing_logged_ = false;
++
+   // True if the post-handshake SSL_peek has completed.
+   bool peek_complete_ = false;
+ 
+diff --git a/third_party/boringssl/src b/third_party/boringssl/src
+index f628f22691..a88d783951 160000
+--- a/third_party/boringssl/src
++++ b/third_party/boringssl/src
+@@ -1 +1 @@
+-Subproject commit f628f226914cf642f23c9f9fab415efb64d562e2
++Subproject commit a88d78395154860a1cb8d9adb77efd40fa23f848
+-- 
+2.50.1 (Apple Git-155)
+

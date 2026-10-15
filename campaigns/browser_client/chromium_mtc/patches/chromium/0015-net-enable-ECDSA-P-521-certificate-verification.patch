@@ -1,0 +1,33 @@
+From 0c61ba5bf8f23bc84c0460a0b663fe4aa02889fd Mon Sep 17 00:00:00 2001
+From: Jose Antonio Montenegro Montes <jmmontes@uma.es>
+Date: Thu, 15 Oct 2026 10:45:01 +0200
+Subject: [PATCH 15/16] net: enable ECDSA P-521 certificate verification
+
+---
+ net/socket/ssl_client_socket_impl.cc | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/net/socket/ssl_client_socket_impl.cc b/net/socket/ssl_client_socket_impl.cc
+index 07016d68ef..911fcb551f 100644
+--- a/net/socket/ssl_client_socket_impl.cc
++++ b/net/socket/ssl_client_socket_impl.cc
+@@ -806,6 +806,7 @@ int SSLClientSocketImpl::Init() {
+       SSL_SIGN_ECDSA_SECP384R1_SHA384,
+       SSL_SIGN_RSA_PSS_RSAE_SHA384,
+       SSL_SIGN_RSA_PKCS1_SHA384,
++      SSL_SIGN_ECDSA_SECP521R1_SHA512,
+       SSL_SIGN_RSA_PSS_RSAE_SHA512,
+       SSL_SIGN_RSA_PKCS1_SHA512,
+   };
+@@ -938,6 +939,8 @@ int SSLClientSocketImpl::DoHandshake() {
+       net_log_.AddEvent(
+           NetLogEventType::SSL_CERTIFICATE_VERIFY_TIMING, [&] {
+             return base::DictValue()
++                .Set("certificate_verify_crypto_ns",
++                     std::to_string(cv_elapsed_ns))
+                 .Set("elapsed_ns", std::to_string(cv_elapsed_ns))
+                 .Set("signature_algorithm",
+                      static_cast<int>(cv_signature_algorithm))
+-- 
+2.50.1 (Apple Git-155)
+

@@ -14,3 +14,10 @@ ca289d64085b44b57d8be4d7ccea578e86159a9d8bfb9b7d365972687eb4c863  chromium/0010-
 b6213be6223e2e80fda504f7c5d7ec588bc5b51df8a2daf955db0b82d991621e  boringssl/0003-Complete-Plants-06-verification-and-metadata.patch
 2ae1ee679fe5b37d34fe506d82da0da47d43a3853573e490001523249090cd93  boringssl/0004-Migrate-MTC-verification-to-Plants-07.patch
 772f5e16f680f4b4d055cefe462aa6db192a6ddbda9721b06130f54e0b6c9a2e  chromium/0012-Migrate-Chromium-MTC-integration-to-Plants-07.patch
+330d6561fbbb5060bf2258ee7823c95d1fa85ff79d85ecd0d16f649f6af97243  boringssl/0005-ssl-record-CertificateVerify-timing.patch
+317b69a45cc2e0143510d5458c1e900537f05ee1433420c04cd8c697a46df815  boringssl/0006-pki-add-versioned-credential-timing-metrics.patch
+c7dc2c00d2f120fcc3b69739cbcb1c8b0895f768e9a6127fb397044a4a9ad33a  boringssl/0007-ssl-enable-ECDSA-P-521-signature-verification-by-def.patch
+cf693392ab23a31f8e1419faf467b0bb954b6adf0e44e866a3b1e0facddab45c  chromium/0013-net-expose-CertificateVerify-timing-in-NetLog.patch
+96c5465cc20f9badf9e295c8e27cf0c9fb0c7913ed0fb2ab8d9c67f8186b1fb1  chromium/0014-net-expose-credential-timing-schema-v2-in-NetLog.patch
+f1442b103afd45f8d2a20116453d5edd8fda0f6a61faacae52eb70fde0504bb5  chromium/0015-net-enable-ECDSA-P-521-certificate-verification.patch
+9c42b153935333fd729734e24b762ba76524b83937ef9acff0d44fb9bfc18de2  chromium/0016-Roll-BoringSSL-for-timing-v2-and-ECDSA-P-521.patch

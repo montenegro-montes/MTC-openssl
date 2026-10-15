@@ -1,0 +1,19 @@
+From fde52bbcbf91ea12a00b577220d7a8aaa613f234 Mon Sep 17 00:00:00 2001
+From: Jose Antonio Montenegro Montes <jmmontes@uma.es>
+Date: Thu, 15 Oct 2026 10:45:37 +0200
+Subject: [PATCH 16/16] Roll BoringSSL for timing v2 and ECDSA P-521
+
+---
+ third_party/boringssl/src | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/third_party/boringssl/src b/third_party/boringssl/src
+index a88d783951..93db006d62 160000
+--- a/third_party/boringssl/src
++++ b/third_party/boringssl/src
+@@ -1 +1 @@
+-Subproject commit a88d78395154860a1cb8d9adb77efd40fa23f848
++Subproject commit 93db006d6250626ac73e7dca6065b00a65cf8e4d
+-- 
+2.50.1 (Apple Git-155)
+
