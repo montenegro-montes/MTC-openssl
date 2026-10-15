@@ -152,6 +152,12 @@ python3 campaigns/scaling/cert_chain_scaling/generate_fixtures.py --output "$CHA
 python3 campaigns/scaling/cert_chain_scaling/generate_fixtures.py --output "$CHAIN_FIXTURES"
 ```
 
+The generator runs the container with the invoking host user's numeric UID and
+GID. Private material retains the builder's restrictive `umask(077)` without
+becoming unreadable to the host-side validator on native Linux Docker. The
+generator also requires every requested `manifest.json` to be host-readable
+before reporting success.
+
 3. Validate all 36 chains, key/hash manifests, depths, and root omission:
 
 ```sh
