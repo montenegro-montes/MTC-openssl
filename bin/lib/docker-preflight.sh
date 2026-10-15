@@ -6,6 +6,25 @@ mt_compose_ready() {
  mt_docker_ready || return
  docker compose version >/dev/null 2>&1 || { echo 'ERROR: Docker Compose is not available (docker compose).' >&2; return 1; }
 }
+# GCC AddressSanitizer in the Debian base image can crash before main() when a
+# Linux host exposes 32 bits of mmap randomization.  Never change this global
+# kernel setting here; fail before the expensive stage-1 build with a precise
+# administrator action instead.
+mt_asan_kernel_ready() {
+ local path=${1:-/proc/sys/vm/mmap_rnd_bits} value
+ [[ -r "$path" ]] || return 0
+ read -r value < "$path" || return 0
+ [[ "$value" =~ ^[0-9]+$ ]] || return 0
+ if (( value >= 32 )); then
+  printf '%s\n' \
+   "ERROR: Linux vm.mmap_rnd_bits=$value is incompatible with the GCC AddressSanitizer runtime used by docker/base/Dockerfile." \
+   'The sanitizer may terminate test_wire with repeated AddressSanitizer:DEADLYSIGNAL messages and exit code 139.' \
+   'An administrator must apply the temporary host setting before retrying:' \
+   '  sudo sysctl -w vm.mmap_rnd_bits=28' \
+   'This launcher will not change a global kernel security setting automatically.' >&2
+  return 1
+ fi
+}
 # Called only from explicit execution paths, never status/show/plan.
 mt_profile_ready() {
  mt_compose_ready || return

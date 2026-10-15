@@ -183,6 +183,9 @@ prepare() (
    fi
   fi
   if (( PARENTS[i] >= 0 )); then parent=${IMAGES[${PARENTS[i]}]}; mt_image_required "$parent" || exit 1; fi
+  # Stage 1 executes an ASan/UBSan binary during its Docker build.  Check the
+  # shared host-kernel constraint only when that image will actually be built.
+  (( i != 0 )) || mt_asan_kernel_ready || exit 1
   log="$STATE/stage-$((i+1))-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
   printf 'BUILD %s\nLog: %s\n' "${IMAGES[i]}" "$log"
   set +e

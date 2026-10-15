@@ -48,6 +48,20 @@ Capture and endpoint profiling both derive from MTC; mutual profiling derives fr
 
 Existing images are reused by default.
 
+Before building stage 1 on Linux, `mt-prepare` checks
+`/proc/sys/vm/mmap_rnd_bits`. The GCC AddressSanitizer runtime used by that
+image can crash before `test_wire` starts when the value is 32 or greater. In
+that case preparation stops before the build and reports the temporary host
+remedy:
+
+```bash
+sudo sysctl -w vm.mmap_rnd_bits=28
+```
+
+The launcher never changes this global kernel setting itself. Existing stage-1
+images can still be reused without requiring the setting, and status, plan and
+configuration-only operations remain read-only.
+
 Every `init`, `run` or `rebuild` execution creates two complementary records:
 
 ```text
