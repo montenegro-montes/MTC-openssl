@@ -119,7 +119,7 @@ class ReportingTest(unittest.TestCase):
             (root/'analysis_extended.json').write_text(json.dumps({
                 'schema':1,
                 'result_domain':'CERTIFICATE_SIZE_CROSSOVER',
-                'draft':'draft-ietf-plants-merkle-tree-certs-05',
+                'draft':'draft-ietf-plants-merkle-tree-certs-07',
                 'merkle_hash':'SHA-256',
                 'boundary':'TLS Certificate handshake header + body',
                 'implementation_limit':1024,

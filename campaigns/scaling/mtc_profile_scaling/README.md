@@ -1,7 +1,7 @@
 # MTC profiles: manual functional gate
 
 Preparation for an **experimental implementation targeting
- draft-ietf-plants-merkle-tree-certs-05**, without a claim of full IETF compliance.
+ draft-ietf-plants-merkle-tree-certs-07**, without a claim of full IETF compliance.
 The registry is `src/mtc/crypto_profiles.py`. All nine named profiles use their
 actual algorithm for issuance, both MTC signers and the leaf TLS key. The issuance
 CA and MTC signers have distinct keys. ECDSA uses P-256/SHA-256,
@@ -94,8 +94,9 @@ Check these fields against `src/mtc/core.py`, `mtc.c` and `tls.c`:
 - Certificate: one leaf; TLS uint24 certificate length and uint16 extensions
   length; empty 0xca34 CertificateEntry extension confirming negotiation.
 - DER: v3 certificate; inner and outer proof algorithm OID
-  `1.3.6.1.4.1.44363.47.0` with no parameters; issuer attribute OID
-  `1.3.6.1.4.1.44363.47.1`; serial `(log_id << 48) | leaf_index`; actual
+  `1.3.6.1.5.5.7.6.67` with no parameters; issuer attribute OID
+  `1.3.6.1.5.5.7.25.3` with a RELATIVE-OID CA ID; serial
+  `(log_id << 48) | leaf_index`; actual
   ML-DSA-65 SPKI, subject/SAN, validity and leaf constraints.
 - signatureValue: zero unused BIT STRING bits, MTCProof range, inclusion vector
   lengths and 32-byte hashes. Reconstruct the entry and SHA-256 path with the

@@ -430,7 +430,7 @@ study. At N16, corrected landmark Certificate bytes are P256=460, ML-DSA65=2343,
 SLH-DSA256s=451. SLH-DSA landmark omits out-of-band cosignatures; it does not compress
 those signatures into hundreds of bytes. Its SPKI is 82 bytes versus P256's 91.
 
-Pinned source sections: MTC-05 §4.5.1 (initial cover), §5.2 (48-bit log indices),
+Pinned source sections: MTC-07 §4.5.1 (initial cover), §5.2 (48-bit log indices),
 §6.2 (DER envelope/proof, fixed uint48 endpoints and vectors), §6.4.4 (landmark
 construction), and TA-04 §4.1/4.2 (empty CertificateEntry confirmation).
 

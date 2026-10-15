@@ -261,7 +261,7 @@ def run(a):
             ))
 
     input_drafts={}
-    for name in ('draft-ietf-plants-merkle-tree-certs-05.txt','draft-ietf-tls-trust-anchor-ids-04.txt'):
+    for name in ('draft-ietf-plants-merkle-tree-certs-07.txt','draft-ietf-tls-trust-anchor-ids-04.txt'):
         file=REPO/'src/mtc/reference'/name;input_drafts[name]=hashlib.sha256(inputs.read(file)).hexdigest()
     source_hashes={}
     for name in ('landmark_size_model.py','crossover_extended.py','plot_crossover_extended.py','size_analysis.py','config.py'):
