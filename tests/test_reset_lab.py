@@ -3,8 +3,10 @@ import contextlib
 import importlib.util
 import io
 import json
+import hashlib
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -39,10 +41,29 @@ class ResetTests(unittest.TestCase):
             return 'mt-tls-lab:local\nmt-tls-mtc:local\n'
         return ''
 
-    def run_reset(self, answer='RESET ALL', docker=None):
+    def run_reset(self, answer='RESET ALL', docker=None, answers=None):
         with patch.object(reset, 'REPO', self.root), patch.object(reset, 'docker', docker or self.docker), \
-             patch('builtins.input', return_value=answer), contextlib.redirect_stdout(io.StringIO()):
+             patch('builtins.input', side_effect=answers or [answer]), contextlib.redirect_stdout(io.StringIO()):
             reset.main()
+
+    def install_linux_policy_fixture(self):
+        package = self.root/'artifacts/chromium-ca-policy-test'
+        contents = {
+            'canonical-policy.json': b'{"CACertificates": []}\n',
+            'linux/mtc-ca-policy.json': b'{"CACertificates": []}\n',
+            'macos/chromium-mtc-ca.mobileconfig': b'profile',
+        }
+        outputs = {}
+        for name, content in contents.items():
+            path = package/name; path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+            outputs[name] = {'sha256': hashlib.sha256(content).hexdigest()}
+        (package/'policy-manifest.json').write_text(json.dumps({
+            'fixture_set': 'chromium-x509-depth-matrix-v1',
+            'policy_name': 'CACertificates', 'outputs': outputs}))
+        installed = Path(self.tmp.name)/'mtc-ca-policy.json'
+        installed.write_bytes(contents['linux/mtc-ca-policy.json'])
+        return installed
 
     def test_cancel_changes_nothing(self):
         self.run_reset('yes')
@@ -85,6 +106,70 @@ class ResetTests(unittest.TestCase):
         (self.root/'artifacts').symlink_to(outside, target_is_directory=True)
         self.run_reset()
         self.assertTrue((outside/'keep').exists())
+
+    def test_matching_chromium_policy_can_be_preserved(self):
+        installed = self.install_linux_policy_fixture()
+        with patch.object(reset.platform, 'system', return_value='Linux'), \
+             patch.object(reset, 'LINUX_CHROMIUM_POLICY', installed), \
+             patch.object(reset, 'remove_chromium_policy') as remove:
+            self.run_reset(answers=['RESET ALL', 'n'])
+        remove.assert_not_called()
+        self.assertTrue(installed.exists())
+
+    def test_matching_chromium_policy_is_removed_before_local_data(self):
+        installed = self.install_linux_policy_fixture()
+        def remove(policy):
+            self.assertTrue((self.root/'artifacts').exists())
+            installed.unlink()
+        with patch.object(reset.platform, 'system', return_value='Linux'), \
+             patch.object(reset, 'LINUX_CHROMIUM_POLICY', installed), \
+             patch.object(reset, 'remove_chromium_policy', side_effect=remove) as action:
+            self.run_reset(answers=['RESET ALL', 'y'])
+        action.assert_called_once()
+        self.assertFalse(installed.exists())
+        self.assertFalse((self.root/'artifacts').exists())
+
+    def test_foreign_chromium_policy_is_never_offered_or_removed(self):
+        installed = self.install_linux_policy_fixture()
+        installed.write_text('{"foreign": true}\n')
+        with patch.object(reset.platform, 'system', return_value='Linux'), \
+             patch.object(reset, 'LINUX_CHROMIUM_POLICY', installed), \
+             patch.object(reset, 'remove_chromium_policy') as remove:
+            self.run_reset()
+        remove.assert_not_called()
+        self.assertTrue(installed.exists())
+
+    def test_chromium_policy_removal_failure_preserves_local_data(self):
+        installed = self.install_linux_policy_fixture()
+        with patch.object(reset.platform, 'system', return_value='Linux'), \
+             patch.object(reset, 'LINUX_CHROMIUM_POLICY', installed), \
+             patch.object(reset, 'remove_chromium_policy', side_effect=OSError('denied')):
+            with self.assertRaises(OSError):
+                self.run_reset(answers=['RESET ALL', 'y'])
+        self.assertTrue((self.root/'artifacts').exists())
+        self.assertTrue((self.root/'.mt-state').exists())
+
+    def test_linux_removal_rechecks_hash_and_exact_path(self):
+        installed = self.install_linux_policy_fixture()
+        with patch.object(reset, 'REPO', self.root):
+            policy = reset.installed_chromium_policy('Linux', installed)
+        def remove(command, check):
+            self.assertEqual(command, ['sudo', 'rm', '--', str(installed)])
+            self.assertTrue(check)
+            installed.unlink()
+        with patch.object(reset.subprocess, 'run', side_effect=remove) as run:
+            reset.remove_chromium_policy(policy)
+        run.assert_called_once()
+
+    def test_macos_profile_detection_uses_fixed_lab_identifier(self):
+        self.install_linux_policy_fixture()
+        result = SimpleNamespace(returncode=0, stdout='',
+                                 stderr=reset.MACOS_PROFILE_IDENTIFIER)
+        with patch.object(reset, 'REPO', self.root), \
+             patch.object(reset, 'command_output', return_value=result):
+            policy = reset.installed_chromium_policy('Darwin')
+        self.assertEqual(policy, {'platform': 'Darwin',
+                                  'identifier': reset.MACOS_PROFILE_IDENTIFIER})
 
 if __name__ == '__main__':
     unittest.main()
