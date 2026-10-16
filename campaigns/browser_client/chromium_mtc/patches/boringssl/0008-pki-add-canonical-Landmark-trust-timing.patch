@@ -1,0 +1,115 @@
+From bb83d630c81441b8ab31223c07b4efa0d8425946 Mon Sep 17 00:00:00 2001
+From: Jose Antonio Montenegro Montes <jmmontes@uma.es>
+Date: Fri, 16 Oct 2026 09:53:09 +0200
+Subject: [PATCH] pki: add canonical Landmark trust timing
+
+---
+ pki/verify_certificate_chain.cc | 34 ++++++++++++++++++++++++++++++++-
+ pki/verify_certificate_chain.h  |  3 +--
+ 2 files changed, 34 insertions(+), 3 deletions(-)
+
+diff --git a/pki/verify_certificate_chain.cc b/pki/verify_certificate_chain.cc
+index cebdd1f..3d3d6df 100644
+--- a/pki/verify_certificate_chain.cc
++++ b/pki/verify_certificate_chain.cc
+@@ -1475,7 +1475,6 @@ static VerifyMTCResult VerifyMTCImpl(
+     expected_subtree_hash = EvaluateMerkleSubtreeInclusionProof(
+         inclusion_proof, index, entry_hash, range);
+   }
+-  timing->merkle_proof_ns = timing->merkle_path_ns;
+   merkle_total_timer.Stop();
+   if (!expected_subtree_hash) {
+     return VerifyMTCResult::kFailed;
+@@ -1487,14 +1486,41 @@ static VerifyMTCResult VerifyMTCImpl(
+   if (!mtc_anchor) {
+     return VerifyMTCResult::kFailed;
+   }
++
++  auto landmark_trust_segment_start = std::chrono::steady_clock::now();
+   std::optional<TreeHashConstSpan> trusted_subtree_hash =
+       mtc_anchor->SubtreeHash(log_number, range);
++  uint64_t landmark_trust_elapsed_ns =
++      static_cast<uint64_t>(
++          std::chrono::duration_cast<std::chrono::nanoseconds>(
++              std::chrono::steady_clock::now() -
++              landmark_trust_segment_start)
++              .count());
++  bool landmark_trust_segment_active = false;
++  auto record_landmark_trust = [&] {
++    if (!timing->landmark_trust_ns) {
++      uint64_t elapsed_ns = landmark_trust_elapsed_ns;
++      if (landmark_trust_segment_active) {
++        elapsed_ns +=
++            static_cast<uint64_t>(
++                std::chrono::duration_cast<std::chrono::nanoseconds>(
++                    std::chrono::steady_clock::now() -
++                    landmark_trust_segment_start)
++                    .count());
++      }
++      timing->landmark_trust_ns = elapsed_ns;
++    }
++  };
++
+   // Use the ca_id from mtc_anchor instead of parsing the id out of issuer. It
+   // should be guaranteed to be the same id, otherwise mtc_anchor would not
+   // have been selected as the anchor for this cert.
+   CBS ca_id(mtc_anchor->ca_id());
+   UniquePtr<char> ca_id_text(CBS_asn1_relative_oid_to_text(&ca_id));
+   if (!ca_id_text) {
++    if (trusted_subtree_hash || CBS_len(&signatures) == 0) {
++      record_landmark_trust();
++    }
+     return VerifyMTCResult::kFailed;
+   }
+   if (delegate->IsDebugLogEnabled()) {
+@@ -1517,20 +1543,25 @@ static VerifyMTCResult VerifyMTCImpl(
+         // clang-format on
+     );
+   }
++  landmark_trust_segment_start = std::chrono::steady_clock::now();
++  landmark_trust_segment_active = true;
+   if (trusted_subtree_hash) {
+     timing->mode = MTCVerificationMode::kLandmark;
+     // This initial Plants-07 path intentionally supports landmark-relative
+     // verification only. A landmark proof carries no subtree signatures.
+     if (spec_version == MTCAnchor::kPlants07 &&
+         CBS_len(&signatures) != 0) {
++      record_landmark_trust();
+       return VerifyMTCResult::kFailed;
+     }
+ 
+     if (CRYPTO_memcmp(expected_subtree_hash->data(),
+                       trusted_subtree_hash->data(),
+                       expected_subtree_hash->size()) != 0) {
++      record_landmark_trust();
+       return VerifyMTCResult::kFailed;
+     }
++    record_landmark_trust();
+     return VerifyMTCResult(MTCVerificationInfo{
+         MTCVerificationMode::kLandmark,
+         std::vector<uint8_t>(mtc_anchor->ca_id().begin(),
+@@ -1540,6 +1571,7 @@ static VerifyMTCResult VerifyMTCImpl(
+ 
+   if (CBS_len(&signatures) == 0) {
+     timing->mode = MTCVerificationMode::kLandmark;
++    record_landmark_trust();
+     return VerifyMTCResult::kLandmarkNotRecognized;
+   }
+ 
+diff --git a/pki/verify_certificate_chain.h b/pki/verify_certificate_chain.h
+index e2b4e7d..2e98ad6 100644
+--- a/pki/verify_certificate_chain.h
++++ b/pki/verify_certificate_chain.h
+@@ -55,8 +55,7 @@ struct MTCVerificationTiming {
+   std::optional<uint64_t> merkle_leaf_hash_ns;
+   std::optional<uint64_t> merkle_path_ns;
+   std::optional<uint64_t> merkle_total_ns;
+-  // Historical alias for merkle_path_ns.
+-  std::optional<uint64_t> merkle_proof_ns;
++  std::optional<uint64_t> landmark_trust_ns;
+   // Historical inclusive interval around VerifyMTCProofSignaturePlants04.
+   std::optional<uint64_t> standalone_signatures_inclusive_ns;
+   // v2 effective cryptographic checks and cache lookup accounting.
+-- 
+2.50.1 (Apple Git-155)
+
