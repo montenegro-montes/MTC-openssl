@@ -110,10 +110,12 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
         target = 'https://' + pcap.bv.HOST + ':4433/'
         net = timing_netlog(target)
         add_timing_event(net, 'CREDENTIAL_VALIDATION_TIMING',
+                         timing_schema_version=3,
                          credential_validation_total_ns='9000', credential_type='mtc')
-        add_timing_event(net, 'MTC_VERIFICATION_TIMING', mtc_total_ns='7000',
+        add_timing_event(net, 'MTC_VERIFICATION_TIMING',
+                         timing_schema_version='3', mtc_total_ns='7000',
                          merkle_leaf_hash_ns='100', merkle_path_ns='200',
-                         merkle_total_ns='350', merkle_proof_ns='200',
+                         merkle_total_ns='350',
                          standalone_signatures_ns='6000',
                          standalone_signature_count='2',
                          standalone_signature_cache_ns='50',
@@ -121,30 +123,171 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
                          standalone_signature_cache_misses='1',
                          verification_mode='standalone', success=True)
         add_timing_event(net, 'SSL_CERTIFICATE_VERIFY_TIMING',
-                         certificate_verify_crypto_ns='3000', elapsed_ns='3000',
+                         certificate_verify_crypto_ns='3000',
                          signature_algorithm=1027, success=True)
         # Same event name on a disconnected browser connection must not be mixed in.
         add_timing_event(net, 'SSL_CERTIFICATE_VERIFY_TIMING', source=99,
                          elapsed_ns='999999', signature_algorithm=2052, success=False)
         timings = pcap.netlog_connections(net)[shared.RANDOM]['netlog_timings']
         self.assertEqual(timings['netlog_timing_status'], 'OK')
+        self.assertEqual(timings['timing_schema_version'], 3)
         self.assertEqual(timings['credential_validation_total_ns'], 9000)
         self.assertEqual(timings['credential_type'], 'mtc')
         self.assertIsNone(timings['x509_signatures_ns'])
+        self.assertIsNone(timings['x509_signatures_scope'])
         self.assertEqual(timings['mtc_total_ns'], 7000)
         self.assertEqual(timings['merkle_leaf_hash_ns'], 100)
         self.assertEqual(timings['merkle_path_ns'], 200)
         self.assertEqual(timings['merkle_total_ns'], 350)
-        self.assertEqual(timings['merkle_proof_ns'], 200)
+        self.assertIsNone(timings['landmark_trust_ns'])
         self.assertEqual(timings['standalone_signatures_ns'], 6000)
         self.assertEqual(timings['standalone_signature_count'], 2)
         self.assertEqual(timings['standalone_signature_cache_ns'], 50)
         self.assertEqual(timings['mtc_verification_mode'], 'standalone')
         self.assertTrue(timings['mtc_success'])
         self.assertEqual(timings['certificate_verify_crypto_ns'], 3000)
-        self.assertEqual(timings['certificate_verify_elapsed_ns'], 3000)
         self.assertEqual(timings['certificate_verify_algorithm'], 1027)
         self.assertTrue(timings['certificate_verify_success'])
+        self.assertIsNone(timings['handshake_total_ns'])
+
+    def test_x509_signature_scope_is_exported_with_crypto_timing(self):
+        target = 'https://' + pcap.bv.HOST + ':4433/'
+        net = timing_netlog(target)
+        add_timing_event(
+            net, 'CREDENTIAL_VALIDATION_TIMING',
+            timing_schema_version=2,
+            credential_validation_total_ns='2000',
+            credential_type='x509',
+            x509_signatures_ns='120',
+            x509_signature_count='2',
+            x509_signatures_scope='selected_chain_evp_digest_verify')
+        timings = pcap.netlog_connections(
+            net)[shared.RANDOM]['netlog_timings']
+        self.assertEqual(timings['netlog_timing_status'], 'OK')
+        self.assertEqual(timings['x509_signatures_ns'], 120)
+        self.assertEqual(timings['x509_signature_count'], 2)
+        self.assertEqual(
+            timings['x509_signatures_scope'],
+            'selected_chain_evp_digest_verify')
+
+    def test_unknown_x509_signature_scope_is_rejected(self):
+        target = 'https://' + pcap.bv.HOST + ':4433/'
+        net = timing_netlog(target)
+        add_timing_event(
+            net, 'CREDENTIAL_VALIDATION_TIMING',
+            timing_schema_version=2,
+            credential_validation_total_ns='2000',
+            credential_type='x509',
+            x509_signatures_ns='120',
+            x509_signature_count='2',
+            x509_signatures_scope='unknown_scope')
+        timings = pcap.netlog_connections(
+            net)[shared.RANDOM]['netlog_timings']
+        self.assertEqual(timings['netlog_timing_status'], 'ERROR')
+        self.assertIn('x509_signatures_scope has unsupported value',
+                      timings['netlog_timing_error'])
+
+    def test_landmark_trust_preserves_decimal_string_and_zero(self):
+        target = 'https://' + pcap.bv.HOST + ':4433/'
+        for encoded, expected in (('123', 123), ('0', 0)):
+            with self.subTest(encoded=encoded):
+                net = timing_netlog(target)
+                add_timing_event(
+                    net, 'CREDENTIAL_VALIDATION_TIMING',
+                    timing_schema_version=2,
+                    credential_validation_total_ns='2000',
+                    credential_type='mtc')
+                add_timing_event(
+                    net, 'MTC_VERIFICATION_TIMING',
+                    timing_schema_version='2', mtc_total_ns='1000',
+                    landmark_trust_ns=encoded,
+                    verification_mode='landmark', success=True)
+                timings = pcap.netlog_connections(
+                    net)[shared.RANDOM]['netlog_timings']
+                self.assertEqual(timings['timing_schema_version'], 2)
+                self.assertEqual(timings['landmark_trust_ns'], expected)
+                self.assertIsNone(timings['standalone_signatures_ns'])
+
+    def test_v2_aliases_are_mapped_to_canonical_fields(self):
+        target = 'https://' + pcap.bv.HOST + ':4433/'
+        net = timing_netlog(target)
+        add_timing_event(
+            net, 'CREDENTIAL_VALIDATION_TIMING',
+            timing_schema_version=2,
+            credential_validation_total_ns='2000',
+            credential_type='mtc')
+        add_timing_event(
+            net, 'MTC_VERIFICATION_TIMING',
+            timing_schema_version=2,
+            mtc_total_ns='1000',
+            merkle_proof_ns='200',
+            verification_mode='landmark',
+            success=True)
+        add_timing_event(
+            net, 'SSL_CERTIFICATE_VERIFY_TIMING',
+            elapsed_ns='3000',
+            signature_algorithm=1027,
+            success=True)
+        timings = pcap.netlog_connections(
+            net)[shared.RANDOM]['netlog_timings']
+        self.assertEqual(timings['netlog_timing_status'], 'OK')
+        self.assertEqual(timings['merkle_path_ns'], 200)
+        self.assertEqual(timings['certificate_verify_crypto_ns'], 3000)
+
+    def test_conflicting_aliases_are_rejected(self):
+        target = 'https://' + pcap.bv.HOST + ':4433/'
+
+        with self.subTest(field='merkle_path_ns'):
+            net = timing_netlog(target)
+            add_timing_event(
+                net, 'CREDENTIAL_VALIDATION_TIMING',
+                timing_schema_version=2,
+                credential_validation_total_ns='2000',
+                credential_type='mtc')
+            add_timing_event(
+                net, 'MTC_VERIFICATION_TIMING',
+                timing_schema_version=2,
+                mtc_total_ns='1000',
+                merkle_path_ns='200',
+                merkle_proof_ns='201',
+                verification_mode='landmark',
+                success=True)
+            timings = pcap.netlog_connections(
+                net)[shared.RANDOM]['netlog_timings']
+            self.assertEqual(timings['netlog_timing_status'], 'ERROR')
+            self.assertIsNotNone(timings['netlog_timing_error'])
+
+        with self.subTest(field='certificate_verify_crypto_ns'):
+            net = timing_netlog(target)
+            add_timing_event(
+                net, 'SSL_CERTIFICATE_VERIFY_TIMING',
+                certificate_verify_crypto_ns='3000',
+                elapsed_ns='3001',
+                signature_algorithm=1027,
+                success=True)
+            timings = pcap.netlog_connections(
+                net)[shared.RANDOM]['netlog_timings']
+            self.assertEqual(timings['netlog_timing_status'], 'ERROR')
+            self.assertIsNotNone(timings['netlog_timing_error'])
+
+    def test_incompatible_timing_schema_versions_are_rejected(self):
+        target = 'https://' + pcap.bv.HOST + ':4433/'
+        net = timing_netlog(target)
+        add_timing_event(
+            net, 'CREDENTIAL_VALIDATION_TIMING',
+            timing_schema_version=2,
+            credential_validation_total_ns='2000',
+            credential_type='mtc')
+        add_timing_event(
+            net, 'MTC_VERIFICATION_TIMING',
+            timing_schema_version='3', mtc_total_ns='1000',
+            verification_mode='landmark', success=True)
+        timings = pcap.netlog_connections(
+            net)[shared.RANDOM]['netlog_timings']
+        self.assertEqual(timings['netlog_timing_status'], 'ERROR')
+        self.assertIsNone(timings['timing_schema_version'])
+        self.assertIn('incompatible timing_schema_version',
+                      timings['netlog_timing_error'])
 
     def test_old_netlog_has_null_crypto_timings(self):
         target = 'https://' + pcap.bv.HOST + ':4433/'
@@ -164,7 +307,7 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
         timings = pcap.netlog_connections(net)[shared.RANDOM]['netlog_timings']
         self.assertEqual(timings['netlog_timing_status'], 'ERROR')
         self.assertIn('expected at most one event', timings['netlog_timing_error'])
-        self.assertIsNone(timings['certificate_verify_elapsed_ns'])
+        self.assertIsNone(timings['certificate_verify_crypto_ns'])
 
     def test_zero_duration_is_distinct_from_unexecuted_optional_region(self):
         target = 'https://' + pcap.bv.HOST + ':4433/'
@@ -186,7 +329,7 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
         entry['netlog_timings'] = pcap.netlog_connections(
             net)[shared.RANDOM]['netlog_timings']
         values = pcap.browser_metric_values([entry], dict(target_url=target), net)
-        self.assertEqual(values['certificate_verify_elapsed_ns'], 3000)
+        self.assertEqual(values['certificate_verify_crypto_ns'], 3000)
         self.assertEqual(values['certificate_verify_algorithm'], 1027)
         self.assertTrue(values['certificate_verify_success'])
         self.assertEqual(values['netlog_timing_status'], 'OK')
@@ -679,9 +822,12 @@ class BrowserComparisonMetricsTests(unittest.TestCase):
         self.assertEqual(
             paired['metric_mtc_landmark_vs_mtc_standalone_delta'], -2)
 
-    def test_authentication_status_fields_are_never_numeric_or_paired(self):
+    def test_textual_comparison_fields_are_never_numeric_or_paired(self):
         for field in ('authentication_components_status',
-                      'authentication_components_error'):
+                      'authentication_components_error',
+                      'credential_type', 'x509_signatures_scope',
+                      'mtc_verification_mode', 'netlog_timing_status',
+                      'netlog_timing_error'):
             self.assertIn(field, measurements.COMPARISON)
             self.assertNotIn(field, measurements.COMPARISON_NUMERIC)
             self.assertNotIn(field, measurements.CSV_COMPARISON_NUMERIC)

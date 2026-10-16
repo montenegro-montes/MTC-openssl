@@ -771,8 +771,10 @@ the `merkle_*_ns` fields retain the leaf, path, and direct inclusive Merkle
 intervals, and `standalone_signatures_ns` covers only effective Standalone
 signature cryptography. Its cache lookup metrics are likewise separate.
 `certificate_verify_crypto_ns` is the canonical TLS `CertificateVerify`
-cryptographic interval; `certificate_verify_elapsed_ns` remains its historical
-alias. These intervals can be nested or
+cryptographic interval. Schema v3 emits only canonical names. Historical
+schema-v2 NetLogs using `elapsed_ns` or `merkle_proof_ns` remain accepted
+as input, but those aliases are not exported to `measurements.csv`. These
+intervals can be nested or
 separate and must not be summed as an exclusive decomposition. Modes, algorithms
 and operation-local success values are retained alongside them.
 

@@ -29,16 +29,19 @@ HANDSHAKE_FIELDS = ph.METRIC_FIELDS
 BROWSER_TIMING_FIELDS = ('browser_process_wall_ms', 'stabilization_ms', 'browser_ssl_connect_ms',
                          'browser_navigation_to_clienthello_ms', 'browser_request_to_response_headers_ms')
 NETLOG_CRYPTO_TIMING_FIELDS = (
-    'credential_validation_total_ns', 'credential_type', 'x509_signatures_ns',
-    'x509_signature_count', 'x509_signature_cache_ns',
+    'timing_schema_version', 'credential_validation_total_ns',
+    'credential_type', 'x509_signatures_ns',
+    'x509_signature_count', 'x509_signatures_scope',
+    'x509_signature_cache_ns',
     'x509_signature_cache_hits', 'x509_signature_cache_misses',
     'mtc_total_ns', 'merkle_leaf_hash_ns', 'merkle_path_ns',
-    'merkle_total_ns', 'merkle_proof_ns', 'standalone_signatures_ns',
+    'merkle_total_ns', 'landmark_trust_ns',
+    'standalone_signatures_ns',
     'standalone_signature_count', 'standalone_signature_cache_ns',
     'standalone_signature_cache_hits', 'standalone_signature_cache_misses',
     'mtc_verification_mode', 'mtc_success', 'certificate_verify_crypto_ns',
-    'certificate_verify_elapsed_ns',
-    'certificate_verify_algorithm', 'certificate_verify_success')
+    'certificate_verify_algorithm', 'certificate_verify_success',
+    'handshake_total_ns')
 NETLOG_TIMING_DIAGNOSTIC_FIELDS = ('netlog_timing_status', 'netlog_timing_error')
 COMPARISON_FIELDS = (*HANDSHAKE_FIELDS, *BROWSER_TIMING_FIELDS,
                      *NETLOG_CRYPTO_TIMING_FIELDS, *NETLOG_TIMING_DIAGNOSTIC_FIELDS)
@@ -391,15 +394,20 @@ def netlog_crypto_timings(events, types, hello_count):
     problems = []
     names = {
         'CREDENTIAL_VALIDATION_TIMING': (
+            ('timing_schema_version', 'uint64'),
             ('credential_validation_total_ns', 'uint64'),
             ('credential_type', ('x509', 'mtc')),
-            ('x509_signatures_ns', 'uint64'), ('x509_signature_count', 'uint64'),
+            ('x509_signatures_ns', 'uint64'),
+            ('x509_signature_count', 'uint64'),
+            ('x509_signatures_scope', ('selected_chain_evp_digest_verify',)),
             ('x509_signature_cache_ns', 'uint64'),
             ('x509_signature_cache_hits', 'uint64'),
             ('x509_signature_cache_misses', 'uint64')),
         'MTC_VERIFICATION_TIMING': (
+            ('timing_schema_version', 'uint64'),
             ('mtc_total_ns', 'uint64'), ('merkle_leaf_hash_ns', 'uint64'),
             ('merkle_path_ns', 'uint64'), ('merkle_total_ns', 'uint64'),
+            ('landmark_trust_ns', 'uint64'),
             ('merkle_proof_ns', 'uint64'),
             ('standalone_signatures_ns', 'uint64'),
             ('standalone_signature_count', 'uint64'),
@@ -415,16 +423,20 @@ def netlog_crypto_timings(events, types, hello_count):
     }
     outputs = {
         'CREDENTIAL_VALIDATION_TIMING': {
+            'timing_schema_version': 'timing_schema_version',
             'credential_validation_total_ns': 'credential_validation_total_ns',
             'credential_type': 'credential_type', 'x509_signatures_ns': 'x509_signatures_ns',
             'x509_signature_count': 'x509_signature_count',
+            'x509_signatures_scope': 'x509_signatures_scope',
             'x509_signature_cache_ns': 'x509_signature_cache_ns',
             'x509_signature_cache_hits': 'x509_signature_cache_hits',
             'x509_signature_cache_misses': 'x509_signature_cache_misses'},
         'MTC_VERIFICATION_TIMING': {
+            'timing_schema_version': 'timing_schema_version',
             'mtc_total_ns': 'mtc_total_ns', 'merkle_leaf_hash_ns': 'merkle_leaf_hash_ns',
             'merkle_path_ns': 'merkle_path_ns', 'merkle_total_ns': 'merkle_total_ns',
-            'merkle_proof_ns': 'merkle_proof_ns',
+            'landmark_trust_ns': 'landmark_trust_ns',
+            'merkle_proof_ns': '_legacy_merkle_proof_ns',
             'standalone_signatures_ns': 'standalone_signatures_ns',
             'standalone_signature_count': 'standalone_signature_count',
             'standalone_signature_cache_ns': 'standalone_signature_cache_ns',
@@ -433,17 +445,18 @@ def netlog_crypto_timings(events, types, hello_count):
             'verification_mode': 'mtc_verification_mode', 'success': 'mtc_success'},
         'SSL_CERTIFICATE_VERIFY_TIMING': {
             'certificate_verify_crypto_ns': 'certificate_verify_crypto_ns',
-            'elapsed_ns': 'certificate_verify_elapsed_ns',
+            'elapsed_ns': '_legacy_certificate_verify_elapsed_ns',
             'signature_algorithm': 'certificate_verify_algorithm',
             'success': 'certificate_verify_success'},
     }
     required = {
         'CREDENTIAL_VALIDATION_TIMING': ('credential_validation_total_ns',),
         'MTC_VERIFICATION_TIMING': ('mtc_total_ns', 'success'),
-        'SSL_CERTIFICATE_VERIFY_TIMING': ('elapsed_ns', 'signature_algorithm', 'success'),
+        'SSL_CERTIFICATE_VERIFY_TIMING': ('signature_algorithm', 'success'),
     }
 
     selected = {name: [] for name in names}
+    schema_versions = []
     for event in events:
         name = types.get(event.get('type'), event.get('type'))
         if name in selected:
@@ -468,6 +481,11 @@ def netlog_crypto_timings(events, types, hello_count):
             missing = [name for name in required[event_name] if name not in params]
             if missing:
                 raise ValueError('missing fields: ' + ', '.join(missing))
+            if (event_name == 'SSL_CERTIFICATE_VERIFY_TIMING'
+                    and 'certificate_verify_crypto_ns' not in params
+                    and 'elapsed_ns' not in params):
+                raise ValueError(
+                    'missing fields: certificate_verify_crypto_ns or elapsed_ns')
             for input_name, kind in schema:
                 if input_name not in params:
                     continue
@@ -486,10 +504,46 @@ def netlog_crypto_timings(events, types, hello_count):
                 elif value not in kind:
                     raise ValueError(f'{input_name} has unsupported value')
                 parsed[outputs[event_name][input_name]] = value
+
+            if event_name == 'MTC_VERIFICATION_TIMING':
+                legacy = parsed.pop('_legacy_merkle_proof_ns', None)
+                canonical = parsed.get('merkle_path_ns')
+                if legacy is not None:
+                    if canonical is not None and canonical != legacy:
+                        raise ValueError(
+                            'merkle_path_ns differs from legacy '
+                            'merkle_proof_ns')
+                    if canonical is None:
+                        parsed['merkle_path_ns'] = legacy
+
+            if event_name == 'SSL_CERTIFICATE_VERIFY_TIMING':
+                legacy = parsed.pop(
+                    '_legacy_certificate_verify_elapsed_ns', None)
+                canonical = parsed.get('certificate_verify_crypto_ns')
+                if legacy is not None:
+                    if canonical is not None and canonical != legacy:
+                        raise ValueError(
+                            'certificate_verify_crypto_ns differs from '
+                            'legacy elapsed_ns')
+                    if canonical is None:
+                        parsed['certificate_verify_crypto_ns'] = legacy
         except (TypeError, ValueError) as error:
             problems.append(f'{event_name}: {error}')
             continue
+        if 'timing_schema_version' in parsed:
+            schema_versions.append(
+                (event_name, parsed['timing_schema_version']))
         values.update(parsed)
+
+    if schema_versions:
+        versions = {version for _, version in schema_versions}
+        if len(versions) == 1:
+            values['timing_schema_version'] = versions.pop()
+        else:
+            detail = ', '.join(
+                f'{name}={version}' for name, version in schema_versions)
+            problems.append('incompatible timing_schema_version: ' + detail)
+            values['timing_schema_version'] = None
 
     status = 'ERROR' if problems else ('OK' if present else 'UNAVAILABLE')
     return {**values, 'netlog_timing_status': status,
