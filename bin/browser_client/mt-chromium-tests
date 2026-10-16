@@ -7,6 +7,122 @@ cd "$REPO"
 STATE="$REPO/.mt-state/chromium-mtc"
 fail() { echo "ERROR: $*" >&2; exit 1; }
 source "$REPO/bin/browser_client/mt-chromium-menu.sh"
+
+docker_socket_path() {
+ local host
+ host=${DOCKER_HOST:-}
+ if [[ -z "$host" ]]; then
+  host=$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || true)
+ fi
+ case "$host" in
+  unix://*) printf '%s\n' "${host#unix://}";;
+ esac
+}
+
+docker_failure_details() {
+ local diagnostic=$1 socket_path
+ socket_path=$(docker_socket_path)
+ echo "User: $(id -un) (uid=$(id -u), groups=$(id -Gn))" >&2
+ [[ -z "$socket_path" || ! -e "$socket_path" ]] ||
+  ls -ld "$socket_path" >&2 || true
+ echo "Docker diagnostic: ${diagnostic//$'\n'/ }" >&2
+}
+
+start_docker_for_platform() {
+ local platform
+ platform=$(uname -s)
+ case "$platform" in
+  Darwin)
+   command -v open >/dev/null 2>&1 ||
+    fail 'Cannot start Docker Desktop because the macOS open command is unavailable.'
+   echo '[DEPENDENCIES] Starting Docker Desktop...'
+   open -a Docker || fail 'Docker Desktop could not be started.'
+   ;;
+  Linux)
+   if command -v systemctl >/dev/null 2>&1 &&
+      systemctl --user cat docker.service >/dev/null 2>&1; then
+    echo '[DEPENDENCIES] Starting rootless Docker service...'
+    systemctl --user start docker ||
+     fail 'The rootless Docker service could not be started.'
+   elif command -v systemctl >/dev/null 2>&1 &&
+        systemctl cat docker.service >/dev/null 2>&1; then
+    echo '[DEPENDENCIES] Starting system Docker service...'
+    if (( EUID == 0 )); then
+     systemctl start docker || fail 'The Docker service could not be started.'
+    else
+     command -v sudo >/dev/null 2>&1 ||
+      fail 'Starting the system Docker service requires sudo.'
+     sudo systemctl start docker || fail 'The Docker service could not be started.'
+    fi
+   elif command -v service >/dev/null 2>&1; then
+    echo '[DEPENDENCIES] Starting Docker service...'
+    if (( EUID == 0 )); then
+     service docker start || fail 'The Docker service could not be started.'
+    else
+     command -v sudo >/dev/null 2>&1 ||
+      fail 'Starting the Docker service requires sudo.'
+     sudo service docker start || fail 'The Docker service could not be started.'
+    fi
+   else
+    fail 'No supported Docker service manager was found on Linux.'
+   fi
+   ;;
+  *) fail "Automatic Docker startup is unsupported on $platform.";;
+ esac
+}
+
+wait_for_docker() {
+ local timeout=${MT_DOCKER_START_TIMEOUT:-180} started=$SECONDS elapsed diagnostic
+ [[ "$timeout" =~ ^[1-9][0-9]*$ ]] ||
+  fail 'MT_DOCKER_START_TIMEOUT must be a positive integer number of seconds.'
+ while (( SECONDS - started < timeout )); do
+  if docker info >/dev/null 2>&1; then
+   echo '[DEPENDENCIES] Docker: READY'
+   return 0
+  fi
+  elapsed=$((SECONDS-started))
+  if (( elapsed == 0 || elapsed % 10 == 0 )); then
+   echo "[DEPENDENCIES] Waiting for Docker API... ${elapsed}s"
+  fi
+  sleep 2
+ done
+ diagnostic=$(docker info 2>&1 || true)
+ echo "[DEPENDENCIES] Docker: TIMEOUT (${timeout}s)" >&2
+ docker_failure_details "$diagnostic"
+ fail 'Docker did not become ready before the startup timeout.'
+}
+
+ensure_docker_ready() {
+ local diagnostic answer timeout=${MT_DOCKER_START_TIMEOUT:-180}
+ if diagnostic=$(docker info 2>&1); then
+  echo '[DEPENDENCIES] Docker: PASS'
+  return 0
+ fi
+ if [[ "$diagnostic" == *'permission denied'* ||
+       "$diagnostic" == *'Permission denied'* ||
+       "$diagnostic" == *'operation not permitted'* ||
+       "$diagnostic" == *'Operation not permitted'* ]]; then
+  echo '[DEPENDENCIES] Docker: PERMISSION DENIED' >&2
+  docker_failure_details "$diagnostic"
+  fail 'Docker socket access is denied; fix user or socket permissions. No services were started and no groups were modified.'
+ fi
+ echo '[DEPENDENCIES] Docker: NOT RUNNING' >&2
+ if [[ ! -t 0 || ! -t 1 ]]; then
+  docker_failure_details "$diagnostic"
+  fail 'Docker API is inaccessible. Start Docker before running this non-interactive command.'
+ fi
+ [[ "$timeout" =~ ^[1-9][0-9]*$ ]] ||
+  fail 'MT_DOCKER_START_TIMEOUT must be a positive integer number of seconds.'
+ read -r -p "Start Docker and wait up to ${timeout} seconds? [y/N] " answer ||
+  fail 'Docker startup prompt was interrupted.'
+ case "$answer" in
+  y|Y) ;;
+  *) fail 'Docker startup was declined.';;
+ esac
+ start_docker_for_platform
+ wait_for_docker
+}
+
 browser_measurements_readiness() {
  python3 -B - "$REPO" <<'PY'
 import sys
@@ -141,20 +257,10 @@ PY
 }
 
 browser_measurements_environment() {
- local image=$1 chromium=$2 diagnostic socket_path
+ local image=$1 chromium=$2
  echo '[DEPENDENCIES] Checking Docker, image, Chromium and capture tools...'
  command -v docker >/dev/null 2>&1 || fail 'Docker client is missing; install Docker without running the campaign as root.'
- if ! diagnostic=$(docker info 2>&1); then
-  socket_path=${DOCKER_HOST:-}
-  socket_path=${socket_path#unix://}
-  [[ -n "$socket_path" && "$socket_path" != "${DOCKER_HOST:-}" ]] || socket_path=/var/run/docker.sock
-  echo "[DEPENDENCIES] Docker: FAIL" >&2
-  echo "User: $(id -un) (uid=$(id -u), groups=$(id -Gn))" >&2
-  [[ ! -e "$socket_path" ]] || ls -ld "$socket_path" >&2 || true
-  echo "Docker diagnostic: ${diagnostic//$'\n'/ }" >&2
-  fail 'Docker API is inaccessible. Start Docker or arrange user access to its socket, then log out/in if group membership changed. No groups were modified.'
- fi
- echo '[DEPENDENCIES] Docker: PASS'
+ ensure_docker_ready
  docker image inspect "$image" >/dev/null 2>&1 ||
   fail "Required Docker image is unavailable: $image"
  echo "[DEPENDENCIES] Docker image: PASS ($image)"

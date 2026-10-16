@@ -81,9 +81,21 @@ class BrowserMeasurementsAutoPrepareTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Docker API is inaccessible', result.stderr)
         self.assertIn('User:', result.stderr)
+        self.assertNotIn('Start Docker and wait', result.stderr)
         self.assertFalse(any(line.startswith('SETUP ') for line in self.calls()))
         self.assertFalse(any(' browser_measurements run ' in line
                              for line in self.calls()))
+
+    def test_interactive_docker_startup_covers_macos_and_linux(self):
+        launcher = (REPO/'bin/browser_client/mt-chromium-tests').read_text()
+        self.assertIn('open -a Docker', launcher)
+        self.assertIn('systemctl --user start docker', launcher)
+        self.assertIn('sudo systemctl start docker', launcher)
+        self.assertIn('sudo service docker start', launcher)
+        self.assertIn('MT_DOCKER_START_TIMEOUT', launcher)
+        self.assertIn('if [[ ! -t 0 || ! -t 1 ]]', launcher)
+        self.assertLess(launcher.index('permission denied'),
+                        launcher.index('Start Docker and wait'))
 
     def test_policy_prepare_reuses_existing_setup_workflow(self):
         setup = (REPO/'bin/browser_client/mt-chromium-setup').read_text()
