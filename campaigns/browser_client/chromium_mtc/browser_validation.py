@@ -530,7 +530,7 @@ def prevalidated_mtc(fixture, validation, profile=PROFILE,
 
 
 def preselect_mtc_fixture(repo, profile, trust_mode='landmark',
-                          require_anchor=True):
+                          require_anchor=True, required_image_id=None):
     require(trust_mode in ('landmark', 'standalone'),
             'Unsupported MTC trust mode')
     candidates, audit = [], []
@@ -548,8 +548,12 @@ def preselect_mtc_fixture(repo, profile, trust_mode='landmark',
             locally_valid = []
             for evidence in evidence_paths:
                 try:
-                    locally_valid.append(prevalidated_mtc(
-                        fixture, evidence, profile, trust_mode))
+                    candidate = prevalidated_mtc(
+                        fixture, evidence, profile, trust_mode)
+                    require(required_image_id is None or
+                            candidate['image_id'] == required_image_id,
+                            'MTC validation uses another Docker image')
+                    locally_valid.append(candidate)
                 except Exception:
                     continue
             require(bool(locally_valid), 'No matching complete MTC validation evidence')
@@ -601,6 +605,62 @@ def preselect_mtc_fixture(repo, profile, trust_mode='landmark',
     for record in audit:
         record['selected'] = record.get('valid', False) and Path(record['path']).resolve() == Path(selected['fixture'])
     return selected, audit
+
+
+def docker_image_id(image):
+    result = command([
+        'docker', 'image', 'inspect', '--format', '{{.Id}}', image])
+    image_id = result.stdout.strip()
+    require(bool(re.fullmatch(r'sha256:[0-9a-f]{64}', image_id)),
+            'Docker returned an invalid image ID for '+str(image))
+    return image_id
+
+
+def remove_stale_mtc_fixtures(repo, profiles, required_image_id):
+    """Remove generated MTC fixture families tied only to older images."""
+    root = (repo/'artifacts/mtc').resolve()
+    removed = []
+    if not root.is_dir():
+        return removed
+    for fixture in sorted(root.iterdir()):
+        manifest_path = fixture/'manifest.json'
+        if (not fixture.is_dir() or fixture.is_symlink() or
+                not manifest_path.is_file() or manifest_path.is_symlink()):
+            continue
+        try:
+            manifest = read(manifest_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if not set(profiles).intersection(manifest.get('profiles', [])):
+            continue
+        evidence_paths = sorted(root.glob(
+            fixture.name+'-validation*/validation.json'))
+        image_ids = set()
+        for evidence in evidence_paths:
+            try:
+                image_id = read(evidence).get('provenance', {}).get('image_id')
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+            if isinstance(image_id, str):
+                image_ids.add(image_id)
+        if not image_ids or required_image_id in image_ids:
+            continue
+        family = [fixture]
+        family.extend(sorted(root.glob(fixture.name+'-validation*')))
+        family.extend(fixture.with_name(fixture.name+suffix) for suffix in (
+            '-chromium-anchor.json', '-chromium-anchor-standalone.json',
+            '-chromium.json'))
+        for path in family:
+            if not (path.exists() or path.is_symlink()):
+                continue
+            require(path.parent.resolve() == root and not path.is_symlink(),
+                    'Unsafe stale MTC artifact path: '+str(path))
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        removed.append(str(fixture))
+    return removed
 
 
 def precheck_formal_x509_fixture(repo, profile, depth, fixture_set):
@@ -1132,9 +1192,11 @@ def prepare_credentials(repo, output, image, profile=PROFILE, depth=2,
             'Standalone MTC is reuse-only: supply --mtc-fixture and --mtc-validation')
     if optimized_all_profiles:
         require(mtc_fixture is None, 'Optimized credentials select MTC fixtures locally')
+        required_image_id = docker_image_id(image)
         try:
             mtc, ma = preselect_mtc_fixture(
-                repo, profile, mtc_trust_mode, require_anchor=False)
+                repo, profile, mtc_trust_mode, require_anchor=False,
+                required_image_id=required_image_id)
         except ValueError:
             fixture = generate_mtc(repo, output, image, profile)
             validation = fixture.with_name(
@@ -1213,6 +1275,11 @@ def prepare_mtc_dependencies(repo, image, profiles):
     """Prepare reusable N=16 fixtures and canonical anchors before validation."""
     require(profiles and all(profile in PROFILES for profile in profiles),
             'Unsupported MTC dependency profile')
+    required_image_id = docker_image_id(image)
+    for fixture in remove_stale_mtc_fixtures(
+            repo, profiles, required_image_id):
+        print('[MTC] Removed stale fixture for an older Docker image: '+fixture,
+              flush=True)
     root = repo/'.mt-state/chromium-mtc'/('mtc-dependencies-'+stamp())
     root.mkdir(parents=True, exist_ok=False)
     records = []
@@ -1224,21 +1291,25 @@ def prepare_mtc_dependencies(repo, image, profiles):
             origin = 'reused'
             try:
                 selected, _ = preselect_mtc_fixture(
-                    repo, profile, mode, require_anchor=True)
+                    repo, profile, mode, require_anchor=True,
+                    required_image_id=required_image_id)
             except (ValueError, OSError):
                 try:
                     selected, _ = preselect_mtc_fixture(
-                        repo, profile, mode, require_anchor=False)
+                        repo, profile, mode, require_anchor=False,
+                        required_image_id=required_image_id)
                 except (ValueError, OSError):
                     if not generated:
                         generate_mtc(repo, profile_output, image, profile)
                         generated = True
                     selected, _ = preselect_mtc_fixture(
-                        repo, profile, mode, require_anchor=False)
+                        repo, profile, mode, require_anchor=False,
+                        required_image_id=required_image_id)
                     origin = 'generated'
                 selected.update(choose_anchor(selected, profile_output))
                 selected, _ = preselect_mtc_fixture(
-                    repo, profile, mode, require_anchor=True)
+                    repo, profile, mode, require_anchor=True,
+                    required_image_id=required_image_id)
                 if origin != 'generated':
                     origin = 'anchor-generated'
             fixture = Path(selected['fixture'])

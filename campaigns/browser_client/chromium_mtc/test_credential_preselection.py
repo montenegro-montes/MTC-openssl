@@ -283,6 +283,8 @@ class CredentialPreselectionTests(unittest.TestCase):
              patch.object(bv, 'precheck_formal_x509_fixture',
                           return_value=self.repo/'x509'), \
              patch.object(bv, 'validate_x509', return_value=x509), \
+             patch.object(bv, 'docker_image_id',
+                          return_value='sha256:'+'2'*64), \
              patch.object(bv, 'root_trust', return_value={'status': 'TEST'}):
             result = bv.prepare_credentials(
                 self.repo, output, 'image', profile='ecdsa-p384', depth=2,
@@ -290,7 +292,8 @@ class CredentialPreselectionTests(unittest.TestCase):
                 optimized_all_profiles=True,
                 mtc_trust_mode='standalone')
         select.assert_called_once_with(
-            self.repo, 'ecdsa-p384', 'standalone', require_anchor=False)
+            self.repo, 'ecdsa-p384', 'standalone', require_anchor=False,
+            required_image_id='sha256:'+'2'*64)
         choose.assert_called_once()
         generate.assert_not_called()
         self.assertEqual(result['mtc']['anchor'], str(anchor))
@@ -305,6 +308,8 @@ class CredentialPreselectionTests(unittest.TestCase):
         validate = Mock(side_effect=ValueError('cryptographic failure'))
         with patch.object(bv, 'preselect_mtc_fixture', return_value=(selected, [])), \
              patch.object(bv, 'validate_mtc', validate), \
+             patch.object(bv, 'docker_image_id',
+                          return_value='sha256:'+'2'*64), \
              patch.object(bv, 'select_or_generate') as fallback:
             with self.assertRaisesRegex(ValueError, 'cryptographic failure'):
                 bv.prepare_credentials(
@@ -322,6 +327,9 @@ class CredentialPreselectionTests(unittest.TestCase):
                         anchor='/anchor.json', anchor_sha256='a'*64)
         with patch.object(bv, 'preselect_mtc_fixture',
                           return_value=(selected, [])) as preselect, \
+             patch.object(bv, 'docker_image_id',
+                          return_value='sha256:'+'2'*64), \
+             patch.object(bv, 'remove_stale_mtc_fixtures', return_value=[]), \
              patch.object(bv, 'generate_mtc') as generate, \
              patch.object(bv, 'choose_anchor') as choose:
             records = bv.prepare_mtc_dependencies(
@@ -344,6 +352,9 @@ class CredentialPreselectionTests(unittest.TestCase):
             (dict(standalone), []),
         ]
         with patch.object(bv, 'preselect_mtc_fixture', side_effect=selections), \
+             patch.object(bv, 'docker_image_id',
+                          return_value='sha256:'+'2'*64), \
+             patch.object(bv, 'remove_stale_mtc_fixtures', return_value=[]), \
              patch.object(bv, 'generate_mtc', return_value=fixture) as generate, \
              patch.object(bv, 'choose_anchor', return_value={
                  'anchor': '/landmark.json', 'anchor_sha256': 'a'*64,
@@ -353,6 +364,33 @@ class CredentialPreselectionTests(unittest.TestCase):
         generate.assert_called_once()
         self.assertEqual(records[0]['origin'], 'generated')
         self.assertEqual(records[1]['origin'], 'reused')
+
+    def test_dependency_preparation_removes_only_stale_mtc_family(self):
+        mtc_root = self.repo/'artifacts/mtc'
+        mtc_root.mkdir(parents=True, exist_ok=True)
+        fixture = mtc_root/'old-fixture'
+        fixture.mkdir()
+        bv.write(fixture/'manifest.json', dict(
+            server_hostname=bv.HOST, profiles=['ecdsa-p256'], sizes=[16]))
+        validation = mtc_root/'old-fixture-validation'
+        validation.mkdir()
+        bv.write(validation/'validation.json', dict(
+            provenance={'image_id': 'sha256:'+'1'*64}))
+        anchor = mtc_root/'old-fixture-chromium-anchor.json'
+        anchor.write_text('{}')
+        unrelated = mtc_root/'unrelated'
+        unrelated.mkdir()
+        bv.write(unrelated/'manifest.json', dict(
+            server_hostname=bv.HOST, profiles=['ecdsa-p384'], sizes=[16]))
+
+        removed = bv.remove_stale_mtc_fixtures(
+            self.repo, ('ecdsa-p256',), 'sha256:'+'2'*64)
+
+        self.assertEqual(removed, [str(fixture.resolve())])
+        self.assertFalse(fixture.exists())
+        self.assertFalse(validation.exists())
+        self.assertFalse(anchor.exists())
+        self.assertTrue(unrelated.exists())
 
     def test_openssl_batch_runs_every_check_in_one_ephemeral_container(self):
         root = bv.REPO/'.mt-state/chromium-tmp'; root.mkdir(parents=True, exist_ok=True)
