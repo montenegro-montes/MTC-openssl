@@ -101,6 +101,22 @@ The Chromium JSON is exported from the fixture's typed MTB2 trust bundle and
 records `"source_format": "MTB2"`. It must come from the same newly generated
 fixture.
 
+The laboratory Standalone policy requires both configured signers: the CA and
+the additional cosigner listed in `signers[1]`. Chromium loads the additional
+signer's ID and SPKI and requires its valid cosignature alongside the valid CA
+signature. The current homogeneous-profile laboratory configuration uses the
+configured signature algorithm for both keys. Landmark proofs continue to use
+the trusted-subtree decision. This laboratory policy is separate from the
+public Chrome Root Store cosigner policy.
+
+Patch 0018 and the pinned Chromium bundle contain this policy. The operator
+reported successful focused unit tests, a `chrome` build and a positive
+six-profile, three-scenario run with two effective Standalone signature checks
+per profile. End-to-end rejection tests for a missing or corrupted additional
+cosignature remain deferred. Older measurements with one effective Standalone
+signature used a different verification workload and must not be pooled with
+these two-signature measurements as if the policy were identical.
+
 ## Local hostname resolution
 
 Step 50 verifies an existing correct `/etc/hosts` entry. If the hostname is

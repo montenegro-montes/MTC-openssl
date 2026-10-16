@@ -1,0 +1,410 @@
+From 0076fd985d6091c378473f9605e0d9c211337576 Mon Sep 17 00:00:00 2001
+From: Jose Antonio Montenegro Montes <jmmontes@uma.es>
+Date: Fri, 16 Oct 2026 16:32:52 +0200
+Subject: [PATCH] fix(mtc): require the configured Standalone lab cosigner
+
+Load the additional signer from the laboratory trust configuration and require its valid cosignature alongside the CA signature for Standalone verification. Forward lab policy and key lookups through the system and certificate-verifier trust-store layers, while retaining public mirror-key precedence.
+
+Validation reported by the operator: net_unittests and chrome built successfully; focused lab configuration and trust-store tests passed; six profile triplets completed with two effective Standalone signatures each. Negative end-to-end missing/corrupt cosignature cases remain deferred.
+---
+ net/cert/cert_verify_proc_builtin.cc          | 35 +++++++++++-
+ net/cert/cert_verify_proc_builtin_unittest.cc | 13 +++++
+ net/cert/internal/system_trust_store.cc       | 17 ++++++
+ net/cert/internal/system_trust_store.h        |  8 +++
+ net/cert/internal/trust_store_chrome.cc       | 56 ++++++++++++++++++-
+ net/cert/internal/trust_store_chrome.h        | 13 +++++
+ .../internal/trust_store_chrome_unittest.cc   | 13 ++++-
+ net/cert/mtc_plants07_lab_config.cc           | 25 ++++++++-
+ net/cert/mtc_plants07_lab_config.h            |  7 +++
+ net/cert/mtc_plants07_lab_config_unittest.cc  | 12 +++-
+ 10 files changed, 193 insertions(+), 6 deletions(-)
+
+diff --git a/net/cert/cert_verify_proc_builtin.cc b/net/cert/cert_verify_proc_builtin.cc
+index b3efc41506..d9268df0a4 100644
+--- a/net/cert/cert_verify_proc_builtin.cc
++++ b/net/cert/cert_verify_proc_builtin.cc
+@@ -391,6 +391,22 @@ class CertVerifyProcTrustStore {
+     return system_trust_store_->GetMtcMirrorKey(cosigner_id);
+   }
+ 
++  std::optional<bssl::VerifyCertificateChainDelegate::MTCCosigner>
++  GetLabMtcCosignerKey(base::span<const uint8_t> cosigner_id) const {
++    return system_trust_store_->GetLabMtcCosignerKey(cosigner_id);
++  }
++
++  bool IsLabMtcAnchor(const bssl::MTCAnchor* anchor) const {
++    return system_trust_store_->IsLabMtcAnchor(anchor);
++  }
++
++  bool IsLabMtcCosignerPolicySatisfied(
++      const bssl::MTCAnchor* anchor,
++      base::span<const std::vector<uint8_t>> valid_additional_cosigners) const {
++    return system_trust_store_->IsLabMtcCosignerPolicySatisfied(
++        anchor, valid_additional_cosigners);
++  }
++
+   bool IsMtcCosignerPolicySatisfied(
+       const bssl::ParsedCertificate& target_cert,
+       base::Time current_time,
+@@ -527,6 +543,20 @@ class PathBuilderDelegateImpl : public bssl::SimplePathBuilderDelegate {
+       const bssl::MTCAnchor* mtc_anchor,
+       std::vector<std::vector<uint8_t>> valid_additional_cosigners) override {
+     CHECK(mtc_anchor);
++#if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
++    if (trust_store_->IsLabMtcAnchor(mtc_anchor)) {
++      const bool is_valid = trust_store_->IsLabMtcCosignerPolicySatisfied(
++          mtc_anchor, valid_additional_cosigners);
++      net_log_->AddEvent(net::NetLogEventType::CERT_MTC_COSIGNER_POLICY_CHECKED,
++                         [&] {
++                           base::DictValue dict;
++                           dict.Set("is_valid", is_valid);
++                           dict.Set("reason", "lab standalone signer policy");
++                           return dict;
++                         });
++      return is_valid;
++    }
++#endif
+     if (!trust_store_->IsKnownMtcAnchor(mtc_anchor)) {
+       // Cosigner policy only applies to publicly trusted MTCs, only a valid CA
+       // signature is required for private PKIs.
+@@ -552,7 +582,10 @@ class PathBuilderDelegateImpl : public bssl::SimplePathBuilderDelegate {
+   std::optional<bssl::VerifyCertificateChainDelegate::MTCCosigner>
+   GetMTCCosigner(bssl::Span<const uint8_t> cosigner_id) override {
+ #if BUILDFLAG(CHROME_ROOT_STORE_SUPPORTED)
+-    return trust_store_->GetMtcMirrorKey(cosigner_id);
++    if (auto mirror = trust_store_->GetMtcMirrorKey(cosigner_id)) {
++      return mirror;
++    }
++    return trust_store_->GetLabMtcCosignerKey(cosigner_id);
+ #else
+     return std::nullopt;
+ #endif
+diff --git a/net/cert/cert_verify_proc_builtin_unittest.cc b/net/cert/cert_verify_proc_builtin_unittest.cc
+index c01d4f7477..0633f523ce 100644
+--- a/net/cert/cert_verify_proc_builtin_unittest.cc
++++ b/net/cert/cert_verify_proc_builtin_unittest.cc
+@@ -305,6 +305,19 @@ class MockSystemTrustStore : public SystemTrustStore {
+         it->second.signature_algorithm, bssl::UpRef(it->second.key)};
+   }
+ 
++  std::optional<bssl::VerifyCertificateChainDelegate::MTCCosigner>
++  GetLabMtcCosignerKey(base::span<const uint8_t>) const override {
++    return std::nullopt;
++  }
++
++  bool IsLabMtcAnchor(const bssl::MTCAnchor*) const override { return false; }
++
++  bool IsLabMtcCosignerPolicySatisfied(
++      const bssl::MTCAnchor*,
++      base::span<const std::vector<uint8_t>>) const override {
++    return false;
++  }
++
+   void SetMockIsMtcCosignerPolicySatisfied(bool value) {
+     mock_is_mtc_cosigner_policy_satisfied_ = value;
+   }
+diff --git a/net/cert/internal/system_trust_store.cc b/net/cert/internal/system_trust_store.cc
+index d09e9695e3..911adc95f3 100644
+--- a/net/cert/internal/system_trust_store.cc
++++ b/net/cert/internal/system_trust_store.cc
+@@ -186,6 +186,23 @@ class SystemTrustStoreChromeWithUnOwnedSystemStore : public SystemTrustStore {
+     return trust_store_chrome_->GetMtcMirrorKey(cosigner_id);
+   }
+ 
++  std::optional<bssl::VerifyCertificateChainDelegate::MTCCosigner>
++  GetLabMtcCosignerKey(base::span<const uint8_t> cosigner_id) const override {
++    return trust_store_chrome_->GetLabMtcCosignerKey(cosigner_id);
++  }
++
++  bool IsLabMtcAnchor(const bssl::MTCAnchor* anchor) const override {
++    return trust_store_chrome_->IsLabMtcAnchor(anchor);
++  }
++
++  bool IsLabMtcCosignerPolicySatisfied(
++      const bssl::MTCAnchor* anchor,
++      base::span<const std::vector<uint8_t>> valid_additional_cosigners)
++      const override {
++    return trust_store_chrome_->IsLabMtcCosignerPolicySatisfied(
++        anchor, valid_additional_cosigners);
++  }
++
+   bool IsMtcCosignerPolicySatisfied(
+       const bssl::ParsedCertificate& target_cert,
+       base::Time current_time,
+diff --git a/net/cert/internal/system_trust_store.h b/net/cert/internal/system_trust_store.h
+index 6c3696aaa6..30c37e6d79 100644
+--- a/net/cert/internal/system_trust_store.h
++++ b/net/cert/internal/system_trust_store.h
+@@ -92,6 +92,14 @@ class SystemTrustStore {
+   virtual std::optional<bssl::VerifyCertificateChainDelegate::MTCCosigner>
+   GetMtcMirrorKey(base::span<const uint8_t> cosigner_id) const = 0;
+ 
++  virtual std::optional<bssl::VerifyCertificateChainDelegate::MTCCosigner>
++  GetLabMtcCosignerKey(base::span<const uint8_t> cosigner_id) const = 0;
++  virtual bool IsLabMtcAnchor(const bssl::MTCAnchor* anchor) const = 0;
++  virtual bool IsLabMtcCosignerPolicySatisfied(
++      const bssl::MTCAnchor* anchor,
++      base::span<const std::vector<uint8_t>> valid_additional_cosigners) const =
++      0;
++
+   virtual bool IsMtcCosignerPolicySatisfied(
+       const bssl::ParsedCertificate& target_cert,
+       base::Time current_time,
+diff --git a/net/cert/internal/trust_store_chrome.cc b/net/cert/internal/trust_store_chrome.cc
+index cd3e84405c..9c9a041936 100644
+--- a/net/cert/internal/trust_store_chrome.cc
++++ b/net/cert/internal/trust_store_chrome.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "net/cert/internal/trust_store_chrome.h"
+ 
++#include <algorithm>
+ #include <optional>
+ 
+ #include "base/command_line.h"
+@@ -527,9 +528,11 @@ TrustStoreChrome::TrustStoreChrome(
+         LOG(ERROR) << "Unsupported MTC Plants-07 lab signature algorithm";
+       } else {
+         auto ca_key = x509_util::CreateCryptoBuffer(config->ca_spki_der);
++        auto additional_cosigner_key = x509_util::CreateCryptoBuffer(
++            config->additional_cosigner.spki_der);
+ 
+-        if (!ca_key) {
+-          LOG(ERROR) << "Unable to create MTC Plants-07 CA key buffer";
++        if (!ca_key || !additional_cosigner_key) {
++          LOG(ERROR) << "Unable to create MTC Plants-07 signer key buffer";
+         } else {
+           std::vector<bssl::TrustedSubtree> subtrees;
+           subtrees.reserve(config->trusted_subtrees.size());
+@@ -558,6 +561,16 @@ TrustStoreChrome::TrustStoreChrome(
+                 << "MTC Plants-07 lab CA ID conflicts with public trust anchor";
+           } else if (!trust_store_.AddMTCTrustAnchor(std::move(mtc_anchor))) {
+             LOG(ERROR) << "Unable to install MTC Plants-07 lab trust anchor";
++          } else if (config->trust_mode ==
++                     MtcPlants07LabTrustMode::kStandalone) {
++            Signer additional_cosigner;
++            additional_cosigner.base_id = config->additional_cosigner.id;
++            additional_cosigner.key = std::move(additional_cosigner_key);
++            additional_cosigner.signature_algorithm = *signature_algorithm;
++            lab_mtc_ca_id_ = config->ca_id;
++            lab_mtc_required_cosigner_id_ =
++                config->additional_cosigner.id;
++            lab_mtc_cosigner_ = std::move(additional_cosigner);
+           }
+         }
+       }
+@@ -862,6 +875,45 @@ TrustStoreChrome::GetMtcMirrorKey(base::span<const uint8_t> cosigner_id) const {
+       it->second.signature_algorithm, bssl::UpRef(it->second.key.get())};
+ }
+ 
++std::optional<bssl::VerifyCertificateChainDelegate::MTCCosigner>
++TrustStoreChrome::GetLabMtcCosignerKey(
++    base::span<const uint8_t> cosigner_id) const {
++  if (!lab_mtc_cosigner_ ||
++      !std::equal(lab_mtc_cosigner_->base_id.begin(),
++                  lab_mtc_cosigner_->base_id.end(), cosigner_id.begin(),
++                  cosigner_id.end())) {
++    return std::nullopt;
++  }
++  return bssl::VerifyCertificateChainDelegate::MTCCosigner{
++      lab_mtc_cosigner_->signature_algorithm,
++      bssl::UpRef(lab_mtc_cosigner_->key.get())};
++}
++
++bool TrustStoreChrome::IsLabMtcAnchor(
++    const bssl::MTCAnchor* anchor) const {
++  return anchor && lab_mtc_ca_id_ &&
++         anchor->ca_id().size() == lab_mtc_ca_id_->size() &&
++         std::equal(anchor->ca_id().begin(), anchor->ca_id().end(),
++                    lab_mtc_ca_id_->begin(), lab_mtc_ca_id_->end());
++}
++
++bool TrustStoreChrome::IsLabMtcCosignerPolicySatisfied(
++    const bssl::MTCAnchor* anchor,
++    base::span<const std::vector<uint8_t>> valid_additional_cosigners) const {
++  if (!IsLabMtcAnchor(anchor) || !lab_mtc_required_cosigner_id_) {
++    return false;
++  }
++  for (const auto& cosigner_id : valid_additional_cosigners) {
++    if (cosigner_id.size() == lab_mtc_required_cosigner_id_->size() &&
++        std::equal(cosigner_id.begin(), cosigner_id.end(),
++                   lab_mtc_required_cosigner_id_->begin(),
++                   lab_mtc_required_cosigner_id_->end())) {
++      return true;
++    }
++  }
++  return false;
++}
++
+ namespace {
+ std::string GetOperatorForSignerIfUsableAtTime(const Signer& signer,
+                                                base::Time timestamp) {
+diff --git a/net/cert/internal/trust_store_chrome.h b/net/cert/internal/trust_store_chrome.h
+index 0db66de4b3..b76fbcdd36 100644
+--- a/net/cert/internal/trust_store_chrome.h
++++ b/net/cert/internal/trust_store_chrome.h
+@@ -496,6 +496,15 @@ class NET_EXPORT TrustStoreChrome : public bssl::TrustStore {
+   std::optional<bssl::VerifyCertificateChainDelegate::MTCCosigner>
+   GetMtcMirrorKey(base::span<const uint8_t> cosigner_id) const;
+ 
++  // The opt-in laboratory Standalone configuration trusts exactly the
++  // additional signer supplied alongside its private CA key.
++  std::optional<bssl::VerifyCertificateChainDelegate::MTCCosigner>
++  GetLabMtcCosignerKey(base::span<const uint8_t> cosigner_id) const;
++  bool IsLabMtcAnchor(const bssl::MTCAnchor* anchor) const;
++  bool IsLabMtcCosignerPolicySatisfied(
++      const bssl::MTCAnchor* anchor,
++      base::span<const std::vector<uint8_t>> valid_additional_cosigners) const;
++
+   // Returns true if the MTC cosigner policy, when evaluated at `current_time`,
+   // is satisfied for `target_cert`, which has a valid CA signature from
+   // `mtc_anchor` and valid co-signatures from the mirrors with cosigner IDs
+@@ -576,6 +585,10 @@ class NET_EXPORT TrustStoreChrome : public bssl::TrustStore {
+       signer_set_mirrors_;
+   bool disable_mtc_mirroring_requirements_ = false;
+ 
++  std::optional<std::vector<uint8_t>> lab_mtc_ca_id_;
++  std::optional<std::vector<uint8_t>> lab_mtc_required_cosigner_id_;
++  std::optional<Signer> lab_mtc_cosigner_;
++
+   std::optional<base::Time> mtc_metadata_update_time_;
+ };
+ 
+diff --git a/net/cert/internal/trust_store_chrome_unittest.cc b/net/cert/internal/trust_store_chrome_unittest.cc
+index 8f3a2ca058..bbba782dfd 100644
+--- a/net/cert/internal/trust_store_chrome_unittest.cc
++++ b/net/cert/internal/trust_store_chrome_unittest.cc
+@@ -1024,7 +1024,7 @@ MtcPlants07CaCertificate ConfigureStandalonePlants07Lab(
+     "ca_id_hex": "%s",
+     "signers": [
+       {"id_hex": "%s", "spki_der_base64": "%s"},
+-      {}
++      {"id_hex": "0304", "spki_der_base64": "%s"}
+     ],
+     "signature_algorithm": "ecdsa-sha256",
+     "min_serial_hex": "0x%llx",
+@@ -1036,6 +1036,7 @@ MtcPlants07CaCertificate ConfigureStandalonePlants07Lab(
+       base::HexEncode(certificate->ca_id).c_str(),
+       base::HexEncode(certificate->ca_id).c_str(),
+       base::Base64Encode(certificate->ca_spki_der).c_str(),
++      base::Base64Encode(certificate->ca_spki_der).c_str(),
+       static_cast<unsigned long long>(certificate->min_serial),
+       static_cast<unsigned long long>(certificate->max_serial));
+   CHECK(base::WriteFile(path, config));
+@@ -1069,6 +1070,16 @@ TEST(TrustStoreChromeTestNoFixture, Plants07LabAnchorIsPrivate) {
+   EXPECT_TRUE(trust_store_chrome.ContainsMTCAnchor(lab_anchor.get()));
+   EXPECT_FALSE(trust_store_chrome.IsPublicMtcAnchor(lab_anchor.get()));
+   EXPECT_EQ(nullptr, trust_store_chrome.GetMTCAnchorData(certificate.ca_id));
++  EXPECT_TRUE(trust_store_chrome.IsLabMtcAnchor(lab_anchor.get()));
++  EXPECT_FALSE(trust_store_chrome.GetLabMtcCosignerKey(
++      std::array<uint8_t, 2>{0x05, 0x06}));
++  EXPECT_TRUE(trust_store_chrome.GetLabMtcCosignerKey(
++      std::array<uint8_t, 2>{0x03, 0x04}));
++  EXPECT_FALSE(trust_store_chrome.IsLabMtcCosignerPolicySatisfied(
++      lab_anchor.get(), {}));
++  const std::vector<std::vector<uint8_t>> valid_cosigners = {{0x03, 0x04}};
++  EXPECT_TRUE(trust_store_chrome.IsLabMtcCosignerPolicySatisfied(
++      lab_anchor.get(), valid_cosigners));
+ }
+ 
+ TEST(TrustStoreChromeTestNoFixture,
+diff --git a/net/cert/mtc_plants07_lab_config.cc b/net/cert/mtc_plants07_lab_config.cc
+index fc1849c2cd..27a2ba2da5 100644
+--- a/net/cert/mtc_plants07_lab_config.cc
++++ b/net/cert/mtc_plants07_lab_config.cc
+@@ -234,7 +234,8 @@ std::optional<MtcPlants07LabConfig> ParseConfig(std::string_view json) {
+   }
+ 
+   const base::ListValue* signers = root.FindList("signers");
+-  if (!signers || signers->size() != 2 || !(*signers)[0].is_dict()) {
++  if (!signers || signers->size() != 2 || !(*signers)[0].is_dict() ||
++      !(*signers)[1].is_dict()) {
+     LOG(ERROR) << "MTC Plants-07 config must contain exactly two signers";
+     return std::nullopt;
+   }
+@@ -257,6 +258,28 @@ std::optional<MtcPlants07LabConfig> ParseConfig(std::string_view json) {
+   }
+   config.ca_spki_der = std::move(*spki);
+ 
++  const base::DictValue& additional_signer = (*signers)[1].GetDict();
++  const std::string* additional_signer_id_hex =
++      additional_signer.FindString("id_hex");
++  const std::string* additional_spki_base64 =
++      additional_signer.FindString("spki_der_base64");
++  if (!additional_signer_id_hex ||
++      !base::HexStringToBytes(*additional_signer_id_hex,
++                              &config.additional_cosigner.id) ||
++      config.additional_cosigner.id.empty() ||
++      config.additional_cosigner.id == config.ca_id ||
++      !additional_spki_base64) {
++    LOG(ERROR) << "Invalid MTC Plants-07 additional signer";
++    return std::nullopt;
++  }
++  std::optional<std::vector<uint8_t>> additional_spki =
++      base::Base64Decode(*additional_spki_base64);
++  if (!additional_spki || additional_spki->empty()) {
++    LOG(ERROR) << "Invalid MTC Plants-07 additional signer SPKI";
++    return std::nullopt;
++  }
++  config.additional_cosigner.spki_der = std::move(*additional_spki);
++
+   std::optional<MtcPlants07LabSignatureAlgorithm> signature_algorithm =
+       ParseSignatureAlgorithm(root);
+   if (!signature_algorithm) {
+diff --git a/net/cert/mtc_plants07_lab_config.h b/net/cert/mtc_plants07_lab_config.h
+index 32b65467f7..051b3a1eaf 100644
+--- a/net/cert/mtc_plants07_lab_config.h
++++ b/net/cert/mtc_plants07_lab_config.h
+@@ -40,12 +40,19 @@ struct NET_EXPORT MtcPlants07LabTrustedSubtree {
+   std::array<uint8_t, 32> hash{};
+ };
+ 
++struct NET_EXPORT MtcPlants07LabCosigner {
++  std::vector<uint8_t> id;
++  std::vector<uint8_t> spki_der;
++};
++
+ struct NET_EXPORT MtcPlants07LabConfig {
+   MtcPlants07LabTrustMode trust_mode =
+       MtcPlants07LabTrustMode::kLandmark;
+ 
+   std::vector<uint8_t> ca_id;
+   std::vector<uint8_t> ca_spki_der;
++  // The configured non-CA signer used by the Standalone lab policy.
++  MtcPlants07LabCosigner additional_cosigner;
+ 
+   MtcPlants07LabSignatureAlgorithm signature_algorithm =
+       MtcPlants07LabSignatureAlgorithm::kEcdsaSha256;
+diff --git a/net/cert/mtc_plants07_lab_config_unittest.cc b/net/cert/mtc_plants07_lab_config_unittest.cc
+index fe66bf8b03..563162f52f 100644
+--- a/net/cert/mtc_plants07_lab_config_unittest.cc
++++ b/net/cert/mtc_plants07_lab_config_unittest.cc
+@@ -28,7 +28,7 @@ constexpr char kCommonConfig[] = R"({
+   "ca_id_hex": "0102",
+   "signers": [
+     {"id_hex": "0102", "spki_der_base64": "AA=="},
+-    {}
++    {"id_hex": "0304", "spki_der_base64": "AQ=="}
+   ],
+   "signature_algorithm": "ecdsa-sha256",
+   "min_serial_hex": "0x0001000000000000",
+@@ -96,6 +96,16 @@ TEST_F(MtcPlants07LabConfigTest, ParsesExplicitStandalone) {
+   EXPECT_TRUE(config->trusted_subtrees.empty());
+   EXPECT_FALSE(config->ca_id.empty());
+   EXPECT_FALSE(config->ca_spki_der.empty());
++  EXPECT_EQ(config->additional_cosigner.id,
++            (std::vector<uint8_t>{0x03, 0x04}));
++  EXPECT_EQ(config->additional_cosigner.spki_der,
++            (std::vector<uint8_t>{0x01}));
++}
++
++TEST_F(MtcPlants07LabConfigTest, RejectsAdditionalSignerWithCaId) {
++  std::string config = Standalone();
++  Replace(config, "\"id_hex\": \"0304\"", "\"id_hex\": \"0102\"");
++  EXPECT_FALSE(Load(config));
+ }
+ 
+ TEST_F(MtcPlants07LabConfigTest, ParsesPlants07CaCertificate) {
+-- 
+2.50.1 (Apple Git-155)
+

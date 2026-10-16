@@ -23,3 +23,4 @@ f1442b103afd45f8d2a20116453d5edd8fda0f6a61faacae52eb70fde0504bb5  chromium/0015-
 9c42b153935333fd729734e24b762ba76524b83937ef9acff0d44fb9bfc18de2  chromium/0016-Roll-BoringSSL-for-timing-v2-and-ECDSA-P-521.patch
 8f4c9967e670e13a3388816b51b40ddf932f89b0430e3c90e281e4642bb0ca06  boringssl/0008-pki-add-canonical-Landmark-trust-timing.patch
 0b0c2618e2fbe378462148805c3889c73efb3ab47f423b07897403a7e1057c47  chromium/0017-net-publish-canonical-credential-timing-schema-v3.patch
+0afd89300a02c0d96a63e019843efeca3726c3510d5e0fbe53f5aea193e8ca77  chromium/0018-fix-mtc-require-the-configured-Standalone-lab-cosign.patch
