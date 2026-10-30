@@ -20,15 +20,56 @@ def save(path,data):
     with path.open('x') as f:json.dump(data,f,indent=2);f.write('\n')
 def now():return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
+def server_command(fixture,mode,leaf,manifest,pair=False):
+    leaf4=f'{leaf:04d}'
+    if pair:
+        landmark_id=f"{manifest['ca_id']}.1.{manifest['log_number']}.{manifest['latest_landmark']}"
+        return [OPENSSL,'s_server','-accept','4433',
+                '-cert',str(fixture/('standalone-'+leaf4+'.pem')),
+                '-key','/server.key','-mtc_id',manifest['ca_id'],
+                '-mtc_standalone_trust',str(fixture/'authority.bin'),
+                '-mtc_landmark_id',landmark_id,
+                '-mtc_landmark_trust',str(fixture/'trust.bin'),
+                '-mtc_landmark_cert',str(fixture/('landmark-'+leaf4+'.pem')),
+                '-mtc_landmark_key','/server.key',
+                '-mtc_ca',str(fixture/'mtc-ca.pem'),
+                '-mtc_ca_root',str(fixture/'mtc-representation-root.pem'),
+                '-num_tickets','0','-www','-naccept','1',*COMMON]
+    ident=manifest['ca_id']+('.1.1.1' if mode=='landmark' else '')
+    return [OPENSSL,'s_server','-accept','4433',
+            '-cert',str(fixture/(mode+'-'+leaf4+'.pem')),'-key','/server.key',
+            '-mtc_id',ident,'-num_tickets','0','-www','-naccept','1',*COMMON]
+
+def client_command(fixture, mode, hostname, pair=False):
+    command=[OPENSSL,'s_client','-connect','server:4433',
+             '-servername',hostname,'-verify_hostname',hostname,
+             '-verify_return_error','-mtc_trust',
+             str(fixture/('trust.bin' if mode=='landmark' else 'authority.bin')),
+             '-mtc_ca',str(fixture/'mtc-ca.pem'),
+             '-mtc_ca_root',str(fixture/'mtc-representation-root.pem'),
+             '-no_ticket','-ign_eof','-showcerts','-keylogfile','/capture/tls.keys',*COMMON]
+    if mode=='landmark':
+        command+=['-mtc_landmark']
+        if pair:
+            command+=['-mtc_trusted_subtrees',
+                      '/capture/rp-state/generations/validated/trusted-subtrees.mts1']
+    return command
+
+def fixture_hostname(manifest, leaf, pair=False):
+    if pair and leaf == 0:
+        hostname=manifest.get('server_hostname')
+        if not isinstance(hostname,str) or not hostname:
+            raise ValueError('Server-pair leaf 0 requires server_hostname in manifest')
+        return hostname
+    return 'server' if leaf == 0 else f'member-{leaf}.lab'
+
 def inside(a):
     out=Path('/capture');fixture=Path('/fixture');m=json.loads((fixture/'manifest.json').read_text())
     if m['tree_size']!=16 or m.get('profile',m['crypto_family'])!=a.profile:raise ValueError('N=16/profile mismatch')
     if not 0 <= a.leaf < 16:raise ValueError('leaf must be in 0..15')
     leaf4=f'{a.leaf:04d}'
     if a.inside=='server':
-        ident=m['ca_id']+('.1.1.1' if a.mode=='landmark' else '')
-        command=[OPENSSL,'s_server','-accept','4433','-cert',str(fixture/(a.mode+'-'+leaf4+'.pem')),'-key','/server.key',
-                 '-mtc_id',ident,'-num_tickets','0','-www','-naccept','1',*COMMON]
+        command=server_command(fixture,a.mode,a.leaf,m,a.server_pair)
         save(out/'server-command.json',command)
         with (out/'server.log').open('x') as log:
             process=subprocess.Popen(command,stdout=log,stderr=subprocess.STDOUT)
@@ -47,14 +88,9 @@ def inside(a):
             finally:
                 if process.poll() is None:process.terminate();process.wait()
     else:
-        hostname = 'server' if a.leaf == 0 else f'member-{a.leaf}.lab'
+        hostname = fixture_hostname(m,a.leaf,a.server_pair)
 
-        command=[OPENSSL,'s_client','-connect','server:4433','-servername',hostname,'-verify_hostname',hostname,
-                 '-verify_return_error','-mtc_trust',str(fixture/('trust.bin' if a.mode=='landmark' else 'authority.bin')),
-                 '-mtc_ca',str(fixture/'mtc-ca.pem'),
-                 '-mtc_ca_root',str(fixture/'mtc-representation-root.pem'),
-                 '-no_ticket','-ign_eof','-showcerts','-keylogfile','/capture/tls.keys',*COMMON]
-        if a.mode=='landmark':command+=['-mtc_landmark']
+        command=client_command(fixture,a.mode,hostname,a.server_pair)
         save(out/'client-command.json',command)
         r=subprocess.run(command,input='GET / HTTP/1.0\r\n\r\n',capture_output=True,text=True,timeout=90)
         text=r.stdout+r.stderr;(out/'client.log').write_text(text)
@@ -70,6 +106,8 @@ def inside(a):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--mode',choices=['landmark','standalone'],required=True)
+    p.add_argument('--server-pair',type=int,choices=(0,1),nargs='?',const=1,default=0,
+                   help='Present Standalone and Landmark from one s_server')
     p.add_argument('--profile',choices=PROFILES,default='pq')
     p.add_argument('--leaf',type=int,choices=range(16),default=0)
     p.add_argument('--fixture-dir',type=Path);p.add_argument('--server-key',type=Path);p.add_argument('--output',type=Path)
@@ -82,19 +120,33 @@ def main():
     import core
     if not all((a.fixture_dir,a.server_key,a.output)):p.error('Specify --fixture-dir, --server-key and --output')
     if a.output.exists():p.error('Output exists; captures are immutable')
-    if not a.execute:print('PLAN ONLY: one N=16',a.profile,a.mode,'handshake, leaf',a.leaf,'; isolated server eth0, tcp port 4433');return
+    if not a.execute:print('PLAN ONLY: one N=16',a.profile,a.mode,'handshake, leaf',a.leaf,'; server pair',a.server_pair,'; isolated server eth0, tcp port 4433');return
+    if a.server_pair and not re.fullmatch(r'sha256:[0-9a-f]{64}',a.image):
+        p.error('--server-pair requires --image sha256:<immutable image ID>')
+    if a.server_pair and not re.fullmatch(r'sha256:[0-9a-f]{64}',a.capture_image):
+        p.error('--server-pair requires --capture-image sha256:<immutable image ID>')
     fixture=a.fixture_dir.resolve();key=a.server_key.resolve();out=a.output.resolve()
     if not key.is_file():p.error('Server key missing')
     leaf4=f'{a.leaf:04d}'
     selected_pem=fixture/f'{a.mode}-{leaf4}.pem'
     selected_der=fixture/f'{a.mode}-{leaf4}.der'
     if not selected_pem.is_file() or not selected_der.is_file():p.error('Selected leaf fixture missing')
+    if a.server_pair:
+        for required in ('authority.bin','trust.bin',
+                         f'standalone-{leaf4}.pem',f'landmark-{leaf4}.pem'):
+            if not (fixture/required).is_file():p.error(f'MTC server pair file missing: {required}')
     for required in ('mtc-ca.pem','mtc-representation-root.pem'):
         if not (fixture/required).is_file():p.error(f'MTC-07 authority file missing: {required}')
     m=json.loads((fixture/'manifest.json').read_text())
     if m['tree_size']!=16 or m.get('profile',m['crypto_family'])!=a.profile:p.error('Wrong fixture profile/N')
+    if a.server_pair and (m.get('log_number')!=1 or m.get('latest_landmark')!=1):
+        p.error('Server pair currently requires the protocol fixture log 1, landmark 1')
     source_files=[repo/'src/mtc'/name for name in ('core.py','mtc.c','mtc.h','tls.c','patch.py','prepare.py')]
     source_files += [HERE/name for name in ('capture.py','compose.yaml','validate_mtc.py','extract_pcap.py')]
+    if a.server_pair:
+        source_files += [HERE/'semantics.py',HERE/'pair_rp_state.py']
+        source_files += [repo/'src/mtc'/name for name in
+                         ('landmarks.py','local_log.py','trusted_subtrees.py')]
     source_hashes={str(path.relative_to(repo)):sha(path) for path in source_files}
     images=[json.loads(run(['docker','image','inspect',name]))[0]['Id'] for name in (a.image,a.capture_image)]
     # Query the exact running stack; no image builds or dependency installation.
@@ -105,10 +157,39 @@ m=re.search(r'OQS_VERSION_TEXT\\s+\"([^\"]+)\"',header)
 print(json.dumps(dict(openssl_version=subprocess.check_output(['/opt/mtc/openssl.sh','version','-a'],text=True),liboqs_version=m.group(1) if m else None,oqs_provider_commit=p('/opt/oqs/PROVIDER_COMMIT').read_text().strip(),mtc_build_hash=p('/opt/openssl-mtc/MTC_SHA256').read_text().strip())))
 """
     versions=json.loads(run(['docker','run','--rm','--network','none','--entrypoint','python3',images[0],'-c',version_code]))
+    if a.server_pair:
+        expected=hashlib.sha256()
+        for name in sorted(('mtc.c','mtc.h','tls.c','patch.py','openssl.sh')):
+            expected.update(name.encode()+b'\0'+(repo/'src/mtc'/name).read_bytes())
+        if images[0] != a.image:
+            p.error('Server-pair image ID differs from the requested immutable digest')
+        if images[1] != a.capture_image:
+            p.error('Capture image ID differs from the requested immutable digest')
+        if versions['mtc_build_hash'] != expected.hexdigest():
+            p.error('Server-pair image does not contain the current MTC patch; build and pin the final image first')
+    rp_state=None
+    if a.server_pair and a.mode=='landmark':
+        from pair_rp_state import build_state
+        try:
+            rp_state=build_state(fixture,m,images[0])
+        except (OSError,ValueError,subprocess.CalledProcessError) as error:
+            p.error(f'Authenticated RP state preparation failed: {error}')
     os.umask(0o077);out.mkdir(parents=True)
-    before={str(path):sha(path) for path in [*fixture.glob('*') ,key] if path.is_file()}
+    if rp_state:
+        from pair_rp_state import write_state
+        write_state(out/'rp-state',*rp_state)
+    rp_inputs=[]
+    if rp_state:
+        transparency=fixture.parents[2]/'transparency'/a.profile
+        rp_inputs=[fixture/'landmarks.txt',
+                   transparency/'trusted-authority.bin',
+                   transparency/'snapshot-n16.mcp2',
+                   transparency/'persistent-log'/'state.json',
+                   *sorted((transparency/'persistent-log'/'log').glob('*.entry'))]
+    before={str(path):sha(path) for path in [*fixture.glob('*'),key,*rp_inputs]
+            if path.is_file()}
     scenario=(a.profile+'-mtc-experimental-'+a.mode)
-    hostname = 'server' if a.leaf == 0 else f'member-{a.leaf}.lab'
+    hostname = fixture_hostname(m,a.leaf,a.server_pair)
 
     meta = dict(
         draft=core.DRAFT,
@@ -120,6 +201,14 @@ print(json.dumps(dict(openssl_version=subprocess.check_output(['/opt/mtc/openssl
         leaf_index=a.leaf,
         hostname=hostname,
         mode=a.mode,
+        server_pair=bool(a.server_pair),
+        server_pair_landmark_id=(f"{m['ca_id']}.1.{m['log_number']}.{m['latest_landmark']}"
+                                 if a.server_pair else None),
+        rp_state_sha256=(hashlib.sha256(rp_state[0]).hexdigest()
+                         if rp_state else None),
+        rp_retained_landmark=(rp_state[1]['retained_landmark']
+                              if rp_state else None),
+        rp_input_sha256={str(path):before[str(path)] for path in rp_inputs},
         timestamp=now(),
         image_id=images[0],
         capture_image_id=images[1],
@@ -145,7 +234,8 @@ print(json.dumps(dict(openssl_version=subprocess.check_output(['/opt/mtc/openssl
     )
     save(out/'started.json',meta)
     env=os.environ.copy();env.update(PROTOCOL_IMAGE=images[0],PROTOCOL_CAPTURE_IMAGE=images[1],PROTOCOL_CODE=str(HERE),
-        PROTOCOL_FIXTURE=str(fixture),PROTOCOL_KEY=str(key),PROTOCOL_OUTPUT=str(out),PROTOCOL_MODE=a.mode,PROTOCOL_PROFILE=a.profile,PROTOCOL_LEAF=str(a.leaf))
+        PROTOCOL_FIXTURE=str(fixture),PROTOCOL_KEY=str(key),PROTOCOL_OUTPUT=str(out),PROTOCOL_MODE=a.mode,PROTOCOL_PROFILE=a.profile,PROTOCOL_LEAF=str(a.leaf),
+        PROTOCOL_SERVER_PAIR='1' if a.server_pair else '0')
     compose=['docker','compose','-p','mtcprotocol-'+hashlib.sha256(str(out).encode()).hexdigest()[:12],'-f',str(HERE/'compose.yaml')]
     try:
         run(compose+['up','-d','--no-build','--wait','server'],env=env)

@@ -117,7 +117,7 @@ def extension_map(handshake):
     return out
 
 
-def signal(value, expected, alternative=None):
+def signal(value, expected, alternative=None, preferred=None):
     require(value is not None, 'missing trust-anchor extension payload')
     r = Reader(value)
     ids = Reader(r.vector())
@@ -126,7 +126,9 @@ def signal(value, expected, alternative=None):
     while ids.pos < len(ids.data):
         values.append(ids.vector(1))
     ids.end()
-    require(values == [expected] or (alternative is not None and values == [alternative]), 'wrong/ambiguous trust anchor selection')
+    matches = (values == preferred if preferred is not None else
+               values == [expected] or (alternative is not None and values == [alternative]))
+    require(matches, 'wrong/ambiguous trust anchor selection')
 
 
 def extract(a):
@@ -253,7 +255,9 @@ def extract(a):
     ee_row, ee = one(8)
     ee_ext = extension_map(ee)
     require(MTC_EXT in ee_ext, f'missing provisional {CODEPOINT} EncryptedExtensions signal')
-    signal(ee_ext[MTC_EXT]['data'], anchor)
+    pair_available = ([core.relid(meta['server_pair_landmark_id']),core.relid(p['ca_id'])]
+                      if meta.get('server_pair') else None)
+    signal(ee_ext[MTC_EXT]['data'], anchor, preferred=pair_available)
 
     # Certificate
     cert_row, cert_node = one(11)
@@ -338,6 +342,27 @@ def extract(a):
     require(sender_match, 'sender/wire mismatch')
     if a.sender:
         require(a.sender.read_bytes() == der, 'supplied sender fixture differs from capture')
+    server_selection = None
+    if meta.get('server_pair'):
+        server_log = a.capture / 'server.log'
+        require(sha(server_log.read_bytes()) == meta['evidence_sha256']['server.log'],
+                'server selection log changed')
+        selected_id = (meta['server_pair_landmark_id'] if meta['mode'] == 'landmark'
+                       else p['ca_id'])
+        reason = 'requested-'+meta['mode']
+        selection_line = f'MTC server certificate selected: id={selected_id} reason={reason}'
+        require(server_log.read_text(errors='replace').count(selection_line) == 1,
+                'server credential selection reason missing or ambiguous')
+        server_selection = dict(id=selected_id, reason=reason,
+                                evidence='server.log and sender/wire certificate match')
+    mapping = trust_mapping(
+        ch_ext[MTC_EXT]['data'], ee_ext[MTC_EXT]['data'], [cert_ext[MTC_EXT]],
+        p['ca_id'], meta['mode'], int.from_bytes(tbs[1][1], 'big') >> 48,
+        int(meta['server_pair_landmark_id'].rsplit('.',1)[1]) if meta.get('server_pair') else 1,
+        multi_candidate=bool(meta.get('server_pair')))
+    if meta.get('server_pair'):
+        require(mapping['status'] == 'PASS_EXPERIMENTAL_CODEPOINT',
+                'server-pair trust-anchor semantics failed: '+mapping['reason'])
 
     return dict(
         overall='PASS',
@@ -366,14 +391,13 @@ def extract(a):
         pcap_sha256=meta['pcap_sha256'],
         fixture_sha256=meta['fixture_sha256'],
         sender_wire_match=sender_match,
+        server_selection=server_selection,
         receiver_reserialized_wire_match=receiver_match,
         receiver_raw_sha256=None,
         receiver_limitation=(
             '-showcerts reserializes the received X509; original raw input not retained'
         ),
-        trust_anchors_semantic_mapping=trust_mapping(
-            ch_ext[MTC_EXT]['data'], ee_ext[MTC_EXT]['data'], [cert_ext[MTC_EXT]],
-            p['ca_id'], meta['mode'], int.from_bytes(tbs[1][1], 'big') >> 48, 1),
+        trust_anchors_semantic_mapping=mapping,
         endpoint_authentication=True,
         tls_version='TLSv1.3',
         cipher='TLS_AES_256_GCM_SHA384',

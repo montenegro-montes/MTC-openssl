@@ -75,6 +75,14 @@ int mtc_client(SSL_CTX *ctx,const char *path,int landmark,
                const char *trusted_subtrees,const char *certificate,
                const char *root);
 int mtc_server(SSL_CTX *ctx,const char *id);
+/* Add one authenticated MTC server credential for per-connection selection.
+ * The trust file is an MCA2 (Standalone) or MTB2 (Landmark) authenticated
+ * with the MTC CA and representation root. The caller retains ownership;
+ * selection activates only when the pair is complete. */
+int mtc_server_add_candidate(SSL_CTX *ctx,const char *id,
+                             X509 *certificate,EVP_PKEY *key,
+                             const char *trust_path,const char *mtc_ca_path,
+                             const char *representation_root_path);
 int mtc_server_verify_client(SSL_CTX *ctx,const char *path,int landmark,
                              const char *certificate,const char *root);
 int mtc_client_present(SSL_CTX *ctx,const char *id,int landmark);

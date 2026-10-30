@@ -19,7 +19,36 @@ for app in ['s_client','s_server']:
         'static int mtc_landmark_mode=0;'
     )
     if app=='s_server':
-        declarations += '\nstatic const char *mtc_client_trust=NULL;'
+        declarations += '''
+static const char *mtc_client_trust=NULL;
+static const char *mtc_standalone_trust=NULL;
+static const char *mtc_landmark_id=NULL;
+static const char *mtc_landmark_trust=NULL;
+static const char *mtc_landmark_cert=NULL;
+static const char *mtc_landmark_key=NULL;
+static int mtc_add_server_file_candidate(SSL_CTX *server_ctx,const char *id,
+                                         const char *cert_path,const char *key_path,
+                                         const char *trust_path){
+    BIO *cert_bio=NULL,*key_bio=NULL;
+    X509 *certificate=NULL;
+    EVP_PKEY *key=NULL;
+    int ok=0;
+    if (!id || !cert_path || !key_path || !trust_path) return 0;
+    cert_bio=BIO_new_file(cert_path,"r");
+    key_bio=BIO_new_file(key_path,"r");
+    if (cert_bio && key_bio) {
+        certificate=PEM_read_bio_X509(cert_bio,NULL,NULL,NULL);
+        key=PEM_read_bio_PrivateKey(key_bio,NULL,NULL,NULL);
+        if (certificate && key)
+            ok=mtc_server_add_candidate(server_ctx,id,certificate,key,
+                                        trust_path,mtc_ca,mtc_ca_root);
+    }
+    X509_free(certificate);
+    EVP_PKEY_free(key);
+    BIO_free(cert_bio);
+    BIO_free(key_bio);
+    return ok;
+}'''
     else:
         declarations += (
             '\nstatic const char *mtc_client_id=NULL;'
@@ -31,7 +60,9 @@ for app in ['s_client','s_server']:
     enums=('    OPT_COMMON,\n    OPT_MTC_CONFIG, OPT_MTC_CA, '
            'OPT_MTC_CA_ROOT, OPT_MTC_LANDMARK,')
     if app=='s_server':
-        enums += ' OPT_MTC_CLIENT_TRUST,'
+        enums += (' OPT_MTC_CLIENT_TRUST, OPT_MTC_STANDALONE_TRUST,'
+                  ' OPT_MTC_LANDMARK_ID, OPT_MTC_LANDMARK_TRUST,'
+                  ' OPT_MTC_LANDMARK_CERT, OPT_MTC_LANDMARK_KEY,')
     else:
         enums += ' OPT_MTC_CLIENT_ID, OPT_MTC_TRUSTED_SUBTREES,'
     s=once(s,'    OPT_COMMON,',enums)
@@ -47,6 +78,16 @@ for app in ['s_client','s_server']:
         options += (
             '    {"mtc_client_trust", OPT_MTC_CLIENT_TRUST, \'s\', '
             '"MTC-experimental trust config for client authentication"},\n'
+            '    {"mtc_standalone_trust", OPT_MTC_STANDALONE_TRUST, \'s\', '
+            '"Authenticated Standalone server trust config"},\n'
+            '    {"mtc_landmark_id", OPT_MTC_LANDMARK_ID, \'s\', '
+            '"Individual Landmark server trust anchor ID"},\n'
+            '    {"mtc_landmark_trust", OPT_MTC_LANDMARK_TRUST, \'s\', '
+            '"Authenticated Landmark server trust config"},\n'
+            '    {"mtc_landmark_cert", OPT_MTC_LANDMARK_CERT, \'s\', '
+            '"Landmark server certificate in PEM format"},\n'
+            '    {"mtc_landmark_key", OPT_MTC_LANDMARK_KEY, \'s\', '
+            '"Landmark server private key in PEM format"},\n'
         )
     else:
         options += (
@@ -64,7 +105,14 @@ for app in ['s_client','s_server']:
         '        case OPT_MTC_LANDMARK: mtc_landmark_mode=1; break;\n'
     )
     if app=='s_server':
-        cases += '        case OPT_MTC_CLIENT_TRUST: mtc_client_trust=opt_arg(); break;\n'
+        cases += (
+            '        case OPT_MTC_CLIENT_TRUST: mtc_client_trust=opt_arg(); break;\n'
+            '        case OPT_MTC_STANDALONE_TRUST: mtc_standalone_trust=opt_arg(); break;\n'
+            '        case OPT_MTC_LANDMARK_ID: mtc_landmark_id=opt_arg(); break;\n'
+            '        case OPT_MTC_LANDMARK_TRUST: mtc_landmark_trust=opt_arg(); break;\n'
+            '        case OPT_MTC_LANDMARK_CERT: mtc_landmark_cert=opt_arg(); break;\n'
+            '        case OPT_MTC_LANDMARK_KEY: mtc_landmark_key=opt_arg(); break;\n'
+        )
     else:
         cases += (
             '        case OPT_MTC_CLIENT_ID: mtc_client_id=opt_arg(); break;\n'
@@ -109,7 +157,24 @@ for app in ['s_client','s_server']:
         s=once(s,verify_anchor,verify_code+verify_anchor)
 
         anchor='    if (!set_cert_key_stuff(ctx, s_cert, s_key, s_chain, build_chain))'
-        code='''    if (mtc_file || mtc_client_trust || mtc_ca || mtc_ca_root || mtc_landmark_mode) {
+        code='''    if (mtc_standalone_trust || mtc_landmark_id || mtc_landmark_trust
+        || mtc_landmark_cert || mtc_landmark_key) {
+        if (!mtc_file || !s_cert || !s_key || !mtc_standalone_trust
+            || !mtc_landmark_id || !mtc_landmark_trust
+            || !mtc_landmark_cert || !mtc_landmark_key
+            || !mtc_ca || !mtc_ca_root || mtc_landmark_mode
+            || mtc_client_trust || mt_file || mt_incompatible
+            || enable_server_rpk || ctx2
+            || !mtc_server_add_candidate(ctx,mtc_file,s_cert,s_key,
+                                          mtc_standalone_trust,mtc_ca,mtc_ca_root)
+            || !mtc_add_server_file_candidate(ctx,mtc_landmark_id,
+                                               mtc_landmark_cert,mtc_landmark_key,
+                                               mtc_landmark_trust)) {
+            BIO_printf(bio_err,"MTC-experimental candidate configuration rejected\\n");
+            goto end;
+        }
+    } else if (mtc_file || mtc_client_trust || mtc_ca || mtc_ca_root
+               || mtc_landmark_mode) {
         if ((!mtc_file && !mtc_client_trust)
             || mt_file || mt_incompatible || enable_server_rpk || ctx2
             || ((mtc_ca || mtc_ca_root) && !mtc_client_trust)
@@ -125,6 +190,7 @@ for app in ['s_client','s_server']:
     s=once(s,anchor,code+anchor)
     p.write_text(s)
 h=hashlib.sha256()
-for p in sorted(here.glob('*')):
-    if p.is_file():h.update(p.name.encode()+b'\0'+p.read_bytes())
+for name in sorted(('mtc.c','mtc.h','tls.c','patch.py','openssl.sh')):
+    p=here/name
+    h.update(name.encode()+b'\0'+p.read_bytes())
 (root/'MTC_SHA256').write_text(h.hexdigest()+'\n')

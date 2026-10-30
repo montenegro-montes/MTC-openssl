@@ -10,7 +10,7 @@ import sys
 import tempfile
 from semantics import timestamp_checks
 
-REPO=Path(__file__).resolve().parents[2]
+REPO=Path(__file__).resolve().parents[3]
 sys.path.insert(0,str(REPO/'src/mtc'))
 import core
 from config_formats import decode_mca2, decode_mtb2

@@ -7,7 +7,7 @@ import struct
 from dataclasses import dataclass
 from trust_anchor_ids import decode_identifier, encode_identifier
 DRAFT='draft-ietf-plants-merkle-tree-certs-07'
-TA_DRAFT='draft-ietf-tls-trust-anchor-ids-04'
+TA_DRAFT='draft-ietf-tls-trust-anchor-ids-06'
 PROOF_OID='1.3.6.1.5.5.7.6.67'
 NAME_OID='1.3.6.1.5.5.7.25.3'
 MTC_CA_OID='1.3.6.1.5.5.7.1.38'

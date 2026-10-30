@@ -1,7 +1,7 @@
 FROM mt-tls-lab:local
 COPY src/mtc/mtc.c src/mtc/mtc.h src/mtc/tls.c src/mtc/patch.py src/mtc/openssl.sh /opt/mtc/
 COPY src/profiling/native_metrics.c src/profiling/native_metrics.h src/profiling/native_components.c src/profiling/native_components.h src/profiling/native_x509_timing.h src/profiling/patch_native_metrics.py /opt/native-metrics/
-RUN cp -a /opt/src/openssl /opt/src/openssl-mtc && \
+RUN rm -rf /opt/src/openssl-mtc && cp -a /opt/src/openssl /opt/src/openssl-mtc && \
     python3 /opt/mtc/patch.py /opt/src/openssl-mtc && \
     python3 /opt/native-metrics/patch_native_metrics.py /opt/src/openssl-mtc && \
     cd /opt/src/openssl-mtc && perl configdata.pm --reconfigure && make -j2 apps/openssl && \

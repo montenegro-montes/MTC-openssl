@@ -219,6 +219,30 @@ protocol_tool mt-tls-mtc:local report.py --capture "$CAP/standalone" \
 For current-profile roots, FIX is `batch16/mtc/PROFILE`, KEY is `population/PROFILE/0.key`.
 Do not rename their scenarios to `classic`/`pq`.
 
+### Optional two-credential MTC server
+
+`capture_handshake.sh --server-pair` configures one `s_server` with Standalone
+and Landmark certificates for the same leaf. This option requires an immutable
+`--image sha256:<64 hex digits>` whose embedded MTC source hash matches the
+checkout, plus an immutable `--capture-image sha256:<64 hex digits>`. The
+original single-certificate mode remains the default.
+
+For Landmark, the runner authenticates the fixture's MCP2 snapshot against its
+trusted authority, checks the local log and landmark proofs, and writes the
+resulting RP state into the new capture directory before connecting. The
+client uses that state's `trusted-subtrees.mts1` so its ClientHello advertises
+the retained landmark group. For leaf 0, the pair uses `server_hostname` from
+the fixture manifest; other leaves keep the existing `member-N.lab` names.
+The current pair check is scoped to log 1 and landmark 1. Keep each output
+directory fresh and run PCAP extraction separately after capture.
+The current pair parser and selection path use the 1..32-byte TrustAnchorID
+limit from trust-anchor-ids-06 §4 and §5.1. The pair's CH/EE/Certificate
+semantic checks cover the two configured candidates; `0xca34` remains a
+provisional extension codepoint. Reports already generated with the older
+trust-anchor-ids-04 analyzer retain that historical revision and source hash.
+After changing the MTC source, build and pin a new image by digest before any
+new server capture; the previous image remains evidence for its original run.
+
 **10. Only after structural validation succeeds**, extend capture selection to
 the remaining signature profiles. The offline validator already recognizes all nine;
 the initial capture selector intentionally exposes only the three representative

@@ -34,9 +34,25 @@ typedef struct {
 typedef struct {
     TLSState present;
     TLSState verify;
+    size_t server_selected;
+    int server_selection_reason;
 } TLSEndpointState;
 
 static int ci=-1,si=-1;
+typedef struct {
+    TLSConfig identity;
+    X509 *certificate;
+    EVP_PKEY *key;
+    char id_text[256];
+} MTCServerCandidate;
+typedef struct {
+    MTCServerCandidate items[2];
+    size_t count;
+    SecurityCallback previous_security;
+    unsigned char available[164];
+    size_t available_n;
+} MTCServerCandidates;
+static int candidates_ci=-1;
 static int oid_uint64_component(const unsigned char *p,size_t n,
                                 size_t *used,uint64_t *value){
     uint64_t v=0;size_t i;
@@ -180,10 +196,85 @@ static int requested_mtc_group_contains(
         requested,requested_n,individual,individual_n);
 }
 
+/* Selection policy for a future multi-credential server.  Candidate order is
+ * the tie breaker within a mode; Landmark takes precedence over Standalone.
+ * This helper does not change the existing single-certificate TLS path. */
+enum {
+    MTC_SELECT_INVALID = -1,
+    MTC_SELECT_NONE = 0,
+    MTC_SELECT_LANDMARK,
+    MTC_SELECT_STANDALONE,
+    MTC_SELECT_FALLBACK_STANDALONE
+};
+static inline int select_server_candidate(TLSConfig *const *candidates,
+                                          size_t count,Slice request,
+                                          size_t *selected){
+    Slice p=request,list,id;
+    size_t landmark=SIZE_MAX,standalone=SIZE_MAX,fallback=SIZE_MAX;
+
+    if(!selected)
+        return MTC_SELECT_INVALID;
+    *selected=SIZE_MAX;
+    if(!candidates||!vector(&p,2,&list)||p.n)
+        return MTC_SELECT_INVALID;
+    for(size_t i=0;i<count;i++){
+        if(!candidates[i]||!candidates[i]->n)
+            return MTC_SELECT_INVALID;
+        if(!candidates[i]->has_group&&fallback==SIZE_MAX)
+            fallback=i;
+    }
+    while(list.n){
+        if(!vector(&list,1,&id)||!id.n||id.n>32)
+            return MTC_SELECT_INVALID;
+        for(size_t i=0;i<count;i++){
+            TLSConfig *c=candidates[i];
+            int exact=id.n==c->n&&!memcmp(id.p,c->id,id.n);
+            if(c->has_group){
+                /* A bare CA ID does not signal trust in a landmark subtree. */
+                if(landmark==SIZE_MAX
+                   &&(exact||requested_landmark_group_contains(
+                       id.p,id.n,c->id,c->n)))
+                    landmark=i;
+            }else if(standalone==SIZE_MAX
+                     &&(exact||mtc_group_match(c,id.p,id.n))){
+                standalone=i;
+            }
+        }
+    }
+    if(landmark!=SIZE_MAX){*selected=landmark;return MTC_SELECT_LANDMARK;}
+    if(standalone!=SIZE_MAX){*selected=standalone;return MTC_SELECT_STANDALONE;}
+    if(fallback!=SIZE_MAX){*selected=fallback;return MTC_SELECT_FALLBACK_STANDALONE;}
+    return MTC_SELECT_NONE;
+}
+
 static void tls_config_free(TLSConfig *c){
     if(!c)return;
     mtc_free(c->trust);
     OPENSSL_free(c);
+}
+
+static void candidates_free(void *parent,void *ptr,CRYPTO_EX_DATA *ad,
+                            int idx,long l,void *arg){
+    MTCServerCandidates *set=ptr;
+    (void)parent;(void)ad;(void)idx;(void)l;(void)arg;
+    if(!set)return;
+    for(size_t i=0;i<set->count;i++){
+        X509_free(set->items[i].certificate);
+        EVP_PKEY_free(set->items[i].key);
+    }
+    OPENSSL_free(set);
+}
+
+static int same_server_identity(X509 *a,X509 *b){
+    int ai=X509_get_ext_by_NID(a,NID_subject_alt_name,-1);
+    int bi=X509_get_ext_by_NID(b,NID_subject_alt_name,-1);
+    ASN1_OCTET_STRING *as,*bs;
+    if(X509_NAME_cmp(X509_get_subject_name(a),X509_get_subject_name(b))
+       ||(ai<0)!=(bi<0))return 0;
+    if(ai<0)return 1;
+    as=X509_EXTENSION_get_data(X509_get_ext(a,ai));
+    bs=X509_EXTENSION_get_data(X509_get_ext(b,bi));
+    return as&&bs&&ASN1_STRING_cmp(as,bs)==0;
 }
 
 static void config_free(void *parent,void *ptr,CRYPTO_EX_DATA *ad,int idx,long l,void *arg){
@@ -211,6 +302,112 @@ static TLSEndpointState *endpoint_state(SSL *ssl){
         }
     }
     return s;
+}
+
+static int select_and_install_server_candidate(SSL *ssl,
+        MTCServerCandidates *set,Slice request){
+    TLSConfig *identities[2];
+    TLSEndpointState *s;
+    size_t selected;
+    int reason;
+
+    if(!ssl||!set||set->count!=2)return MTC_SELECT_INVALID;
+    identities[0]=&set->items[0].identity;
+    identities[1]=&set->items[1].identity;
+    reason=select_server_candidate(identities,2,request,&selected);
+    if(reason<=MTC_SELECT_NONE)return reason;
+    s=endpoint_state(ssl);
+    if(!s||SSL_use_cert_and_key(ssl,set->items[selected].certificate,
+                                set->items[selected].key,NULL,1)!=1)
+        return MTC_SELECT_INVALID;
+    s->server_selected=selected;
+    s->server_selection_reason=reason;
+    return reason;
+}
+
+static int mtc_server_client_hello(SSL *ssl,int *alert,void *arg){
+    static const unsigned char empty_request[]={0,0};
+    MTCServerCandidates *set=arg;
+    const unsigned char *data=empty_request;
+    size_t n=sizeof(empty_request);
+    int reason;
+    TLSEndpointState *s;
+
+    if(SSL_client_hello_get0_ext(ssl,MTC_EXT,&data,&n)!=1){
+        data=empty_request;
+        n=sizeof(empty_request);
+    }
+    reason=select_and_install_server_candidate(ssl,set,(Slice){data,n});
+    if(reason<=MTC_SELECT_NONE){
+        *alert=reason==MTC_SELECT_NONE?SSL_AD_HANDSHAKE_FAILURE
+                                       :SSL_AD_DECODE_ERROR;
+        return SSL_CLIENT_HELLO_ERROR;
+    }
+    s=endpoint_state(ssl);
+    fprintf(stderr,"MTC server certificate selected: id=%s reason=%s\n",
+            set->items[s->server_selected].id_text,
+            reason==MTC_SELECT_LANDMARK?"requested-landmark":
+            reason==MTC_SELECT_STANDALONE?"requested-standalone":
+                                          "fallback-standalone");
+    return SSL_CLIENT_HELLO_SUCCESS;
+}
+
+static int candidates_available_list(MTCServerCandidates *set){
+    size_t pos=2;
+    if(!set||set->count!=2)return 0;
+    for(int mode=1;mode>=0;mode--){
+        for(size_t i=0;i<set->count;i++){
+            TLSConfig *c=&set->items[i].identity;
+            if(c->has_group!=mode)continue;
+            if(!c->n||c->n>32||pos+1+c->n>sizeof(set->available))
+                return 0;
+            set->available[pos++]=(unsigned char)c->n;
+            memcpy(set->available+pos,c->id,c->n);
+            pos+=c->n;
+        }
+    }
+    if(pos==2)return 0;
+    put(set->available,pos-2,2);
+    set->available_n=pos;
+    return 1;
+}
+
+static int candidates_add(SSL *ssl,unsigned type,unsigned context,
+                          const unsigned char **out,size_t *len,X509 *x,
+                          size_t chainidx,int *alert,void *arg){
+    MTCServerCandidates *set=arg;
+    TLSEndpointState *s;
+    (void)type;
+    if(!set||set->count!=2){*alert=SSL_AD_INTERNAL_ERROR;return -1;}
+    if(context==SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS){
+        *out=set->available;
+        *len=set->available_n;
+        return 1;
+    }
+    if(context!=SSL_EXT_TLS1_3_CERTIFICATE||chainidx)return 0;
+    s=si>=0?SSL_get_ex_data(ssl,si):NULL;
+    if(!s||s->server_selected>=set->count){
+        *alert=SSL_AD_INTERNAL_ERROR;return -1;
+    }
+    if(s->server_selection_reason!=MTC_SELECT_LANDMARK
+       &&s->server_selection_reason!=MTC_SELECT_STANDALONE)
+        return 0;
+    if(!x||X509_cmp(x,set->items[s->server_selected].certificate)){
+        *alert=SSL_AD_INTERNAL_ERROR;return -1;
+    }
+    *out=(const unsigned char *)"";
+    *len=0;
+    return 1;
+}
+
+static int candidates_parse(SSL *ssl,unsigned type,unsigned context,
+                            const unsigned char *in,size_t n,X509 *x,
+                            size_t chainidx,int *alert,void *arg){
+    (void)ssl;(void)type;(void)in;(void)n;(void)x;
+    (void)chainidx;(void)arg;
+    if(context==SSL_EXT_CLIENT_HELLO)return 1;
+    *alert=SSL_AD_UNSUPPORTED_EXTENSION;
+    return 0;
 }
 
 static TLSState *state(SSL *ssl,int role){
@@ -603,8 +800,12 @@ static int mtc_security(const SSL *ssl,const SSL_CTX *ctx,int op,int bits,int ni
     TLSEndpointConfig *endpoint=
         ci>=0 && active?SSL_CTX_get_ex_data(active,ci):NULL;
     TLSConfig *c=endpoint?endpoint->present:NULL;
+    MTCServerCandidates *candidates=candidates_ci>=0&&active
+        ?SSL_CTX_get_ex_data(active,candidates_ci):NULL;
+    SecurityCallback previous=c?c->previous_security:
+        candidates?candidates->previous_security:NULL;
 
-    if(c && op==SSL_SECOP_CA_MD && other){
+    if((c||candidates) && op==SSL_SECOP_CA_MD && other){
         const X509_ALGOR *alg=NULL;X509 *cert=other;
         X509_get0_signature(NULL,&alg,cert);
         if(proof_algorithm(alg)
@@ -612,8 +813,8 @@ static int mtc_security(const SSL *ssl,const SSL_CTX *ctx,int op,int bits,int ni
             return 1;
     }
 
-    return c && c->previous_security
-        ? c->previous_security(ssl,ctx,op,bits,nid,other,ex)
+    return previous
+        ? previous(ssl,ctx,op,bits,nid,other,ex)
         : 0;
 }
 
@@ -867,8 +1068,131 @@ int mtc_client(SSL_CTX *ctx,const char *path,int landmark,
     return mtc_client_configure(ctx,path,landmark,trusted_subtrees,certificate,root);
 }
 int mtc_server(SSL_CTX *ctx,const char *id){
+    if(!ctx||!id||(candidates_ci>=0
+       &&SSL_CTX_get_ex_data(ctx,candidates_ci)))return 0;
     TLSConfig *c=OPENSSL_zalloc(sizeof(*c));if(!c)return 0;c->role=MTC_ROLE_SERVER_PRESENT;
     if(!id_encode(id,c->id,&c->n)){OPENSSL_free(c);return 0;}c->has_group=initial_group(c);c->group_n=c->has_group?c->n:0;return install(ctx,c);
+}
+static int mtc_server_add_candidate_unchecked(SSL_CTX *ctx,const char *id,
+                                              X509 *certificate,EVP_PKEY *key){
+    MTCServerCandidates *set;
+    MTCServerCandidate item={0};
+    size_t base_n;uint64_t kind,log,landmark;
+
+    if(!ctx||!id||!certificate||!key||strlen(id)>=sizeof(item.id_text)
+       ||(ci>=0&&SSL_CTX_get_ex_data(ctx,ci))
+       ||!X509_check_private_key(certificate,key)
+       ||!id_encode(id,item.identity.id,&item.identity.n)
+       ||item.identity.n>32)
+        return 0;
+    item.identity.has_group=initial_group(&item.identity);
+    if(item.identity.has_group){
+        if(!landmark_id_parts(item.identity.id,item.identity.n,
+                              &base_n,&kind,&log,&landmark)
+           ||kind!=1||!log||!landmark)return 0;
+    }
+    if(candidates_ci<0)
+        candidates_ci=SSL_CTX_get_ex_new_index(0,NULL,NULL,NULL,
+                                               candidates_free);
+    if(candidates_ci<0)return 0;
+    set=SSL_CTX_get_ex_data(ctx,candidates_ci);
+    if(set){
+        MTCServerCandidate *other;
+        if(set->count!=1)return 0;
+        other=&set->items[0];
+        if(other->identity.has_group==item.identity.has_group
+           ||!same_server_identity(other->certificate,certificate))
+            return 0;
+        /* Both credentials must belong to the same CA ID. */
+        if(item.identity.has_group){
+            if(base_n!=other->identity.n
+               ||memcmp(item.identity.id,other->identity.id,base_n))return 0;
+        }else{
+            if(!landmark_id_parts(other->identity.id,other->identity.n,
+                                  &base_n,&kind,&log,&landmark)
+               ||base_n!=item.identity.n
+               ||memcmp(item.identity.id,other->identity.id,base_n))return 0;
+        }
+        if(si<0)si=SSL_get_ex_new_index(0,NULL,NULL,NULL,state_free);
+        if(si<0)return 0;
+    }
+    if(!X509_up_ref(certificate))return 0;
+    if(!EVP_PKEY_up_ref(key)){X509_free(certificate);return 0;}
+    item.certificate=certificate;
+    item.key=key;
+    memcpy(item.id_text,id,strlen(id)+1);
+    if(!set){
+        set=OPENSSL_zalloc(sizeof(*set));
+        if(!set||!SSL_CTX_set_ex_data(ctx,candidates_ci,set)){
+            OPENSSL_free(set);X509_free(certificate);EVP_PKEY_free(key);
+            return 0;
+        }
+    }
+    set->items[set->count++]=item;
+    if(set->count==2){
+        if(!candidates_available_list(set)
+           ||!SSL_CTX_add_custom_ext(ctx,MTC_EXT,CONTEXT,
+                                     candidates_add,NULL,set,
+                                     candidates_parse,set)){
+            set->count=1;
+            X509_free(item.certificate);
+            EVP_PKEY_free(item.key);
+            memset(&set->items[1],0,sizeof(set->items[1]));
+            return 0;
+        }
+        set->previous_security=SSL_CTX_get_security_callback(ctx);
+        SSL_CTX_set_security_callback(ctx,mtc_security);
+        SSL_CTX_set_client_hello_cb(ctx,mtc_server_client_hello,set);
+    }
+    return 1;
+}
+static int candidate_proof_mode(X509 *certificate,int landmark){
+    const ASN1_BIT_STRING *signature=NULL;
+    const X509_ALGOR *signature_algorithm=NULL;
+    Slice p,extensions,proof,signatures;
+    uint64_t start,end;
+    size_t signature_count;
+    if(!certificate||!algorithm(X509_get0_tbs_sigalg(certificate)))
+        return 0;
+    X509_get0_signature(&signature,&signature_algorithm,certificate);
+    if(!signature||!algorithm(signature_algorithm)
+       ||(signature->flags&7)||signature->length<0)return 0;
+    p=(Slice){signature->data,(size_t)signature->length};
+    if(!vector(&p,2,&extensions)||!mtc_extensions(extensions)
+       ||!number(&p,6,&start)||!number(&p,6,&end)
+       ||!vector(&p,2,&proof)||!vector(&p,3,&signatures)||p.n
+       ||!signature_block_v2(signatures,&signature_count))return 0;
+    return landmark?signature_count==0:signature_count>0;
+}
+int mtc_server_add_candidate(SSL_CTX *ctx,const char *id,
+                             X509 *certificate,EVP_PKEY *key,
+                             const char *trust_path,const char *mtc_ca_path,
+                             const char *representation_root_path){
+    unsigned char encoded[80];size_t encoded_n;
+    TLSConfig identity={0};
+    MTCConfig *trust=NULL;
+    int landmark,ok=0;
+    if(!ctx||!id||!certificate||!key||!trust_path||!mtc_ca_path
+       ||!representation_root_path
+       ||!id_encode(id,encoded,&encoded_n)||encoded_n>32)return 0;
+    memcpy(identity.id,encoded,encoded_n);
+    identity.n=encoded_n;
+    landmark=initial_group(&identity);
+    trust=landmark
+        ?mtc_load_trust_config_with_ca_v2(trust_path,mtc_ca_path,
+                                          representation_root_path)
+        :mtc_load_authority_config_with_ca_v2(trust_path,mtc_ca_path,
+                                              representation_root_path);
+    if(trust&&trust->landmark==landmark
+       &&trust->signal_len==encoded_n
+       &&!memcmp(trust->signal,encoded,encoded_n)
+       &&X509_cmp_current_time(X509_get0_notBefore(certificate))<0
+       &&X509_cmp_current_time(X509_get0_notAfter(certificate))>0
+       &&candidate_proof_mode(certificate,landmark)
+       &&mtc_verify(certificate,trust))
+        ok=mtc_server_add_candidate_unchecked(ctx,id,certificate,key);
+    mtc_free(trust);
+    return ok;
 }
 static int mtc_server_verify_client_configure(SSL_CTX *ctx,const char *path,
                                               int landmark,
@@ -890,7 +1214,8 @@ static int mtc_server_verify_client_configure(SSL_CTX *ctx,const char *path,
 }
 int mtc_server_verify_client(SSL_CTX *ctx,const char *path,int landmark,
                              const char *certificate,const char *root){
-    if(!certificate||!root)return 0;
+    if(!ctx||!certificate||!root
+       ||(candidates_ci>=0&&SSL_CTX_get_ex_data(ctx,candidates_ci)))return 0;
     return mtc_server_verify_client_configure(ctx,path,landmark,certificate,root);
 }
 

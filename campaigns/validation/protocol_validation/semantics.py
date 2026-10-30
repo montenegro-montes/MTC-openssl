@@ -1,5 +1,5 @@
-"""Parsing/classification for the active MTC-07 and trust-anchor-ids-04 subset."""
-DRAFT = 'draft-ietf-tls-trust-anchor-ids-04'
+"""Parsing/classification for the active MTC-07 and trust-anchor-ids-06 subset."""
+DRAFT = 'draft-ietf-tls-trust-anchor-ids-06'
 # Read the authoritative C constant; no alternate wire codepoint or fallback.
 from pathlib import Path
 import re
@@ -18,7 +18,7 @@ def require(ok, reason):
 
 
 def decode_id(data):
-    require(1 <= len(data) <= 255, 'TrustAnchorID length outside 1..255')
+    require(1 <= len(data) <= 32, 'TrustAnchorID length outside 1..32')
     parts = []
     value = 0
     first = True
@@ -69,12 +69,15 @@ def encode_list(ids):
     return len(body).to_bytes(2, 'big') + body
 
 
-def trust_mapping(ch, ee, certificate_extensions, ca_id, mode, log, landmark):
-    """Classify observed payloads; single-candidate initial-group / exact-ID subset only."""
+def trust_mapping(ch, ee, certificate_extensions, ca_id, mode, log, landmark,
+                  multi_candidate=False):
+    """Classify observed payloads for one candidate or the two-credential server."""
     result = dict(draft_revision=DRAFT, extension_codepoint=CODEPOINT,
                   codepoint_status=CODEPOINT_STATUS, draft_extension_type='TBD',
                   wire_structure_match=False, message_semantics_match=False,
-                  scope='single candidate, initial single-log group or exact individual-ID negotiation; not complete trust_anchors support')
+                  scope=('two candidates, initial single-log group or exact individual-ID negotiation'
+                         if multi_candidate else
+                         'single candidate, initial single-log group or exact individual-ID negotiation; not complete trust_anchors support'))
     try:
         requested = decode_list(ch)
         available = decode_list(ee, available=True)
@@ -95,14 +98,17 @@ def trust_mapping(ch, ee, certificate_extensions, ca_id, mode, log, landmark):
                       individual_landmark_id='.'.join(map(str, individual)),
                       landmark_group_id='.'.join(map(str, group)),
                       landmark_group_advertised=group in requested,
-                      requested_order='unordered', available_order='single candidate; preference order trivial')
+                      requested_order='unordered',
+                      available_order=('Landmark then Standalone' if multi_candidate else
+                                       'single candidate; preference order trivial'))
         group_selected = mode == 'landmark' and requested == [group]
-        membership = group_selected and log == 1 and landmark == 1 and available == [individual]
+        expected_available = [individual, ca] if multi_candidate else [expected]
+        membership = group_selected and log == 1 and landmark == 1 and available == expected_available
         result['group_membership_valid'] = membership if group_selected else None
-        require((requested == [expected] or membership) and available == [expected],
-                'observed IDs do not match the configured single-candidate individual anchor')
+        require((requested == [expected] or membership) and available == expected_available,
+                'observed IDs do not match the configured individual anchors')
         result.update(status='PASS_EXPERIMENTAL_CODEPOINT', message_semantics_match=True,
-                      reason='Observed single-candidate wire structures and configured group-member or exact-ID selection match trust-anchor-ids-04; codepoint is provisional, not a final IANA assignment.')
+                      reason='Observed configured available-ID order and group-member or exact-ID selection; codepoint is provisional, not a final IANA assignment.')
         result['landmark_group_recommendation'] = dict(
             status=('PASS' if membership else 'UNRESOLVED') if mode == 'landmark' else 'NOT_APPLICABLE',
             section='MTC-07 8.2.1',

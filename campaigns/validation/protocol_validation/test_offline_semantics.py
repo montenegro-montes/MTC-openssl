@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from semantics import decode_id, encode_id, decode_list, encode_list, trust_mapping, timestamp_checks
+from extract_pcap import signal
 from negative_cases import classify_validator
 from report import layers
 from validate_mtc import trust
@@ -57,6 +58,27 @@ class SemanticsTests(unittest.TestCase):
         self.assertEqual(result['individual_landmark_id'], '32473.101.1.1.1')
         self.assertEqual(result['landmark_group_id'], '32473.101.2.1.1')
 
+    def test_server_pair_advertises_both_individual_ids_in_preference_order(self):
+        ca = (32473, 101)
+        available = encode_list([ca + (1, 1, 1), ca])
+        marker = [dict(length=0, data=b'')]
+        for mode, requested in (('landmark', ca + (2, 1, 1)),
+                                ('standalone', ca)):
+            result = trust_mapping(encode_list([requested]), available, marker,
+                                   '32473.101', mode, 1, 1,
+                                   multi_candidate=True)
+            self.assertEqual(result['status'], 'PASS_EXPERIMENTAL_CODEPOINT')
+            self.assertEqual(result['available_ids'],
+                             ['32473.101.1.1.1', '32473.101'])
+        reversed_list = encode_list([ca, ca + (1, 1, 1)])
+        self.assertEqual(trust_mapping(encode_list([ca]), reversed_list, marker,
+                                       '32473.101', 'standalone', 1, 1,
+                                       multi_candidate=True)['status'], 'FAIL')
+        preferred = [core.relid('32473.101.1.1.1'), core.relid('32473.101')]
+        signal(available, preferred[0], preferred=preferred)
+        with self.assertRaises(ValueError):
+            signal(reversed_list, preferred[0], preferred=preferred)
+
     def test_id_binary_example_from_draft_section_3(self):
         self.assertEqual(encode_id((32473, 1)), bytes.fromhex('81fd5901'))
         self.assertEqual(decode_id(bytes.fromhex('81fd5901')), (32473, 1))
@@ -65,6 +87,13 @@ class SemanticsTests(unittest.TestCase):
         for data in (b'', b'\x80\x01', b'\x81', b'\0'*256):
             with self.subTest(data=data), self.assertRaises(ValueError):
                 decode_id(data)
+
+    def test_trust_anchor_id_maximum_is_32_bytes(self):
+        self.assertEqual(decode_id(b'\0'*32), (0,)*32)
+        with self.assertRaises(ValueError):
+            decode_id(b'\0'*33)
+        with self.assertRaises(ValueError):
+            encode_id((0,)*33)
 
     def test_list_round_trip_keeps_preference_order(self):
         ids = [(32473, 9), (32473, 1)]
