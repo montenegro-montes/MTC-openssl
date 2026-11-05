@@ -6,16 +6,31 @@ It does not implement temporal landmark evolution or performance measurements.
 
 ## Protocol scope
 
-The pinned references remain MTC -05 and Trust Anchor IDs -04. TAI -04 §4.3
-defines available IDs in EncryptedExtensions and a new connection advertising
-one locally trusted selected ID, with at most one retry. This is connection
-retry, not TLS HelloRetryRequest.
+The active references are MTC -07 and [Trust Anchor IDs -06](https://www.ietf.org/archive/id/draft-ietf-tls-trust-anchor-ids-06.txt).
+TAI -06 Sections 5.1 and 5.6 define the available-ID list in
+EncryptedExtensions and recovery on a new connection. A client SHOULD retry at
+most once per connection attempt. This is connection retry, not TLS
+HelloRetryRequest.
 
-The active codepoint is provisional `0xca34`, aligned with Chromium/BoringSSL, not a final IANA assignment. Historical runs used private `0xffa7` and remain unchanged. Local restrictions:
-one candidate credential, one requested ID or initial log-1/landmark-1 group,
-binary IDs up to 80 bytes with components up to UINT32_MAX; empty and duplicate
-lists are rejected. MCA2/MTB2 remain local out-of-band storage. No complete draft
-conformance or interoperability claim is made.
+The active codepoint is provisional `0xca34`, aligned with Chromium/BoringSSL,
+not a final IANA assignment. Historical runs used private `0xffa7` and remain
+unchanged. This isolated retry peer has one candidate credential. Its controller
+requests one ID per connection, while the native parser accepts multiple
+requested IDs and multiple available IDs. Binary IDs are limited to 32 bytes
+(TAI -06 Section 4). The TLS parsers accept canonically encoded IDs with
+components larger than UINT64_MAX and discard them as locally unsupported;
+the text configuration and local MTC codec still limit each component to
+UINT64_MAX (TAI -06 Section 8). The Python retry controller also validates
+canonical wire IDs before decoding; it ignores locally unsupported large
+components while retaining later supported IDs in server preference order.
+The 22 deterministic controller tests and the updated native C parser test
+passed offline on 31 October 2026 using the repository mounted read-only in
+the local MTC image. The image's embedded `MTC_SHA256` does not cover this
+Python controller or the mounted test sources.
+An empty requested list is valid discovery; an empty available list is invalid.
+The controller rejects duplicate available IDs. MCA2/MTB2 remain local
+out-of-band storage. No complete draft conformance or interoperability claim
+is made.
 
 The retry server receives trust, credential and private-key paths, **no independent
 advertised ID**. It validates the checkpoint, MTC proof, server leaf purpose,
@@ -107,10 +122,12 @@ landmark is the validated configured individual landmark.
 Cases A–E are controller/parser unit tests. Native offline tests additionally
 exercise mismatch/discovery, exact-ID selection, malformed lists and credential
 binding. These test outcomes are not substitutes for live TLS evidence.
-The dedicated preflight proves case B against real sockets and normal TLS
-authentication. Cases C–E use injected controller results rather than hostile
-live servers. The original baseline TLS suite and PQ retry are not covered by
-the small ECDSA preflight.
+The dedicated ECDSA preflight has demonstrated both one bounded retry and a
+direct authenticated connection against real loopback sockets. These single-
+candidate transactions do not demonstrate a multi-ID EncryptedExtensions list
+on the wire. Cases C–E use injected controller results rather than hostile live
+servers. The original baseline TLS suite and PQ retry are not covered by the
+small ECDSA preflight.
 
 No timing/byte framework is added. Each attempt remains separately owned; a
 future external metric may include connection setup and transition overhead
@@ -126,5 +143,6 @@ configuration. `retry.py` classifies canonical individual suffixes structurally,
 including multi-byte component values, rather than testing `.1.1.1`. This only
 changes report classification, not the exact locally trusted retry-target check.
 A `.2` group is never classified as an individual landmark. The native configuration
-loader remains restricted to log 1 / landmark 1. New group/ID tests have not run;
-all earlier retry evidence retains its original IDs and meaning.
+loader remains restricted to log 1 / landmark 1. The current offline tests
+exercise group/ID parsing; all earlier retry evidence retains its original IDs
+and meaning.
