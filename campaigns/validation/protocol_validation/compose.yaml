@@ -8,7 +8,7 @@ services:
       - ${PROTOCOL_KEY:?}:/server.key:ro
       - ${PROTOCOL_OUTPUT:?}:/capture
     entrypoint: [python3, /protocol/capture.py]
-    command: [--inside, server, --mode, "${PROTOCOL_MODE}", --profile, "${PROTOCOL_PROFILE}", --leaf, "${PROTOCOL_LEAF}", --server-pair, "${PROTOCOL_SERVER_PAIR:-0}"]
+    command: [--inside, server, --mode, "${PROTOCOL_MODE}", --profile, "${PROTOCOL_PROFILE}", --leaf, "${PROTOCOL_LEAF}", --server-pair, "${PROTOCOL_SERVER_PAIR:-0}", --landmark-rp-state, "${PROTOCOL_LANDMARK_RP_STATE:-0}"]
     healthcheck:
       test: [CMD, test, -f, /capture/server.ready]
       interval: 1s
@@ -28,4 +28,4 @@ services:
       - ${PROTOCOL_FIXTURE:?}:/fixture:ro
       - ${PROTOCOL_OUTPUT:?}:/capture
     entrypoint: [python3, /protocol/capture.py]
-    command: [--inside, client, --mode, "${PROTOCOL_MODE}", --profile, "${PROTOCOL_PROFILE}", --leaf, "${PROTOCOL_LEAF}", --server-pair, "${PROTOCOL_SERVER_PAIR:-0}"]
+    command: [--inside, client, --mode, "${PROTOCOL_MODE}", --profile, "${PROTOCOL_PROFILE}", --leaf, "${PROTOCOL_LEAF}", --server-pair, "${PROTOCOL_SERVER_PAIR:-0}", --landmark-rp-state, "${PROTOCOL_LANDMARK_RP_STATE:-0}"]

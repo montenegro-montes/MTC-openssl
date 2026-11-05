@@ -34,9 +34,18 @@ class ServerPairCommandTests(unittest.TestCase):
         self.assertEqual(pair[pair.index('-mtc_trust')+1], '/fixture/trust.bin')
         legacy = client_command(fixture, 'landmark', 'server.mtc.example.com')
         self.assertNotIn('-mtc_trusted_subtrees', legacy)
+        legacy_rp = client_command(fixture, 'landmark',
+                                   'server.mtc.example.com', landmark_rp_state=True)
+        self.assertEqual(legacy_rp[legacy_rp.index('-mtc_trusted_subtrees')+1],
+                         '/capture/rp-state/generations/validated/trusted-subtrees.mts1')
+        self.assertEqual(legacy_rp[legacy_rp.index('-groups')+1], 'X25519')
+        self.assertEqual(pair[pair.index('-groups')+1], 'X25519:P-256')
+        self.assertEqual(legacy[legacy.index('-groups')+1], 'X25519')
         standalone = client_command(fixture, 'standalone',
                                     'server.mtc.example.com', True)
         self.assertNotIn('-mtc_trusted_subtrees', standalone)
+        self.assertEqual(standalone[standalone.index('-groups')+1],
+                         'X25519:P-256')
 
     def test_pair_leaf_zero_uses_manifest_hostname(self):
         manifest={'server_hostname':'server.mtc.example.com'}

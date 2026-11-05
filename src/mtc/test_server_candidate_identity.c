@@ -77,16 +77,16 @@ int main(int argc,char **argv){
     connection=SSL_new(ctx);
     assert(connection);
     request_n=request_signal(request,landmark->signal,landmark->signal_len);
-    assert(select_and_install_server_candidate(connection,set,
-           (Slice){request,request_n})==MTC_SELECT_LANDMARK);
+    assert(select_and_install_server_candidate_eligible(connection,set,
+           (Slice){request,request_n},3U)==MTC_SELECT_LANDMARK);
     assert(SSL_get_certificate(connection)==landmark_cert);
     assert(SSL_check_private_key(connection));
     SSL_free(connection);
     connection=SSL_new(ctx);
     assert(connection);
     request_n=request_signal(request,standalone->signal,standalone->signal_len);
-    assert(select_and_install_server_candidate(connection,set,
-           (Slice){request,request_n})==MTC_SELECT_STANDALONE);
+    assert(select_and_install_server_candidate_eligible(connection,set,
+           (Slice){request,request_n},3U)==MTC_SELECT_STANDALONE);
     assert(SSL_get_certificate(connection)==standalone_cert);
     assert(SSL_check_private_key(connection));
     SSL_free(connection);

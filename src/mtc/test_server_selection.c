@@ -15,6 +15,9 @@ int main(void){
     TLSConfig *candidates[]={&standalone,&landmark};
     unsigned char request[100];size_t n,selected;
     const unsigned char empty[]={0,0},malformed[]={0,1,0};
+    const unsigned char large_id[]={
+        0x82,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x00
+    }; /* canonical 2^64 component: valid on the wire, unsupported locally */
 
     assert(id_encode("32473.101",standalone.id,&standalone.n));
     assert(id_encode("32473.101.1.7.129",landmark.id,&landmark.n));
@@ -40,13 +43,19 @@ int main(void){
     assert(select_server_candidate(candidates,2,(Slice){request,n},&selected)
            ==MTC_SELECT_LANDMARK && selected==1);
 
-    /* Bare CA and stale or unrelated landmark groups cannot select Landmark. */
+    /* A landmark group includes Standalone even without a matching landmark. */
     n=request_id(request,"32473.101");
     assert(select_server_candidate(candidates,2,(Slice){request,n},&selected)
            ==MTC_SELECT_STANDALONE && selected==0);
     n=request_id(request,"32473.101.2.7.128");
     assert(select_server_candidate(candidates,2,(Slice){request,n},&selected)
            ==MTC_SELECT_STANDALONE && selected==0);
+    n=request_id(request,"32473.101.2.7.129");
+    assert(select_server_candidate_eligible(candidates,2,(Slice){request,n},
+           1U,&selected)==MTC_SELECT_STANDALONE&&selected==0);
+    n=request_id(request,"32473.101");
+    assert(select_server_candidate_eligible(candidates,2,(Slice){request,n},
+           2U,&selected)==MTC_SELECT_NONE&&selected==SIZE_MAX);
     n=request_id(request,"32473.999");
     assert(select_server_candidate(candidates,2,(Slice){request,n},&selected)
            ==MTC_SELECT_FALLBACK_STANDALONE && selected==0);
@@ -58,6 +67,30 @@ int main(void){
            ==MTC_SELECT_NONE && selected==SIZE_MAX);
     assert(select_server_candidate(candidates,2,
            (Slice){malformed,sizeof(malformed)},&selected)==MTC_SELECT_INVALID);
+    assert(wire_id_valid((Slice){large_id,sizeof(large_id)}));
+    assert(!id_valid((Slice){large_id,sizeof(large_id)}));
+    n=2;
+    request[n++]=(unsigned char)sizeof(large_id);
+    memcpy(request+n,large_id,sizeof(large_id));n+=sizeof(large_id);
+    put(request,n-2,2);
+    assert(select_server_candidate(candidates,2,(Slice){request,n},&selected)
+           ==MTC_SELECT_FALLBACK_STANDALONE&&selected==0);
+    {
+        size_t group_n;
+        assert(id_encode("32473.101.2.7.129",request+n+1,&group_n));
+        request[n++]=(unsigned char)group_n;
+        n+=group_n;
+        put(request,n-2,2);
+    }
+    assert(select_server_candidate(candidates,2,(Slice){request,n},&selected)
+           ==MTC_SELECT_LANDMARK&&selected==1);
+    n=request_id(request,"32473.101");
+    request[n++]=2;
+    request[n++]=0x80;
+    request[n++]=0;
+    put(request,n-2,2);
+    assert(select_server_candidate(candidates,2,(Slice){request,n},&selected)
+           ==MTC_SELECT_INVALID);
     {
         unsigned char oversized[36]={0,34,33};
         assert(select_server_candidate(candidates,2,
@@ -119,22 +152,30 @@ int main(void){
             size_t out_n;int alert=0;
             assert(connection);
             n=request_id(request,"32473.101.2.7.129");
-            assert(select_and_install_server_candidate(connection,set,
-                   (Slice){request,n})==MTC_SELECT_LANDMARK);
+            assert(select_and_install_server_candidate_eligible(connection,set,
+                   (Slice){request,n},3U)==MTC_SELECT_LANDMARK);
             state=endpoint_state(connection);
             assert(state&&state->server_selected==1
                    &&state->server_selection_reason==MTC_SELECT_LANDMARK);
             assert(SSL_get_certificate(connection)==set->items[1].certificate);
             assert(SSL_check_private_key(connection));
+            state->server_request_present=1;
+            assert(candidates_available_for_connection(set,3U,state));
             assert(candidates_add(connection,MTC_EXT,
                    SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,&out,&out_n,
                    NULL,0,&alert,set)==1);
-            assert(out==set->available
+            assert(out==state->server_available
                    &&out_n==landmark.n+standalone.n+4
                    &&out[2]==landmark.n
                    &&!memcmp(out+3,landmark.id,landmark.n)
                    &&out[3+landmark.n]==standalone.n
                    &&!memcmp(out+4+landmark.n,standalone.id,standalone.n));
+            assert(candidates_available_for_connection(set,2U,state));
+            assert(candidates_add(connection,MTC_EXT,
+                   SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,&out,&out_n,
+                   NULL,0,&alert,set)==1
+                   &&out_n==landmark.n+3&&out[2]==landmark.n
+                   &&!memcmp(out+3,landmark.id,landmark.n));
             assert(candidates_add(connection,MTC_EXT,SSL_EXT_TLS1_3_CERTIFICATE,
                    &out,&out_n,landmark_cert,0,&alert,set)==1&&out_n==0);
             assert(candidates_add(connection,MTC_EXT,SSL_EXT_TLS1_3_CERTIFICATE,
@@ -145,8 +186,8 @@ int main(void){
             connection=SSL_new(ctx);
             assert(connection);
             n=request_id(request,"32473.101");
-            assert(select_and_install_server_candidate(connection,set,
-                   (Slice){request,n})==MTC_SELECT_STANDALONE);
+            assert(select_and_install_server_candidate_eligible(connection,set,
+                   (Slice){request,n},3U)==MTC_SELECT_STANDALONE);
             state=endpoint_state(connection);
             assert(state&&state->server_selected==0);
             assert(SSL_get_certificate(connection)==set->items[0].certificate);
@@ -156,9 +197,26 @@ int main(void){
             SSL_free(connection);
             connection=SSL_new(ctx);
             assert(connection);
+            n=request_id(request,"32473.101.2.7.129");
+            assert(select_and_install_server_candidate_eligible(connection,set,
+                   (Slice){request,n},1U)==MTC_SELECT_STANDALONE);
+            state=endpoint_state(connection);
+            assert(state&&state->server_selected==0);
+            state->server_request_present=1;
+            assert(candidates_available_for_connection(set,1U,state));
+            assert(candidates_add(connection,MTC_EXT,
+                   SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,&out,&out_n,
+                   NULL,0,&alert,set)==1
+                   &&out_n==standalone.n+3&&out[2]==standalone.n
+                   &&!memcmp(out+3,standalone.id,standalone.n));
+            assert(candidates_add(connection,MTC_EXT,SSL_EXT_TLS1_3_CERTIFICATE,
+                   &out,&out_n,cert,0,&alert,set)==1&&out_n==0);
+            SSL_free(connection);
+            connection=SSL_new(ctx);
+            assert(connection);
             n=request_id(request,"32473.999");
-            assert(select_and_install_server_candidate(connection,set,
-                   (Slice){request,n})==MTC_SELECT_FALLBACK_STANDALONE);
+            assert(select_and_install_server_candidate_eligible(connection,set,
+                   (Slice){request,n},3U)==MTC_SELECT_FALLBACK_STANDALONE);
             assert(candidates_add(connection,MTC_EXT,SSL_EXT_TLS1_3_CERTIFICATE,
                    &out,&out_n,cert,0,&alert,set)==0);
             SSL_free(connection);
