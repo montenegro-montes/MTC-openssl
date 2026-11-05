@@ -1,5 +1,6 @@
 .DS_Store
 /artifacts/
+/latex/
 !results/
 !results/**
 .mt-state/
