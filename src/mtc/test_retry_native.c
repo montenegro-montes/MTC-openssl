@@ -42,9 +42,14 @@ int main(int argc,char **argv) {
         };
         const unsigned char noncanonical[]={0x80,0x00};
         const unsigned char unterminated[]={0x81};
+        const unsigned char too_long[33]={0};
         assert(!retry_id_valid((Slice){overflow,sizeof(overflow)}));
+        assert(wire_id_valid((Slice){overflow,sizeof(overflow)}));
         assert(!retry_id_valid((Slice){noncanonical,sizeof(noncanonical)}));
+        assert(!wire_id_valid((Slice){noncanonical,sizeof(noncanonical)}));
         assert(!retry_id_valid((Slice){unterminated,sizeof(unterminated)}));
+        assert(!wire_id_valid((Slice){unterminated,sizeof(unterminated)}));
+        assert(!retry_id_valid((Slice){too_long,sizeof(too_long)}));
     }
     /* Initial CH group selects the exact landmark. EE still names .1, not .2. */
     SSL *group_peer=SSL_new(server);assert(group_peer);
@@ -56,7 +61,63 @@ int main(int argc,char **argv) {
     assert(add_one(group_peer,MTC_EXT,SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,&out,&out_n,NULL,0,&alert,&r->base)==1);
     assert(out_n==r->base.n+3&&!memcmp(out+3,r->base.trust->signal,r->base.n));
     SSL_free(group_peer);
-    /* TAI Sections 4.1/4.3: an absent extension invokes no parser, while a
+    {
+        const unsigned char large_id[]={
+            0x82,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x00
+        };
+        size_t list_n=2;
+        group_list[list_n++]=(unsigned char)sizeof(large_id);
+        memcpy(group_list+list_n,large_id,sizeof(large_id));
+        list_n+=sizeof(large_id);
+        put(group_list,list_n-2,2);
+        group_peer=SSL_new(server);assert(group_peer);
+        assert(parse_one(group_peer,MTC_EXT,SSL_EXT_CLIENT_HELLO,
+                         group_list,list_n,NULL,0,&alert,&r->base));
+        assert(!state(group_peer,MTC_ROLE_SERVER_PRESENT)->matched);
+        assert(retry_parse(group_peer,MTC_EXT,SSL_EXT_CLIENT_HELLO,
+                           group_list,list_n,NULL,0,&alert,r));
+        assert(!retry_state(group_peer)->matched);
+        SSL_free(group_peer);
+        group_list[list_n++]=(unsigned char)group_len;
+        memcpy(group_list+list_n,r->base.trust->request_signal,group_len);
+        list_n+=group_len;
+        put(group_list,list_n-2,2);
+        group_peer=SSL_new(server);assert(group_peer);
+        assert(parse_one(group_peer,MTC_EXT,SSL_EXT_CLIENT_HELLO,
+                         group_list,list_n,NULL,0,&alert,&r->base));
+        assert(state(group_peer,MTC_ROLE_SERVER_PRESENT)->matched);
+        assert(retry_parse(group_peer,MTC_EXT,SSL_EXT_CLIENT_HELLO,
+                           group_list,list_n,NULL,0,&alert,r));
+        assert(retry_state(group_peer)->matched);
+        SSL_free(group_peer);
+        put(group_list,group_len+1,2);
+        group_list[2]=(unsigned char)group_len;
+        memcpy(group_list+3,r->base.trust->request_signal,group_len);
+    }
+    /* A matching first ID cannot hide a later overlong wire ID. */
+    size_t oversized_list_n=group_len+3;
+    group_list[oversized_list_n++]=33;
+    memset(group_list+oversized_list_n,0,33);oversized_list_n+=33;
+    put(group_list,oversized_list_n-2,2);
+    SSL *oversized_peer=SSL_new(server);assert(oversized_peer);
+    assert(!parse_one(oversized_peer,MTC_EXT,SSL_EXT_CLIENT_HELLO,
+                      group_list,oversized_list_n,NULL,0,&alert,&r->base));
+    assert(alert==SSL_AD_HANDSHAKE_FAILURE);
+    SSL_free(oversized_peer);
+    char oversized_text[66];
+    for(size_t i=0;i<33;i++){
+        oversized_text[2*i]='0';
+        oversized_text[2*i+1]=i==32?'\0':'.';
+    }
+    SSL_CTX *oversized_ctx=SSL_CTX_new(TLS_server_method());
+    assert(oversized_ctx);
+    assert(!mtc_server(oversized_ctx,oversized_text));
+    SSL_CTX_free(oversized_ctx);
+    oversized_text[63]='\0'; /* 32 one-byte components fit exactly. */
+    SSL_CTX *boundary_ctx=SSL_CTX_new(TLS_server_method());
+    assert(boundary_ctx&&mtc_server(boundary_ctx,oversized_text));
+    SSL_CTX_free(boundary_ctx);
+    /* TAI-06 Sections 5.1/5.6: an absent extension invokes no parser, while a
        present empty Requested list is valid discovery and matches nothing. */
     SSL *absent_peer=SSL_new(server);assert(absent_peer);
     assert(SSL_get_ex_data(absent_peer,si)==NULL);
@@ -85,6 +146,26 @@ int main(int argc,char **argv) {
     assert(retry_add(empty_retry_peer,MTC_EXT,SSL_EXT_TLS1_3_CERTIFICATE,
                      &out,&out_n,NULL,0,&alert,r)==0);
     SSL_free(empty_retry_peer);
+    /* Requested order is immaterial: inspect every ID before selecting B. */
+    unsigned char multi_request[83],wrong_request[32];size_t wrong_n,request_n=2;
+    assert(id_encode("32473.9.1.1.1",wrong_request,&wrong_n));
+    multi_request[request_n++]=(unsigned char)wrong_n;
+    memcpy(multi_request+request_n,wrong_request,wrong_n);request_n+=wrong_n;
+    multi_request[request_n++]=(unsigned char)r->base.n;
+    memcpy(multi_request+request_n,r->base.id,r->base.n);request_n+=r->base.n;
+    put(multi_request,request_n-2,2);
+    SSL *multi_request_peer=SSL_new(server);assert(multi_request_peer);
+    assert(retry_parse(multi_request_peer,MTC_EXT,SSL_EXT_CLIENT_HELLO,
+                       multi_request,request_n,NULL,0,&alert,r));
+    assert(retry_state(multi_request_peer)->matched);
+    SSL_free(multi_request_peer);
+    multi_request[request_n++]=0;
+    put(multi_request,request_n-2,2);
+    multi_request_peer=SSL_new(server);assert(multi_request_peer);
+    assert(!retry_parse(multi_request_peer,MTC_EXT,SSL_EXT_CLIENT_HELLO,
+                        multi_request,request_n,NULL,0,&alert,r));
+    assert(alert==SSL_AD_DECODE_ERROR);
+    SSL_free(multi_request_peer);
     /* Component parsing, not a last-three-bytes shortcut. */
     TLSConfig coordinates={0};unsigned char expected_group[80];size_t expected_len;
     assert(id_encode("32473.101.1.7.129",coordinates.id,&coordinates.n));
@@ -188,6 +269,73 @@ int main(int argc,char **argv) {
                      (const unsigned char *)"",0,NULL,0,&alert,
                      &group_client));
     assert(group_client_state->confirmed);
+    /* CertificateRequest uses the client-presentation route. A valid large
+       ID is ignored locally; a later known ID still enables presentation. */
+    {
+        const unsigned char large_id[]={
+            0x82,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x00
+        };
+        TLSConfig client_present={0};
+        TLSEndpointConfig client_endpoint={0};
+        unsigned char requested[83];size_t requested_n=2;
+        SSL *client_present_ssl=SSL_new(client);
+        assert(client_present_ssl);
+        client_present.role=MTC_ROLE_CLIENT_PRESENT;
+        assert(id_encode("32473.101.1.1.1",client_present.id,
+                         &client_present.n));
+        client_endpoint.present=&client_present;
+        requested[requested_n++]=(unsigned char)sizeof(large_id);
+        memcpy(requested+requested_n,large_id,sizeof(large_id));
+        requested_n+=sizeof(large_id);
+        put(requested,requested_n-2,2);
+        assert(endpoint_parse(client_present_ssl,MTC_EXT,
+                              SSL_EXT_TLS1_3_CERTIFICATE_REQUEST,
+                              requested,requested_n,NULL,0,&alert,
+                              &client_endpoint));
+        assert(!state(client_present_ssl,MTC_ROLE_CLIENT_PRESENT)->available);
+        requested[requested_n++]=(unsigned char)client_present.n;
+        memcpy(requested+requested_n,client_present.id,client_present.n);
+        requested_n+=client_present.n;
+        put(requested,requested_n-2,2);
+        assert(endpoint_parse(client_present_ssl,MTC_EXT,
+                              SSL_EXT_TLS1_3_CERTIFICATE_REQUEST,
+                              requested,requested_n,NULL,0,&alert,
+                              &client_endpoint));
+        assert(state(client_present_ssl,MTC_ROLE_CLIENT_PRESENT)->available);
+        assert(endpoint_add(client_present_ssl,MTC_EXT,
+                            SSL_EXT_TLS1_3_CERTIFICATE,
+                            &out,&out_n,NULL,0,&alert,&client_endpoint)==1);
+        assert(out_n==0);
+        requested[3]=0x80; /* malformed, noncanonical component */
+        assert(!endpoint_parse(client_present_ssl,MTC_EXT,
+                               SSL_EXT_TLS1_3_CERTIFICATE_REQUEST,
+                               requested,requested_n,NULL,0,&alert,
+                               &client_endpoint));
+        SSL_free(client_present_ssl);
+    }
+    {
+        const unsigned char large_id[]={
+            0x82,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x00
+        };
+        size_t list_n=2;
+        available[list_n++]=(unsigned char)sizeof(large_id);
+        memcpy(available+list_n,large_id,sizeof(large_id));
+        list_n+=sizeof(large_id);
+        put(available,list_n-2,2);
+        group_client_state->available=0;
+        assert(parse_one(group_client_ssl,MTC_EXT,
+                         SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,
+                         available,list_n,NULL,0,&alert,&group_client));
+        assert(!group_client_state->available);
+        available[list_n++]=(unsigned char)group_client.n;
+        memcpy(available+list_n,group_client.id,group_client.n);
+        list_n+=group_client.n;
+        put(available,list_n-2,2);
+        assert(parse_one(group_client_ssl,MTC_EXT,
+                         SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,
+                         available,list_n,NULL,0,&alert,&group_client));
+        assert(group_client_state->available);
+    }
     group_client_state->available=0;
     available_n=id_list(available,"32473.101.1.2.2");
     assert(parse_one(group_client_ssl,MTC_EXT,
@@ -271,6 +419,42 @@ int main(int argc,char **argv) {
     assert(retry_parse(cl,MTC_EXT,SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,r->base.list,r->base.n+3,NULL,0,&alert,c));
     assert(retry_parse(cl,MTC_EXT,SSL_EXT_TLS1_3_CERTIFICATE,(const unsigned char *)"",0,NULL,0,&alert,c));
     assert(retry_state(cl)->available&&retry_state(cl)->confirmed);
+    /* A second, untrusted available ID may precede the authenticated one. */
+    unsigned char multi_available[83],other_id[32];size_t other_n,pos=2;
+    assert(id_encode("32473.102.1.1.1",other_id,&other_n));
+    multi_available[pos++]=(unsigned char)other_n;
+    memcpy(multi_available+pos,other_id,other_n);pos+=other_n;
+    multi_available[pos++]=(unsigned char)c->base.n;
+    memcpy(multi_available+pos,c->base.id,c->base.n);pos+=c->base.n;
+    put(multi_available,pos-2,2);
+    retry_state(cl)->available=0;
+    assert(retry_parse(cl,MTC_EXT,SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,
+                       multi_available,pos,NULL,0,&alert,c));
+    assert(retry_state(cl)->available);
+    {
+        const unsigned char large_id[]={
+            0x82,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x80,0x00
+        };
+        size_t list_n=2;
+        multi_available[list_n++]=(unsigned char)sizeof(large_id);
+        memcpy(multi_available+list_n,large_id,sizeof(large_id));
+        list_n+=sizeof(large_id);
+        multi_available[list_n++]=(unsigned char)c->base.n;
+        memcpy(multi_available+list_n,c->base.id,c->base.n);
+        list_n+=c->base.n;
+        put(multi_available,list_n-2,2);
+        retry_state(cl)->available=0;
+        assert(retry_parse(cl,MTC_EXT,SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,
+                           multi_available,list_n,NULL,0,&alert,c));
+        assert(retry_state(cl)->available);
+    }
+    retry_state(cl)->available=0;
+    multi_available[2]=(unsigned char)other_n;
+    memcpy(multi_available+3,other_id,other_n);
+    put(multi_available,other_n+1,2);
+    assert(!retry_parse(cl,MTC_EXT,SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS,
+                        multi_available,other_n+3,NULL,0,&alert,c));
+    assert(alert==SSL_AD_UNKNOWN_CA&&!retry_state(cl)->available);
     /* Invoke the unchanged authentication callback with real leaf constraints. */
     X509_STORE *store=X509_STORE_new();X509_STORE_CTX *check=X509_STORE_CTX_new();
     assert(store&&check&&X509_STORE_CTX_init(check,store,cert,NULL));
@@ -281,8 +465,8 @@ int main(int argc,char **argv) {
     assert(verify(check,&c->base));
     X509_STORE_CTX_free(check);X509_STORE_free(store);
     /* CASE D: malformed/canonicality/duplicate handling. */
-    const unsigned char malformed[][8]={{0,1},{0,1,0},{0,3,2,0x80,1},{0,2,1,0x81},{0,4,1,1,1,1}};
-    const size_t lengths[]={2,3,5,4,6};
+    const unsigned char malformed[][8]={{0,1},{0,1,0},{0,3,2,0x80,1},{0,2,1,0x81},{0,3,1,1,0}};
+    const size_t lengths[]={2,3,5,4,5};
     for(size_t i=0;i<5;i++){
         assert(!retry_parse(s,MTC_EXT,SSL_EXT_CLIENT_HELLO,malformed[i],lengths[i],NULL,0,&alert,r));
         assert(alert==SSL_AD_DECODE_ERROR);

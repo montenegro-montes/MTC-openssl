@@ -9,8 +9,10 @@ A, B, C = '32473.9.1.1.1', '32473.101.1.1.1', '32473.102.1.1.1'
 
 
 def completed(requested, supported=B, reason='trust_anchor_mismatch', ok=False, number=1, raw=None):
-    ident = retry.encode_id(supported)
-    wire = (len(ident)+1).to_bytes(2, 'big') + bytes([len(ident)]) + ident
+    supported = [supported] if isinstance(supported, str) else supported
+    body = b''.join(bytes([len(ident)]) + ident
+                    for ident in map(retry.encode_id, supported))
+    wire = len(body).to_bytes(2, 'big') + body
     native = dict(result='PASS' if ok else 'FAIL', connection_id=f'{number:064x}',
                   session_reused=False, tls_version='TLSv1.3', cipher='TLS_AES_256_GCM_SHA384', negotiated_group=1034)
     stdout = 'MTC_RETRY_RESULT ' + json.dumps(native) + '\n'
@@ -97,6 +99,13 @@ class RetryTests(unittest.TestCase):
         self.assertAlmostEqual(r['retry_total_tls_attempt_wall_ms'], 1.8)
         self.assertAlmostEqual(r['retry_total_attempt_wall_ms_native'], 2.2)
 
+    def test_retry_with_ordered_available_ids(self):
+        r, requests = self.execute(A, [
+            completed(A, supported=[C, B]),
+            completed(B, supported=[C, B], reason='compatible', ok=True, number=2)])
+        self.assertEqual((r['final_result'], requests), ('PASS', [A, B]))
+        self.assertEqual(r['server_supported_ids'], [C, B])
+
     def test_C_no_local_common(self):
         r, requests = self.execute(A, [completed(A, supported=C)])
         self.assertEqual((r['final_result'], r['retry_count'], requests), ('FAIL', 0, [A]))
@@ -114,6 +123,47 @@ class RetryTests(unittest.TestCase):
         wire = (2*len(body)).to_bytes(2, 'big') + body*2
         with self.assertRaises(ValueError):
             retry.available_ids(wire.hex())
+
+    def test_available_ids_preserve_server_preference(self):
+        entries = [retry.encode_id(B), retry.encode_id(A)]
+        body = b''.join(bytes([len(ident)]) + ident for ident in entries)
+        wire = len(body).to_bytes(2, 'big') + body
+        self.assertEqual(retry.available_ids(wire.hex()), [B, A])
+        single = bytes([len(entries[0])]) + entries[0]
+        self.assertEqual(retry.available_ids(
+            (len(single).to_bytes(2, 'big') + single).hex()), [B])
+
+    def test_available_ids_discard_large_component_without_losing_known_id(self):
+        large = bytes([0x82] + [0x80] * 8 + [0x00])  # canonical 2^64
+        known = retry.encode_id(B)
+
+        def available(*identifiers):
+            body = b''.join(bytes([len(ident)]) + ident for ident in identifiers)
+            return (len(body).to_bytes(2, 'big') + body).hex()
+
+        self.assertEqual(retry.available_ids(available(large, known)), [B])
+        self.assertEqual(retry.available_ids(available(known, large)), [B])
+        self.assertEqual(retry.available_ids(available(large)), [])
+        with self.assertRaises(ValueError):
+            retry.available_ids(available(large, large))
+        with self.assertRaises(ValueError):
+            retry.available_ids(available(b'\x80\x00', known))
+
+        first = completed(A, raw=available(large, known))
+        second = completed(B, raw=available(large, known),
+                           reason='compatible', ok=True, number=2)
+        report, requests = self.execute(A, [first, second])
+        self.assertEqual((report['final_result'], requests), ('PASS', [A, B]))
+        self.assertEqual(report['server_supported_ids'], [B])
+
+    def test_available_ids_reject_oversize_and_truncation(self):
+        oversize = bytes([33]) + b'\0' * 33
+        truncated = bytes([2, 1])
+        for body in (oversize, truncated):
+            with self.subTest(body=body):
+                wire = len(body).to_bytes(2, 'big') + body
+                with self.assertRaises(ValueError):
+                    retry.available_ids(wire.hex())
 
     def test_E_second_incompatible(self):
         r, requests = self.execute(A, [completed(A), completed(B, supported=C, number=2)])
@@ -157,9 +207,11 @@ class RetryTests(unittest.TestCase):
         for ident in ('', '01', '1.', '-1', str(1 << 64), '１'):
             with self.assertRaises(ValueError):
                 retry.encode_id(ident)
-        for raw in (b'\x81', b'\x80\x01', b'\xff'*10+b'\x7f', b'\0'*81):
+        for raw in (b'\x81', b'\x80\x01', b'\xff'*10+b'\x7f', b'\0'*33):
             with self.assertRaises(ValueError):
                 retry.decode_id(raw)
+        with self.assertRaises(ValueError):
+            retry.encode_id('.'.join(['1'] * 33))
 
 
 if __name__ == '__main__':

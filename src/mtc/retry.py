@@ -1,4 +1,4 @@
-"""Bounded external trust-anchor retry, TAI-04 section 4.3.
+"""Bounded external trust-anchor retry, trust-anchor-ids-06 Section 5.6 subset.
 
 No TLS state is held here. Each subprocess owns exactly one native connection.
 Server indications are untrusted discovery input, never new trust material.
@@ -14,7 +14,7 @@ import uuid
 from trust_anchor_ids import decode_identifier, encode_identifier
 
 MAX_RETRIES = 1
-MAX_ID_BYTES = 80
+MAX_ID_BYTES = 32
 MAX_UINT64 = (1 << 64) - 1
 MAX_MTC_LANDMARK = (1 << 48) - 1
 
@@ -44,15 +44,46 @@ def is_individual_landmark_id(ident):
             and 0 < parts[-1] <= MAX_MTC_LANDMARK)
 
 
+def wire_id_valid(raw):
+    """Check canonical relative-OID bytes without decoding large components."""
+    if not 1 <= len(raw) <= MAX_ID_BYTES:
+        return False
+    first = True
+    for byte in raw:
+        if first and byte == 0x80:
+            return False
+        first = not bool(byte & 0x80)
+    return first
+
+
 def available_ids(hex_data):
-    if not isinstance(hex_data, str) or len(hex_data) > 2 * 83:
-        raise ValueError('available list exceeds singleton bound')
+    if not isinstance(hex_data, str) or len(hex_data) > 2 * (65535 + 2):
+        raise ValueError('available list exceeds TLS vector bound')
     raw = bytes.fromhex(hex_data)
     if len(raw) < 4 or int.from_bytes(raw[:2], 'big') != len(raw) - 2:
         raise ValueError('invalid list length')
-    if raw[2] != len(raw) - 3:
-        raise ValueError('expected exactly one nonempty ID')
-    return [decode_id(raw[3:])]
+    ids = []
+    seen = set()
+    pos = 2
+    while pos < len(raw):
+        size = raw[pos]
+        pos += 1
+        if not 1 <= size <= 32 or pos + size > len(raw):
+            raise ValueError('invalid available ID length')
+        encoded = raw[pos:pos + size]
+        if not wire_id_valid(encoded):
+            raise ValueError('invalid available ID encoding')
+        if encoded in seen:
+            raise ValueError('duplicate available ID')
+        seen.add(encoded)
+        try:
+            ids.append(decode_id(encoded))
+        except ValueError:
+            # The native TLS parser accepts the ID; local text config cannot
+            # represent it. Keep later, supported IDs in server order.
+            pass
+        pos += size
+    return ids
 
 
 def events(log, prefix):
@@ -149,7 +180,7 @@ def transaction(initial_id, trusted_id, attempt):
             report['attempt_2_result'] = 'FAIL'
             break
         if record['result'] == 'PASS':
-            if record['server_supported_ids'] != [trusted_id]:
+            if trusted_id not in record['server_supported_ids']:
                 record.update(result='FAIL', reason='unexpected_authenticated_anchor')
                 report[f'attempt_{index + 1}_result'] = 'FAIL'
                 break

@@ -1,4 +1,4 @@
-/* Opt-in TAI-04 retry subset. Reuse the unchanged baseline verifier/policy. */
+/* Opt-in trust-anchor-ids-06 retry subset. Reuse the baseline verifier/policy. */
 #include "tls.c"
 typedef struct {
     TLSConfig base;
@@ -26,7 +26,7 @@ static TLSState *retry_state(SSL *ssl){
 
 static int retry_id_valid(Slice id) {
     size_t pos=0,used;uint64_t value;
-    if (!id.n || id.n>80) return 0; /* local bounded-ID restriction */
+    if (!id.n || id.n>32) return 0; /* trust-anchor-ids-06 Section 4 */
     while(pos<id.n){
         if(!oid_uint64_component(id.p+pos,id.n-pos,&used,&value))return 0;
         pos+=used;
@@ -66,26 +66,36 @@ static int retry_parse(SSL *ssl,unsigned type,unsigned context,const unsigned ch
         retry_hex(stderr,c->id,c->n);fputs("\"}\n",stderr);
         return 1;
     }
-    /* This experiment has exactly one candidate/request. No duplicate or
-       ambiguous selection is accepted, and every ID is canonical. */
-    if(!vector(&list,1,&id)||list.n||!retry_id_valid(id))goto malformed;
     if(context==SSL_EXT_CLIENT_HELLO){
-        match=(id.n==c->n&&!memcmp(id.p,c->id,c->n))
-              || mtc_group_match(c,id.p,id.n);
+        /* RequestedTrustAnchorList is unordered and may name several IDs.
+           The retry controller still sends one ID per connection. */
+        while(list.n){
+            if(!vector(&list,1,&id)||!wire_id_valid(id))goto malformed;
+            if(!retry_id_valid(id))continue;
+            if((id.n==c->n&&!memcmp(id.p,c->id,c->n))
+               || mtc_group_match(c,id.p,id.n))match=1;
+        }
         s->matched=match;
         fprintf(stderr,"MTC_RETRY_SERVER {\"request_satisfied\":%s,\"supported_id_hex\":\"",match?"true":"false");
         retry_hex(stderr,c->id,c->n);fputs("\"}\n",stderr);
         return 1; /* native TLS proceeds to EE and its fallback certificate */
     }
-    match=id.n==r->requested_len && !memcmp(id.p,r->requested,id.n);
-    if(!match && c->has_group && r->requested_len==c->n
-       && !memcmp(r->requested,c->group,c->n)
-       && id.n==c->n && !memcmp(id.p,c->id,c->n))match=1;
+    if(context!=SSL_EXT_TLS1_3_ENCRYPTED_EXTENSIONS)goto malformed;
+    /* EE may list several individual anchors. Only the authenticated local
+       anchor can make this attempt compatible with the requested ID. */
+    while(list.n){
+        if(!vector(&list,1,&id)||!wire_id_valid(id))goto malformed;
+        if(!retry_id_valid(id))continue;
+        if(id.n==c->n&&!memcmp(id.p,c->id,c->n)
+           &&((id.n==r->requested_len
+                &&!memcmp(id.p,r->requested,id.n))
+              ||(c->has_group && r->requested_len==c->group_n
+                 &&!memcmp(r->requested,c->group,c->group_n))))
+            match=1;
+    }
     fputs("MTC_RETRY_EE {\"available_list_hex\":\"",stderr);retry_hex(stderr,in,n);
     fprintf(stderr,"\",\"reason\":\"%s\"}\n",match?"compatible":"trust_anchor_mismatch");
     if(!match){*alert=SSL_AD_UNKNOWN_CA;return 0;}
-    /* Even a requested ID must belong to the loaded, authenticated trust state. */
-    if(id.n!=c->n || memcmp(id.p,c->id,c->n)){*alert=SSL_AD_UNKNOWN_CA;return 0;}
     s->available=1;return 1;
 malformed:
     fputs("MTC_RETRY_ERROR {\"reason\":\"malformed_trust_anchor_list\"}\n",stderr);
@@ -146,7 +156,9 @@ static int retry_configure(SSL_CTX *ctx,const char *trust_path,int landmark,
     c->trust=landmark?mtc_load_trust_config_v2(trust_path)
                      :mtc_load_authority_config_v2(trust_path);
     if(!c->trust)goto bad;
-    c->n=c->trust->signal_len;memcpy(c->id,c->trust->signal,c->n);
+    c->n=c->trust->signal_len;
+    if(!retry_id_valid((Slice){c->trust->signal,c->n}))goto bad;
+    memcpy(c->id,c->trust->signal,c->n);
     c->has_group=c->trust->landmark&&initial_group(c);
     c->group_n=c->has_group?c->n:0;
     c->role=credential!=NULL
@@ -160,7 +172,8 @@ static int retry_configure(SSL_CTX *ctx,const char *trust_path,int landmark,
            ||X509_check_purpose(credential,X509_PURPOSE_SSL_SERVER,0)!=1
            ||X509_cmp_current_time(X509_get0_notBefore(credential))>=0
            ||X509_cmp_current_time(X509_get0_notAfter(credential))<=0)goto bad;
-    }else if(!requested||!id_encode(requested,r->requested,&r->requested_len))goto bad;
+    }else if(!requested||!id_encode(requested,r->requested,&r->requested_len)
+             ||!retry_id_valid((Slice){r->requested,r->requested_len}))goto bad;
     /* Once attached, SSL_CTX owns r even if a later install operation fails. */
     if(!retry_install(ctx,r)) {
         if(retry_ci<0||SSL_CTX_get_ex_data(ctx,retry_ci)!=r)goto bad;
