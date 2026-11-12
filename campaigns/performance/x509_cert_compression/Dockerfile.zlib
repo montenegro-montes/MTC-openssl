@@ -1,0 +1,11 @@
+FROM mt-tls-mtc:local
+
+RUN apt-get update && apt-get install -y --no-install-recommends zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && cd /opt/src/openssl-mtc \
+    && ./Configure --prefix=/opt/openssl --libdir=lib shared enable-zlib \
+    && make clean \
+    && make -j2 \
+    && cp apps/openssl /opt/openssl-mtc/bin/openssl \
+    && cp -a libcrypto.so* libssl.so* /opt/openssl-mtc/lib/ \
+    && /opt/mtc/openssl.sh version
