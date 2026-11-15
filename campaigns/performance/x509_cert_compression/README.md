@@ -55,3 +55,30 @@ interval. `tls_bytes_read` is the server-to-client OpenSSL handshake byte
 count, and `tls_bytes_total` adds both directions. These are handshake bytes,
 not certificate file size or link-layer wire bytes. The raw logs under `logs/`
 are the evidence for whether compression was actually negotiated.
+
+## Locally available intermediate control
+
+The `--intermediate-elision` mode adds four arms: full/ordinary, full/zlib,
+elided/ordinary, and elided/zlib. The server sends the same leaf and optional
+intermediate from an existing D=3 fixture. The client uses `-verifyCAfile`
+with the root alone and the experiment-specific `-verify_untrusted` option
+with the intermediate only in the elided arms. The latter adds an untrusted
+issuer to the peer verification context; it does not add a trust anchor.
+The callback requires a validated three-certificate chain with the exact
+intermediate. The one-sample pilot prints all three verified DER SHA-256
+hashes; every sample parses the TLS `Certificate` or `CompressedCertificate`
+trace and checks the sent leaf/intermediate hashes and count. A zlib offer may
+still result in an ordinary `Certificate` for the elided leaf, which the CSV
+records as the actual message and algorithm.
+
+Rebuild `mt-tls-mtc-cert-comp-pq:local` from the existing
+`mt-tls-mtc-cert-comp:local` image before using this mode. Run a new pilot
+with `--warmups 0 --runs 1 --execute` for each profile and a fresh output
+directory. A full campaign requires that pilot's `summary.json` via
+`--pilot-summary`; the runner checks the image ID, fixture certificate
+hashes, profile, hostname and the full-chain byte reference before starting.
+The P-384 one-sample reference permits the observed one-byte ECDSA DER
+signature length variation. Use `--warmups 5 --runs 100` for the full campaign.
+The report script compares archived Landmark measurements only after checking
+the group, depth, fixture binding and directional X.509 byte counters. Its
+Landmark timing comes from another measurement block.

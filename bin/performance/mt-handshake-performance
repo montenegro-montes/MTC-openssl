@@ -14,6 +14,15 @@ SERVER=mt-handshake-performance-server
 DEFAULT_CONFIG="$REPO/.mt-state/handshake-performance.env"
 ACTIVE_CONFIG_FILE=${MT_HANDSHAKE_ACTIVE_CONFIG:-"$REPO/.mt-state/handshake-performance.active"}
 PROFILES=(ecdsa-p256 ecdsa-p384 ecdsa-p521 mldsa44 mldsa65 mldsa87 slhdsa128s slhdsa192s slhdsa256s)
+if [[ -n "${MT_HANDSHAKE_PROFILES:-}" ]]; then
+  IFS=, read -r -a selected_profiles <<< "$MT_HANDSHAKE_PROFILES"
+  [[ ${#selected_profiles[@]} -gt 0 ]] || { echo 'ERROR: MT_HANDSHAKE_PROFILES is empty.' >&2; exit 1; }
+  for selected_profile in "${selected_profiles[@]}"; do
+    [[ " ${PROFILES[*]} " == *" $selected_profile "* ]] \
+      || { echo "ERROR: Unknown profile in MT_HANDSHAKE_PROFILES: $selected_profile" >&2; exit 1; }
+  done
+  PROFILES=("${selected_profiles[@]}")
+fi
 CASES=(x509-simple mtc-simple-landmark mtc-simple-standalone x509-mutual mtc-mutual-landmark mtc-mutual-standalone)
 SINGLE_CASES=(x509-simple mtc-simple-landmark mtc-simple-standalone)
 MUTUAL_CASES=(x509-mutual mtc-mutual-landmark mtc-mutual-standalone)
@@ -785,9 +794,12 @@ start_server() {
 }
 
 client_command() {
+  local -a extra_client_args=()
+  [[ "${MT_HANDSHAKE_TRACE_MESSAGES:-0}" == 1 ]] && extra_client_args+=(-msg)
+  [[ "${MT_HANDSHAKE_NO_RX_CERT_COMP:-0}" == 1 ]] && extra_client_args+=(-no_rx_cert_comp)
   docker run --rm -i --network "$NETWORK" -v "$REPO/artifacts:/work:ro" \
     --entrypoint /opt/mtc/openssl.sh "$IMAGE" s_client -connect "$SERVER:4433" -servername server \
-    "${client_args[@]}" "${common[@]}" -no_ticket -verify_return_error -lab_metrics "$@"
+    "${client_args[@]}" "${common[@]}" -no_ticket -verify_return_error -lab_metrics "${extra_client_args[@]}" "$@"
 }
 
 prepare_run() {
@@ -815,7 +827,7 @@ measure_native() {
   local -a native_metrics
   total_count=$(( ${#PROFILES[@]} * ${#ACTIVE_CASES[@]} * (WARMUPS + RUNS) )); started=$(date +%s)
   printf 'profile,case,key_establishment,openssl_group,phase,repetition,tcp_connect_wall_ms_native,handshake_wall_ms,connection_establishment_wall_ms_native,x509_verification_ms,mtc_credential_auth_ms,merkle_proof_ms,landmark_validation_ms,standalone_validation_ms,certificate_verify_ms,credential_verification_total_ms,client_authentication_verification_total_ms,credential_verification_other_ms,process_wall_ms,tls_bytes_read,tls_bytes_written,tls_bytes_total,timing_schema_version,credential_type,mtc_total_ns,merkle_leaf_hash_ns,merkle_path_ns,merkle_total_ns,landmark_trust_ns,x509_signatures_ns,x509_signature_count,x509_signatures_scope,x509_signature_cache_ns,x509_signature_cache_hits,x509_signature_cache_misses,standalone_signatures_ns,standalone_signature_count,standalone_signature_cache_ns,standalone_signature_cache_hits,standalone_signature_cache_misses,certificate_verify_crypto_ns,credential_validation_total_ns,handshake_total_ns,mtc_verification_mode,mtc_success\n' > "$output/native.csv"
-  printf '\nNATIVE MEASUREMENTS — 9 profiles × %d authentication cases\n' "${#ACTIVE_CASES[@]}"
+  printf '\nNATIVE MEASUREMENTS — %d profiles × %d authentication cases\n' "${#PROFILES[@]}" "${#ACTIVE_CASES[@]}"
   for profile in "${PROFILES[@]}"; do
    for case_name in "${ACTIVE_CASES[@]}"; do
     printf '\n[NATIVE] profile=%s case=%s: starting server\n' "$profile" "$case_name"

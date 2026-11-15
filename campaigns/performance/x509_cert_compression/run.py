@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import statistics
 import subprocess
+import sys
 import time
 import uuid
 
@@ -74,7 +75,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--x509-fixture", type=Path, required=True,
                         help="Existing D=3 chain below artifacts")
-    parser.add_argument("--profile", choices=("mldsa65", "slhdsa192s"), required=True)
+    parser.add_argument("--profile", choices=("ecdsa-p384", "mldsa65", "slhdsa192s"), required=True)
     parser.add_argument("--hostname", required=True)
     parser.add_argument("--output", type=Path, required=True,
                         help="New directory below artifacts/results")
@@ -199,6 +200,10 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        if "--intermediate-elision" in sys.argv:
+            from intermediate_elision import main as elision_main
+            elision_main()
+        else:
+            main()
     except (RuntimeError, subprocess.TimeoutExpired) as error:
         raise SystemExit(f"ERROR: {error}") from None
