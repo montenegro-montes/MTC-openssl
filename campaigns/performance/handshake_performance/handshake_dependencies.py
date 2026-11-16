@@ -21,11 +21,13 @@ def requirements(profiles, depths, mutual):
             for profile in profiles]
 
 
-def check_cell(directory, profile, depth, role):
+def check_cell(directory, profile, depth, role, hostname='server'):
     validate_fixture(directory, profile, depth)
     meta = json.loads((directory / 'manifest.json').read_text())
     if meta.get('role', 'server') != role:
         raise ValueError('certificate role mismatch')
+    if role == 'server' and meta.get('server_hostname', 'server') != hostname:
+        raise ValueError('server hostname mismatch')
     names = ['root.pem', 'server.pem', 'server.key', 'intermediates.pem', 'server-chain.pem']
     if not all(name in meta['files_sha256'] for name in names):
         raise ValueError('incomplete fixture hashes')
@@ -39,7 +41,7 @@ def check_cell(directory, profile, depth, role):
         raise ValueError('invalid depth/transmitted chain')
 
 
-def resolve(profiles, depths, mutual, preferred=None, execute=False, image='mt-tls-mtc:local'):
+def resolve(profiles, depths, mutual, preferred=None, execute=False, image='mt-tls-mtc:local', hostname='server'):
     bindings = []
     # Search manifests only; never repair, overwrite or trust partial outputs.
     candidates = sorted((REPO / 'artifacts').glob('**/depth-*/manifest.json'), reverse=True)
@@ -52,7 +54,7 @@ def resolve(profiles, depths, mutual, preferred=None, execute=False, image='mt-t
             try:
                 if not directory.resolve().is_relative_to((REPO / 'artifacts').resolve()):
                     raise ValueError('chain escapes artifacts')
-                check_cell(directory, profile, depth, role)
+                check_cell(directory, profile, depth, role, hostname)
             except (OSError, ValueError, KeyError, TypeError):
                 continue
             selected = directory
@@ -65,6 +67,8 @@ def resolve(profiles, depths, mutual, preferred=None, execute=False, image='mt-t
             stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
             root = REPO / f'artifacts/fixtures/handshake-chain-{role}-{stamp}'
             selection = ['--profile', profile, '--depth', str(depth), '--role', role, '--image', image]
+            if role == 'server':
+                selection += ['--server-hostname', hostname]
             print(f'  {label}: PREPARING', file=sys.stderr, flush=True)
             subprocess.run([sys.executable, str(CHAIN / 'generate_fixtures.py'), '--output', str(root), *selection],
                            check=True, stdout=sys.stderr)
@@ -75,7 +79,7 @@ def resolve(profiles, depths, mutual, preferred=None, execute=False, image='mt-t
             if json.loads(report.read_text()).get('passed') is not True:
                 raise ValueError(f'{label}: validation did not PASS')
             selected = root / profile / f'depth-{depth}'
-            check_cell(selected, profile, depth, role)
+            check_cell(selected, profile, depth, role, hostname)
             print(f'  {label}: PASS', file=sys.stderr, flush=True)
         if selected:
             bindings.append(f'{profile}|{depth}|{role}|{selected.relative_to(REPO)}')
@@ -90,10 +94,11 @@ def main():
     p.add_argument('--preferred', type=Path)
     p.add_argument('--execute', action='store_true')
     p.add_argument('--image', default='mt-tls-mtc:local')
+    p.add_argument('--server-hostname', default='server')
     args = p.parse_args()
     try:
         preferred = (REPO / args.preferred) if args.preferred else None
-        print('\n'.join(resolve(args.profile, args.depth, args.mutual, preferred, args.execute, args.image)))
+        print('\n'.join(resolve(args.profile, args.depth, args.mutual, preferred, args.execute, args.image, args.server_hostname)))
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         p.exit(1, f'ERROR: dependency preparation failed: {error}. No measurements started.\n')
 

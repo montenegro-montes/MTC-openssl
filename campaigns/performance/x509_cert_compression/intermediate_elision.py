@@ -183,13 +183,30 @@ def percentile95(values):
     return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
 
 
-def reference_status(profile, observed):
-    expected = REFERENCES[profile]
-    if observed == expected:
+def reference_status(profile, observed_read, observed_written, expected_read, expected_written):
+    if observed_read == expected_read and observed_written == expected_written:
         return "exact"
-    if profile == "ecdsa-p384" and 4125 <= observed <= 4127:
+    if profile == "ecdsa-p384" and observed_written == expected_written \
+            and abs(observed_read - expected_read) <= 2:
         return "ECDSA DER signature length variation; verify the trace and direction counts"
     return "mismatch"
+
+
+def native_reference(path, profile, hostname, fixture, repo):
+    native = list(csv.DictReader(path.open()))
+    rows = [row for row in native if row["profile"] == profile
+            and row["case"] == "x509-simple-d3" and row["phase"] == "measured"]
+    if len(rows) != 1:
+        raise RuntimeError("Reference native pilot must contain one measured D=3 X.509 row")
+    summary = json.loads((path.parent / "summary.json").read_text())
+    bindings = summary["x509_trust_path"]["fixtures"]["bindings"]
+    if summary.get("server_hostname", "server") != hostname \
+            or summary["key_establishment"]["openssl_group"] != "X25519MLKEM768" \
+            or summary["x509_trust_path"]["depth_including_root"] != 3 \
+            or not any(item["profile"] == profile and item["role"] == "server"
+                       and item["path"] == str(fixture.relative_to(repo)) for item in bindings):
+        raise RuntimeError("Native pilot hostname, group or X.509 fixture differs")
+    return int(rows[0]["tls_bytes_read"]), int(rows[0]["tls_bytes_written"])
 
 
 def main():
@@ -203,6 +220,8 @@ def main():
     parser.add_argument("--warmups", type=int, default=5)
     parser.add_argument("--runs", type=int, default=100)
     parser.add_argument("--pilot-summary", type=Path)
+    parser.add_argument("--reference-native-csv", type=Path,
+                        help="One-measurement native D=3 pilot for this hostname and fixture")
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[3]
@@ -215,12 +234,16 @@ def main():
         parser.error("Invalid warmup or measurement count")
     if args.runs > 1 and args.pilot_summary is None:
         parser.error("Full campaign requires --pilot-summary from a passing one-sample pilot")
+    if args.hostname != "server" and args.runs == 1 and args.reference_native_csv is None:
+        parser.error("Alternate hostname pilot requires --reference-native-csv")
     for name in ("server.pem", "server.key", "intermediates.pem", "root.pem", "manifest.json"):
         if not (fixture / name).is_file():
             parser.error(f"Missing fixture: {fixture / name}")
     manifest = json.loads((fixture / "manifest.json").read_text())
     if manifest.get("profile") != args.profile or manifest.get("depth", manifest.get("depth_including_root")) != 3:
         parser.error("Fixture profile or D=3 mismatch")
+    if manifest.get("server_hostname", "server") != args.hostname:
+        parser.error("Fixture hostname differs from --hostname")
     ders = {"leaf": cert_der(fixture / "server.pem"),
             "intermediate": cert_der(fixture / "intermediates.pem"),
             "root": cert_der(fixture / "root.pem")}
@@ -229,8 +252,26 @@ def main():
         print(f"PLAN: {args.profile}, four arms, X25519MLKEM768, SNI {args.hostname}, "
               f"{args.warmups} warmups + {args.runs} measurements per arm")
         return
+    reference_source = None
+    if args.pilot_summary:
+        reference = json.loads(args.pilot_summary.read_text())
+        expected_read = reference.get("reference_tls_bytes_read")
+        expected_written = reference.get("reference_tls_bytes_written")
+        if args.hostname != "server" and (expected_read is None or expected_written is None):
+            raise RuntimeError("Alternate-hostname pilot lacks a directional native reference")
+        reference_source = reference.get("reference_source")
+    elif args.reference_native_csv:
+        expected_read, expected_written = native_reference(
+            args.reference_native_csv.resolve(), args.profile, args.hostname, fixture, repo)
+        reference_source = str(args.reference_native_csv)
+    else:
+        expected_read, expected_written = None, None
     checked(command("docker", "info", "--format", "{{.ServerVersion}}"), "Docker daemon")
     image = json.loads(checked(command("docker", "image", "inspect", args.image), "Docker image").stdout)[0]
+    if args.reference_native_csv:
+        native_summary = json.loads((args.reference_native_csv.resolve().parent / "summary.json").read_text())
+        if native_summary.get("image_id") != image["Id"]:
+            raise RuntimeError("Native pilot and compression pilot use different image IDs")
     client_help = checked(command("docker", "run", "--rm", "--network", "none",
                                   "--entrypoint", "/opt/mtc/openssl.sh", args.image,
                                   "s_client", "-help"), "Client help").stderr
@@ -261,6 +302,7 @@ def main():
             "tls_version": "TLS1.3", "x509_depth": 3,
             "fixture": str(fixture.relative_to(repo)), "certificate_sha256": cert_hashes,
             "trust_anchor": "root.pem only", "auxiliary_untrusted": "intermediates.pem",
+            "reference_source": reference_source,
             "warmups": args.warmups, "measured": args.runs,
             "conditions": ARMS}, indent=2) + "\n")
         rows = []
@@ -307,7 +349,7 @@ def main():
                     for arm in ARMS}
         summary = {"profile": args.profile, "hostname": args.hostname,
                    "image_id": image["Id"], "certificate_sha256": cert_hashes,
-                   "reference_total_bytes": REFERENCES[args.profile], "arms": {}}
+                   "reference_source": reference_source, "arms": {}}
         for arm, selected in measured.items():
             summary["arms"][arm] = {
                 "n": len(selected),
@@ -318,16 +360,31 @@ def main():
                 "handshake_wall_ms_p95": percentile95([r["handshake_wall_ms"] for r in selected]),
                 "sent_messages": sorted({r["sent_message"] for r in selected}),
             }
+        baseline_read = summary["arms"]["full-ordinary"]["tls_bytes_read_median"]
+        baseline_written = summary["arms"]["full-ordinary"]["tls_bytes_written_median"]
         baseline = summary["arms"]["full-ordinary"]["tls_bytes_total_median"]
+        if expected_read is None:
+            expected_read, expected_written = baseline_read, baseline_written
+            expected_total = REFERENCES[args.profile]
+            status = ("exact" if baseline == expected_total else
+                      "ECDSA DER signature length variation; verify the trace and direction counts"
+                      if args.profile == "ecdsa-p384" and 4125 <= baseline <= 4127 else "mismatch")
+        else:
+            expected_total = expected_read + expected_written
+            status = reference_status(args.profile, baseline_read, baseline_written,
+                                      expected_read, expected_written)
+        summary["reference_tls_bytes_read"] = expected_read
+        summary["reference_tls_bytes_written"] = expected_written
+        summary["reference_total_bytes"] = expected_total
         elided = summary["arms"]["elided-ordinary"]["tls_bytes_total_median"]
         summary["intermediate_elision_savings_pct"] = 100 * (baseline - elided) / baseline
-        summary["reference_status"] = reference_status(args.profile, baseline)
+        summary["reference_status"] = status
         summary["pilot_pass"] = (args.runs == 1 and summary["reference_status"] != "mismatch"
                                  and all(len(selected) == 1 for selected in measured.values()))
         summary["reference_match"] = summary["reference_status"] != "mismatch"
         (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         if not summary["reference_match"]:
-            raise RuntimeError(f"Full-chain reference mismatch: observed {baseline}, expected {REFERENCES[args.profile]}; inspect traces before scaling or reporting")
+            raise RuntimeError(f"Full-chain reference mismatch: observed {baseline_read}/{baseline_written}, expected {expected_read}/{expected_written}; inspect traces before scaling or reporting")
     finally:
         command("docker", "rm", "-f", server)
         command("docker", "network", "rm", network)

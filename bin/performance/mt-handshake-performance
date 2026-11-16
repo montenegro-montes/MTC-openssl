@@ -5,6 +5,7 @@ REPO=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 SELF="$REPO/bin/performance/mt-handshake-performance"
 source "$REPO/bin/lib/docker-preflight.sh"
 IMAGE=${IMAGE:-mt-tls-mtc:local}
+SERVER_HOSTNAME=${SERVER_HOSTNAME:-server}
 CAPTURE_IMAGE=${CAPTURE_IMAGE:-mt-tls-capture:local}
 REPORTER="$REPO/bin/renders/handshake-performance.py"
 RETRY_REPORTER="$REPO/bin/renders/protocol-validation.py"
@@ -224,7 +225,8 @@ resolve_dependencies() {
     [[ -z "${X509_CHAIN_FIXTURES:-}" ]] || chain_args+=(--preferred "$X509_CHAIN_FIXTURES")
     [[ "$mode" != run ]] || chain_args+=(--execute)
     CHAIN_BINDINGS=$(python3 -B "$REPO/campaigns/performance/handshake_performance/handshake_dependencies.py" \
-      --profile "${PROFILES[@]}" --depth "${X509_DEPTHS[@]}" --image "$IMAGE" "${chain_args[@]}") \
+      --profile "${PROFILES[@]}" --depth "${X509_DEPTHS[@]}" --image "$IMAGE" \
+      --server-hostname "$SERVER_HOSTNAME" "${chain_args[@]}") \
       || fail 'Dependency preparation failed: X.509 chains. No measurements started.'
   fi
 }
@@ -273,8 +275,8 @@ validate_selected_dependencies() (
       done
     done
   done
-  printf '{"passed":true,"openssl_group":"%s","depths":"%s","cases":"%s","mtc_root":"%s","mutual_root":"%s"}\n' \
-    "$KEM_GROUP" "${X509_DEPTHS[*]}" "${ACTIVE_CASES[*]}" "$MTC_ROOT" "${MUTUAL_CLIENT_ROOT:-}" > "$output/validation.json"
+  printf '{"passed":true,"openssl_group":"%s","server_hostname":"%s","depths":"%s","cases":"%s","mtc_root":"%s","mutual_root":"%s"}\n' \
+    "$KEM_GROUP" "$SERVER_HOSTNAME" "${X509_DEPTHS[*]}" "${ACTIVE_CASES[*]}" "$MTC_ROOT" "${MUTUAL_CLIENT_ROOT:-}" > "$output/validation.json"
   printf '%s\n' "$CHAIN_BINDINGS" > "$output/chains.txt"
 )
 
@@ -293,6 +295,7 @@ KEM=x25519
 X509_DEPTH=2
 # Optional server-chain root override; empty discovers compatible existing cells.
 X509_CHAIN_FIXTURES=
+SERVER_HOSTNAME=server
 RUNS=30
 WARMUPS=5
 
@@ -335,6 +338,9 @@ load_config() {
     || fail 'RUNS/WARMUPS must be integers.'
 
   configure_kem "${KEM:-x25519}"
+  SERVER_HOSTNAME=${SERVER_HOSTNAME:-server}
+  [[ "$SERVER_HOSTNAME" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$ || "$SERVER_HOSTNAME" == server ]] \
+    || fail 'SERVER_HOSTNAME must be a DNS hostname.'
 }
 
 # Shared integrity gate for explicit overrides, discovered pairs and new outputs.
@@ -350,7 +356,7 @@ validate_mtc_inputs() (
   [[ -f "$REPO/$MTC_VALIDATION" ]] \
     || fail "Missing MTC functional validation: $MTC_VALIDATION"
 
-  python3 - "$REPO/$MTC_ROOT" "$REPO/$MTC_VALIDATION" <<'PYVALID'
+  python3 - "$REPO/$MTC_ROOT" "$REPO/$MTC_VALIDATION" "$SERVER_HOSTNAME" <<'PYVALID'
 import hashlib
 import json
 import sys
@@ -358,6 +364,7 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 validation_path = Path(sys.argv[2])
+hostname = sys.argv[3]
 
 with validation_path.open() as f:
     data = json.load(f)
@@ -367,6 +374,10 @@ if data.get("passed") is not True:
         "ERROR: MTC functional validation does not report passed=true: "
         + str(validation_path)
     )
+if data.get("server_hostname", "server") != hostname:
+    raise SystemExit("ERROR: MTC validation hostname differs from SERVER_HOSTNAME")
+if json.loads((root / "manifest.json").read_text()).get("server_hostname", "server") != hostname:
+    raise SystemExit("ERROR: MTC fixture hostname differs from SERVER_HOSTNAME")
 
 fixture_hashes = data.get("fixture_hashes")
 if not isinstance(fixture_hashes, dict) or not fixture_hashes:
@@ -514,10 +525,10 @@ PYPAIRS
   [[ ! -e "$REPO/$MTC_ROOT" && ! -e "$REPO/${MTC_VALIDATION%/*}" ]] \
     || fail 'New MTC dependency paths already exist; preserving them.'
   printf 'Preparing N=16/X25519 dependencies: %s\n' "$MTC_ROOT"
-  python3 "$workflow" generate --sizes 16 --image "$IMAGE" --output "$REPO/$MTC_ROOT" --execute \
+  python3 "$workflow" generate --sizes 16 --image "$IMAGE" --server-hostname "$SERVER_HOSTNAME" --output "$REPO/$MTC_ROOT" --execute \
     || fail "Unable to generate N=16/X25519 dependency: $MTC_ROOT. Partial outputs preserved; no measurements started."
   printf 'Validating N=16/X25519 dependencies...\n'
-  python3 "$workflow" validate --fixtures "$REPO/$MTC_ROOT" --image "$IMAGE" --output "$REPO/${MTC_VALIDATION%/*}" --execute \
+  python3 "$workflow" validate --fixtures "$REPO/$MTC_ROOT" --image "$IMAGE" --server-hostname "$SERVER_HOSTNAME" --output "$REPO/${MTC_VALIDATION%/*}" --execute \
     || fail "Functional validation failed for N=16/X25519: $MTC_VALIDATION. Outputs preserved; no measurements started."
   validate_mtc_inputs || fail 'Generated MTC dependencies failed the integrity/PASS gate; no measurements started.'
   printf 'Validation PASS\nMTC dependencies ready:\n  MTC_ROOT=%s\n  MTC_VALIDATION=%s\n' "$MTC_ROOT" "$MTC_VALIDATION"
@@ -723,21 +734,21 @@ case_args() {
   case "$case_name" in
     x509-simple)
       server_args=(-cert "$(inside "$population/0.pem")" -key "$(inside "$population/0.key")")
-      client_args=(-CAfile "$(inside "$population/ca.pem")" -verify_hostname server)
+      client_args=(-CAfile "$(inside "$population/ca.pem")" -verify_hostname "$SERVER_HOSTNAME")
       if [[ "${CURRENT_X509_DEPTH:-2}" != 2 ]]; then
         local chain
         chain=$(chain_path "$profile" "$CURRENT_X509_DEPTH" server)
         server_args=(-cert "$(inside "$chain/server.pem")" -key "$(inside "$chain/server.key")" -cert_chain "$(inside "$chain/intermediates.pem")")
-        client_args=(-CAfile "$(inside "$chain/root.pem")" -verify_hostname server)
+        client_args=(-CAfile "$(inside "$chain/root.pem")" -verify_hostname "$SERVER_HOSTNAME")
       fi
       ;;
     mtc-simple-landmark)
       server_args=(-cert "$(inside "$mtc/landmark-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id.1.1.1" -mtc_landmark)
-      client_args=(-mtc_trust "$(inside "$mtc/trust.bin")" -mtc_ca "$(inside "$mtc/mtc-ca.pem")" -mtc_ca_root "$(inside "$mtc/mtc-representation-root.pem")" -mtc_landmark)
+      client_args=(-mtc_trust "$(inside "$mtc/trust.bin")" -mtc_ca "$(inside "$mtc/mtc-ca.pem")" -mtc_ca_root "$(inside "$mtc/mtc-representation-root.pem")" -mtc_landmark -verify_hostname "$SERVER_HOSTNAME")
       ;;
     mtc-simple-standalone)
       server_args=(-cert "$(inside "$mtc/standalone-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id")
-      client_args=(-mtc_trust "$(inside "$mtc/authority.bin")" -mtc_ca "$(inside "$mtc/mtc-ca.pem")" -mtc_ca_root "$(inside "$mtc/mtc-representation-root.pem")")
+      client_args=(-mtc_trust "$(inside "$mtc/authority.bin")" -mtc_ca "$(inside "$mtc/mtc-ca.pem")" -mtc_ca_root "$(inside "$mtc/mtc-representation-root.pem")" -verify_hostname "$SERVER_HOSTNAME")
       ;;
     x509-mutual|mtc-mutual-landmark|mtc-mutual-standalone)
       [[ "${MUTUAL_CLIENT_ROOT:-}" == artifacts/* ]] \
@@ -753,22 +764,22 @@ case_args() {
       case "$case_name" in
         x509-mutual)
           server_args=(-cert "$(inside "$population/0.pem")" -key "$(inside "$population/0.key")" -CAfile "$(inside "$client/x509/client-ca.pem")" -Verify 1 -verify_return_error)
-          client_args=(-CAfile "$(inside "$population/ca.pem")" -verify_hostname server -cert "$(inside "$client/x509/client.pem")" -key "$(inside "$client/x509/client.key")")
+          client_args=(-CAfile "$(inside "$population/ca.pem")" -verify_hostname "$SERVER_HOSTNAME" -cert "$(inside "$client/x509/client.pem")" -key "$(inside "$client/x509/client.key")")
           if [[ "${CURRENT_X509_DEPTH:-2}" != 2 ]]; then
             local chain client_chain
             chain=$(chain_path "$profile" "$CURRENT_X509_DEPTH" server)
             client_chain=$(chain_path "$profile" "$CURRENT_X509_DEPTH" client)
             server_args=(-cert "$(inside "$chain/server.pem")" -key "$(inside "$chain/server.key")" -cert_chain "$(inside "$chain/intermediates.pem")" -CAfile "$(inside "$client_chain/root.pem")" -Verify "$((CURRENT_X509_DEPTH-2))" -verify_return_error)
-            client_args=(-CAfile "$(inside "$chain/root.pem")" -verify_hostname server -cert "$(inside "$client_chain/server.pem")" -key "$(inside "$client_chain/server.key")" -cert_chain "$(inside "$client_chain/intermediates.pem")")
+            client_args=(-CAfile "$(inside "$chain/root.pem")" -verify_hostname "$SERVER_HOSTNAME" -cert "$(inside "$client_chain/server.pem")" -key "$(inside "$client_chain/server.key")" -cert_chain "$(inside "$client_chain/intermediates.pem")")
           fi
           ;;
         mtc-mutual-landmark)
           server_args=(-cert "$(inside "$mtc/landmark-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id.1.1.1" -mtc_client_trust "$(inside "$client_mtc/trust.bin")" -mtc_ca "$(inside "$client_mtc/mtc-ca.pem")" -mtc_ca_root "$(inside "$client_mtc/mtc-representation-root.pem")" -mtc_landmark -Verify 1 -verify_return_error)
-          client_args=(-mtc_trust "$(inside "$mtc/trust.bin")" -mtc_ca "$(inside "$mtc/mtc-ca.pem")" -mtc_ca_root "$(inside "$mtc/mtc-representation-root.pem")" -mtc_landmark -cert "$(inside "$client_mtc/landmark-0000.pem")" -key "$(inside "$client/mtc-source/client-0000.key")" -mtc_client_id "$client_id.1.1.1")
+          client_args=(-mtc_trust "$(inside "$mtc/trust.bin")" -mtc_ca "$(inside "$mtc/mtc-ca.pem")" -mtc_ca_root "$(inside "$mtc/mtc-representation-root.pem")" -mtc_landmark -verify_hostname "$SERVER_HOSTNAME" -cert "$(inside "$client_mtc/landmark-0000.pem")" -key "$(inside "$client/mtc-source/client-0000.key")" -mtc_client_id "$client_id.1.1.1")
           ;;
         mtc-mutual-standalone)
           server_args=(-cert "$(inside "$mtc/standalone-0000.pem")" -key "$(inside "$population/0.key")" -mtc_id "$ca_id" -mtc_client_trust "$(inside "$client_mtc/authority.bin")" -mtc_ca "$(inside "$client_mtc/mtc-ca.pem")" -mtc_ca_root "$(inside "$client_mtc/mtc-representation-root.pem")" -Verify 1 -verify_return_error)
-          client_args=(-mtc_trust "$(inside "$mtc/authority.bin")" -mtc_ca "$(inside "$mtc/mtc-ca.pem")" -mtc_ca_root "$(inside "$mtc/mtc-representation-root.pem")" -cert "$(inside "$client_mtc/standalone-0000.pem")" -key "$(inside "$client/mtc-source/client-0000.key")" -mtc_client_id "$client_id")
+          client_args=(-mtc_trust "$(inside "$mtc/authority.bin")" -mtc_ca "$(inside "$mtc/mtc-ca.pem")" -mtc_ca_root "$(inside "$mtc/mtc-representation-root.pem")" -verify_hostname "$SERVER_HOSTNAME" -cert "$(inside "$client_mtc/standalone-0000.pem")" -key "$(inside "$client/mtc-source/client-0000.key")" -mtc_client_id "$client_id")
           ;;
       esac
       ;;
@@ -798,7 +809,7 @@ client_command() {
   [[ "${MT_HANDSHAKE_TRACE_MESSAGES:-0}" == 1 ]] && extra_client_args+=(-msg)
   [[ "${MT_HANDSHAKE_NO_RX_CERT_COMP:-0}" == 1 ]] && extra_client_args+=(-no_rx_cert_comp)
   docker run --rm -i --network "$NETWORK" -v "$REPO/artifacts:/work:ro" \
-    --entrypoint /opt/mtc/openssl.sh "$IMAGE" s_client -connect "$SERVER:4433" -servername server \
+    --entrypoint /opt/mtc/openssl.sh "$IMAGE" s_client -connect "$SERVER:4433" -servername "$SERVER_HOSTNAME" \
     "${client_args[@]}" "${common[@]}" -no_ticket -verify_return_error -lab_metrics "${extra_client_args[@]}" "$@"
 }
 
@@ -903,7 +914,7 @@ measure_pcap() {
       client_args+=( -keylogfile /out/keylog.txt )
       printf 'TLS_GROUP_CONFIGURED {"key_establishment":"%s","openssl_group":"%s"}\n' "$KEM_LABEL" "$KEM_GROUP" > "$log"
       printf 'GET / HTTP/1.0\r\n\r\n' | docker run --rm -i --network "$NETWORK" -v "$REPO/artifacts:/work:ro" -v "$directory:/out" \
-        --entrypoint /opt/mtc/openssl.sh "$IMAGE" s_client -connect "$SERVER:4433" -servername server \
+        --entrypoint /opt/mtc/openssl.sh "$IMAGE" s_client -connect "$SERVER:4433" -servername "$SERVER_HOSTNAME" \
         "${client_args[@]}" "${common[@]}" -no_ticket -verify_return_error >>"$log" 2>&1 || fail "$case_name PCAP run failed"
       printf 'TLS_GROUP_NEGOTIATED {"key_establishment":"%s","openssl_group":"%s","evidence":"successful TLS 1.3 handshake with a single configured group"}\n' "$KEM_LABEL" "$KEM_GROUP" >> "$log"
       # Let libpcap drain accepted packets, then request tcpdump's clean flush.
@@ -949,8 +960,9 @@ measure_pcap() {
 }
 
 write_summary() {
-  local output=$1
-  CHAIN_BINDINGS="${CHAIN_BINDINGS:-}" python3 - "$output" "$KEM" "$KEM_LABEL" "$KEM_GROUP" "$CURRENT_X509_DEPTH" "${X509_CHAIN_FIXTURES:-}" <<'PY'
+  local output=$1 image_id
+  image_id=$(docker image inspect "$IMAGE" --format '{{.Id}}') || fail 'Could not record image ID.'
+  CHAIN_BINDINGS="${CHAIN_BINDINGS:-}" IMAGE_ID="$image_id" python3 - "$output" "$KEM" "$KEM_LABEL" "$KEM_GROUP" "$CURRENT_X509_DEPTH" "${X509_CHAIN_FIXTURES:-}" "$SERVER_HOSTNAME" <<'PY'
 import csv,json,math,os,statistics,sys
 from pathlib import Path
 
@@ -988,6 +1000,8 @@ else:
  }
 
 root=Path(sys.argv[1]); result={
+ 'server_hostname':sys.argv[7],
+ 'image_id':os.environ.get('IMAGE_ID'),
  'key_establishment':{'id':sys.argv[2],'label':sys.argv[3],'openssl_group':sys.argv[4]},
  'x509_trust_path':{'depth_including_root':depth,'transmitted_certificates':depth-1,'root_transmitted':False,
                     'fixtures':fixture_provenance,

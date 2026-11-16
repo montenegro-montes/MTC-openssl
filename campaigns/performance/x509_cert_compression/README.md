@@ -82,3 +82,33 @@ signature length variation. Use `--warmups 5 --runs 100` for the full campaign.
 The report script compares archived Landmark measurements only after checking
 the group, depth, fixture binding and directional X.509 byte counters. Its
 Landmark timing comes from another measurement block.
+
+### SLH-DSA-192s with the intermediate omitted
+
+In `artifacts/results/commag-x509-elision-slhdsa192s-full-20261115b/`, all
+105 full-chain zlib samples (5 warmups and 100 measured) sent
+`CompressedCertificate` without a server precompression error. All 105
+elided-chain zlib-offer samples logged `Error compressing certs on ctx` and
+sent an ordinary `Certificate`. Both arms used image
+`sha256:5a8b523dd976e28debc474f42b67b2a6a0f33013ae3b889e4c9562d3336e281e`.
+
+The exact TLS 1.3 `Certificate` body from measured trace 1 contains the
+certificate request context and certificate list, including per-certificate
+lengths and extensions. For the full chain it is 33,196 bytes; zlib produces
+33,047 bytes. The complete `Certificate` handshake message is 33,200 bytes.
+Adding the `CompressedCertificate` handshake header (4 bytes), algorithm
+(2 bytes), uncompressed length (3 bytes), and compressed-vector length
+(3 bytes) gives 33,059 bytes, a 141-byte saving. The zlib output exactly
+matches the compressed bytes in the full-chain trace.
+
+With only the same leaf, the `Certificate` body is 16,612 bytes and zlib
+produces 16,617 bytes. A `CompressedCertificate` would therefore occupy
+16,629 bytes, 13 bytes more than the actual 16,616-byte `Certificate`.
+The experiment image's `patch_provider_cert.py` discards the active
+provider-backed certificate's precompressed result when
+`compressed_length >= original_body_length`. Here `16,617 >= 16,612`, so
+`SSL_CTX_compress_certs()` returns 0 and `s_server` emits its generic error
+message. The certificate remains selectable and the TLS handshake succeeds;
+this is a size-policy fallback, not a certificate-selection failure. The
+policy compares compressed and original bodies and does not need the extra
+8 bytes of `CompressedCertificate` overhead to reject this sample.

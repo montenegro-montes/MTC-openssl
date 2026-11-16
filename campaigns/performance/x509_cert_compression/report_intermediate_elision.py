@@ -53,15 +53,18 @@ def main():
         config = json.loads((study / "config.json").read_text())
         result = json.loads((study / "summary.json").read_text())
         native_summary = json.loads((archive / "summary.json").read_text())
-        if config["profile"] != profile or config["hostname"] != "server" \
+        if config["profile"] != profile or not config["hostname"] \
                 or config["openssl_group"] != "X25519MLKEM768" \
                 or config["tls_version"] != "TLS1.3" or config["x509_depth"] != 3:
             raise ValueError(f"Study configuration mismatch: {profile}")
         if not result["reference_match"] or result["image_id"] != config["image_id"]:
             raise ValueError(f"Study reference or image mismatch: {profile}")
         if native_summary["key_establishment"]["openssl_group"] != "X25519MLKEM768" \
-                or native_summary["x509_trust_path"]["depth_including_root"] != 3:
+                or native_summary["x509_trust_path"]["depth_including_root"] != 3 \
+                or native_summary.get("server_hostname", "server") != config["hostname"]:
             raise ValueError(f"Archived native configuration mismatch: {profile}")
+        if native_summary.get("image_id") and native_summary["image_id"] != config["image_id"]:
+            raise ValueError(f"Native and compression blocks used different images: {profile}")
         bindings = native_summary["x509_trust_path"]["fixtures"]["bindings"]
         if not any(item["profile"] == profile and item["role"] == "server"
                    and item["path"] == config["fixture"] for item in bindings):
@@ -107,7 +110,8 @@ def main():
         print(f"Intermediate omission vs full X.509: {result['intermediate_elision_savings_pct']:.2f}%")
         print(f"Additional Landmark saving vs elided X.509: "
               f"{100 * (elided_total - landmark_total) / elided_total:.2f}%")
-        print("Timing blocks are independent; archived MTC image ID was not recorded in the native CSV.")
+        print("Timing blocks are independent; native image ID: "
+              + str(native_summary.get("image_id") or "not recorded in historical summary"))
 
 
 if __name__ == "__main__":
