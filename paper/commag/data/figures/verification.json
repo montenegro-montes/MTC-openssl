@@ -1,0 +1,22 @@
+{
+  "status": "PASS",
+  "sample_rows": 4635,
+  "sample_columns": 25,
+  "statistics_rows": 630,
+  "statistics_columns": 28,
+  "original_statistical_rows_unchanged": 495,
+  "added_residual_statistical_rows": 135,
+  "included_samples": {
+    "s_client": 2700,
+    "chromium": 1799
+  },
+  "checks": [
+    "Exact per-connection authentication and residual arithmetic",
+    "All summary quantiles independently verified with rational HF7 interpolation",
+    "All sample standard deviations independently verified",
+    "Two-decimal ns rounding verified",
+    "All 36 stacked views satisfy complete-observation and sum checks",
+    "Incomplete stacks, incoherent sums, duplicate configurations, and stacked medians rejected",
+    "Anonymous schema retained; original timing samples unchanged"
+  ]
+}

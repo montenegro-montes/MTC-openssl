@@ -1,0 +1,138 @@
+{
+  "samples": 4635,
+  "statistics_rows": 630,
+  "public_configuration_fields": [
+    "client",
+    "profile",
+    "credential_type",
+    "mtc_verification_mode",
+    "key_establishment",
+    "openssl_group",
+    "campaign_depth"
+  ],
+  "clients": {
+    "s_client": {
+      "rows": 2835,
+      "phase_counts": {
+        "warmup": 135,
+        "measured": 2700
+      },
+      "statistics_included": 2700,
+      "exclusion_reasons": {
+        "not_measured_phase": 135
+      },
+      "errors": {},
+      "missing_times": {
+        "handshake_total_ns": 0,
+        "credential_validation_total_ns": 0,
+        "certificate_verify_crypto_ns": 0,
+        "x509_signatures_ns": 1890,
+        "mtc_total_ns": 945,
+        "merkle_total_ns": 945,
+        "merkle_leaf_hash_ns": 945,
+        "merkle_path_ns": 945,
+        "landmark_trust_ns": 1890,
+        "standalone_signatures_ns": 1890,
+        "auth_total_ns": 0,
+        "credential_residual_ns": 0,
+        "mtc_residual_ns": 945,
+        "merkle_residual_ns": 945
+      },
+      "signature_counts_by_case": {
+        "x509": {
+          "x509_signature_count": {
+            "2": 945
+          },
+          "standalone_signature_count": {
+            "None": 945
+          }
+        },
+        "landmark": {
+          "x509_signature_count": {
+            "None": 945
+          },
+          "standalone_signature_count": {
+            "None": 945
+          }
+        },
+        "standalone": {
+          "x509_signature_count": {
+            "None": 945
+          },
+          "standalone_signature_count": {
+            "2": 945
+          }
+        }
+      },
+      "cache_present": {
+        "x509_signature_cache_ns": 0,
+        "x509_signature_cache_hits": 0,
+        "x509_signature_cache_misses": 0,
+        "standalone_signature_cache_ns": 0,
+        "standalone_signature_cache_hits": 0,
+        "standalone_signature_cache_misses": 0
+      }
+    },
+    "chromium": {
+      "rows": 1800,
+      "phase_counts": {
+        "measured": 1800
+      },
+      "statistics_included": 1799,
+      "exclusion_reasons": {
+        "PCAP_NetLog_association_not_OK": 1
+      },
+      "errors": {},
+      "missing_times": {
+        "handshake_total_ns": 1800,
+        "credential_validation_total_ns": 0,
+        "certificate_verify_crypto_ns": 0,
+        "x509_signatures_ns": 1200,
+        "mtc_total_ns": 600,
+        "merkle_total_ns": 600,
+        "merkle_leaf_hash_ns": 600,
+        "merkle_path_ns": 600,
+        "landmark_trust_ns": 1200,
+        "standalone_signatures_ns": 1200,
+        "auth_total_ns": 0,
+        "credential_residual_ns": 0,
+        "mtc_residual_ns": 600,
+        "merkle_residual_ns": 600
+      },
+      "signature_counts_by_case": {
+        "x509": {
+          "x509_signature_count": {
+            "2": 600
+          },
+          "standalone_signature_count": {
+            "None": 600
+          }
+        },
+        "landmark": {
+          "x509_signature_count": {
+            "None": 600
+          },
+          "standalone_signature_count": {
+            "None": 600
+          }
+        },
+        "standalone": {
+          "x509_signature_count": {
+            "None": 600
+          },
+          "standalone_signature_count": {
+            "2": 600
+          }
+        }
+      },
+      "cache_present": {
+        "x509_signature_cache_ns": 0,
+        "x509_signature_cache_hits": 0,
+        "x509_signature_cache_misses": 0,
+        "standalone_signature_cache_ns": 0,
+        "standalone_signature_cache_hits": 0,
+        "standalone_signature_cache_misses": 0
+      }
+    }
+  }
+}

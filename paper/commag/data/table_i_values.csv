@@ -1,0 +1,19 @@
+profile,arm,read_median_B,written_median_B,total_median_B,reduction_pct,sent_message,measurement_block
+ecdsa-p384,X.509 D=3,2551,1606,4157,0.00,Certificate,native
+ecdsa-p384,D=3 + zlib,2304,1613,3917,5.77,CompressedCertificate,elision
+ecdsa-p384,Intermediate omitted,2037,1606,3643,12.36,Certificate,elision
+ecdsa-p384,Omitted + zlib offered,2001,1613,3614,13.06,CompressedCertificate,elision
+ecdsa-p384,MTC Standalone,2222,1617,3839,7.65,MTC,native
+ecdsa-p384,MTC Landmark,2003,1617,3620,12.92,MTC,native
+mldsa65,X.509 D=3,15876,1606,17482,0.00,Certificate,native
+mldsa65,D=3 + zlib,15658,1613,17271,1.21,CompressedCertificate,elision
+mldsa65,Intermediate omitted,10305,1606,11911,31.87,Certificate,elision
+mldsa65,Omitted + zlib offered,10295,1613,11908,31.88,CompressedCertificate,elision
+mldsa65,MTC Standalone,13695,1617,15312,12.41,MTC,native
+mldsa65,MTC Landmark,7063,1617,8680,50.35,MTC,native
+slhdsa192s,X.509 D=3,50858,1606,52464,0.00,Certificate,native
+slhdsa192s,D=3 + zlib,50705,1613,52318,0.28,CompressedCertificate,elision
+slhdsa192s,Intermediate omitted,34252,1606,35858,31.65,Certificate,elision
+slhdsa192s,Omitted + zlib offered,34252,1613,35865,31.64,CompressedCertificate,elision
+slhdsa192s,MTC Standalone,50576,1617,52193,0.52,MTC,native
+slhdsa192s,MTC Landmark,18070,1617,19687,62.48,MTC,native

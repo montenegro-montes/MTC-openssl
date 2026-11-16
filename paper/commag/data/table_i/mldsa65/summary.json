@@ -1,0 +1,64 @@
+{
+  "profile": "mldsa65",
+  "hostname": "server.mtc.example.com",
+  "image_id": "sha256:5a8b523dd976e28debc474f42b67b2a6a0f33013ae3b889e4c9562d3336e281e",
+  "certificate_sha256": {
+    "leaf": "752b0761f9617f820c8d8af3be4cd5914be9f93d0203e9fee57efc051514ffbb",
+    "intermediate": "f467a714c5e4aca7bde076580ba4e170f500472dc7a8d977f56c45c84a790b8a",
+    "root": "fb8fd15c6794beb3e5018b4cd08840cad35d52c532ad31f8bdd74a34f845ccc5"
+  },
+  "reference_source": "artifacts/results/commag-browsername-native-pilot-20261115a/d3/native.csv",
+  "arms": {
+    "full-ordinary": {
+      "n": 100,
+      "tls_bytes_read_median": 15876.0,
+      "tls_bytes_written_median": 1606.0,
+      "tls_bytes_total_median": 17482.0,
+      "handshake_wall_ms_median": 5.1000835,
+      "handshake_wall_ms_p95": 6.6559372,
+      "sent_messages": [
+        "Certificate"
+      ]
+    },
+    "full-zlib": {
+      "n": 100,
+      "tls_bytes_read_median": 15658.0,
+      "tls_bytes_written_median": 1613.0,
+      "tls_bytes_total_median": 17271.0,
+      "handshake_wall_ms_median": 5.140104,
+      "handshake_wall_ms_p95": 7.041847249999999,
+      "sent_messages": [
+        "CompressedCertificate"
+      ]
+    },
+    "elided-ordinary": {
+      "n": 100,
+      "tls_bytes_read_median": 10305.0,
+      "tls_bytes_written_median": 1606.0,
+      "tls_bytes_total_median": 11911.0,
+      "handshake_wall_ms_median": 4.235125,
+      "handshake_wall_ms_p95": 5.910779150000001,
+      "sent_messages": [
+        "Certificate"
+      ]
+    },
+    "elided-zlib": {
+      "n": 100,
+      "tls_bytes_read_median": 10295.0,
+      "tls_bytes_written_median": 1613.0,
+      "tls_bytes_total_median": 11908.0,
+      "handshake_wall_ms_median": 4.3594375,
+      "handshake_wall_ms_p95": 6.1774729,
+      "sent_messages": [
+        "CompressedCertificate"
+      ]
+    }
+  },
+  "reference_tls_bytes_read": 15876,
+  "reference_tls_bytes_written": 1606,
+  "reference_total_bytes": 17482,
+  "intermediate_elision_savings_pct": 31.867063265072645,
+  "reference_status": "exact",
+  "pilot_pass": false,
+  "reference_match": true
+}

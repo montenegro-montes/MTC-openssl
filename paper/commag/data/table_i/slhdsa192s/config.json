@@ -1,0 +1,26 @@
+{
+  "image": "mt-tls-mtc-cert-comp-pq:local",
+  "image_id": "sha256:5a8b523dd976e28debc474f42b67b2a6a0f33013ae3b889e4c9562d3336e281e",
+  "profile": "slhdsa192s",
+  "hostname": "server.mtc.example.com",
+  "openssl_group": "X25519MLKEM768",
+  "tls_version": "TLS1.3",
+  "x509_depth": 3,
+  "fixture": "artifacts/fixtures/commag-browsername-x509-20261115a/slhdsa192s/depth-3",
+  "certificate_sha256": {
+    "leaf": "49da69da657dfbd444efc839210222d7d1ea5f44989f945c1686ba77b3555ff1",
+    "intermediate": "f57585483b0c49cc8d22c9cb2799cda23f8c251559de57854d114880b615e4a3",
+    "root": "c6f9958d07f481b3bb5b52e9ddd2bfc14b49271f691fe6f1cd9b518432f471a8"
+  },
+  "trust_anchor": "root.pem only",
+  "auxiliary_untrusted": "intermediates.pem",
+  "reference_source": "artifacts/results/commag-browsername-native-pilot-20261115a/d3/native.csv",
+  "warmups": 5,
+  "measured": 100,
+  "conditions": [
+    "full-ordinary",
+    "full-zlib",
+    "elided-ordinary",
+    "elided-zlib"
+  ]
+}

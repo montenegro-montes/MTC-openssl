@@ -1,0 +1,64 @@
+{
+  "profile": "ecdsa-p384",
+  "hostname": "server.mtc.example.com",
+  "image_id": "sha256:5a8b523dd976e28debc474f42b67b2a6a0f33013ae3b889e4c9562d3336e281e",
+  "certificate_sha256": {
+    "leaf": "1f5042cb86cdc3cd4eaf0aace81923b43fc8f1041d52d96cbdc38f1eec0d8a7c",
+    "intermediate": "6c282fd0323996f28e2bef108d73ecee560c139bf95017d552434f817e3f6799",
+    "root": "e5f8479da0e0e89803e3bfd57ea2d7cbe77f04ed0fc66381649f8f02f14bdc3c"
+  },
+  "reference_source": "artifacts/results/commag-browsername-native-pilot-20261115a/d3/native.csv",
+  "arms": {
+    "full-ordinary": {
+      "n": 100,
+      "tls_bytes_read_median": 2551.0,
+      "tls_bytes_written_median": 1606.0,
+      "tls_bytes_total_median": 4157.0,
+      "handshake_wall_ms_median": 5.585625,
+      "handshake_wall_ms_p95": 8.380156249999999,
+      "sent_messages": [
+        "Certificate"
+      ]
+    },
+    "full-zlib": {
+      "n": 100,
+      "tls_bytes_read_median": 2304.0,
+      "tls_bytes_written_median": 1613.0,
+      "tls_bytes_total_median": 3917.0,
+      "handshake_wall_ms_median": 5.403729,
+      "handshake_wall_ms_p95": 7.353710099999999,
+      "sent_messages": [
+        "CompressedCertificate"
+      ]
+    },
+    "elided-ordinary": {
+      "n": 100,
+      "tls_bytes_read_median": 2037.0,
+      "tls_bytes_written_median": 1606.0,
+      "tls_bytes_total_median": 3643.0,
+      "handshake_wall_ms_median": 5.2070834999999995,
+      "handshake_wall_ms_p95": 7.193033649999999,
+      "sent_messages": [
+        "Certificate"
+      ]
+    },
+    "elided-zlib": {
+      "n": 100,
+      "tls_bytes_read_median": 2001.0,
+      "tls_bytes_written_median": 1613.0,
+      "tls_bytes_total_median": 3614.0,
+      "handshake_wall_ms_median": 5.2597295,
+      "handshake_wall_ms_p95": 7.08652915,
+      "sent_messages": [
+        "CompressedCertificate"
+      ]
+    }
+  },
+  "reference_tls_bytes_read": 2552,
+  "reference_tls_bytes_written": 1606,
+  "reference_total_bytes": 4158,
+  "intermediate_elision_savings_pct": 12.364686071686313,
+  "reference_status": "ECDSA DER signature length variation; verify the trace and direction counts",
+  "pilot_pass": false,
+  "reference_match": true
+}
