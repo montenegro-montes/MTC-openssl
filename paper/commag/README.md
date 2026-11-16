@@ -15,6 +15,11 @@ from the raw Chromium CSV are included.
 | Figure 5, Chromium | The `client=chromium` rows in `data/figures/authentication_samples.csv` and `authentication_statistics.csv` | The same two operations measured in Chromium; 100 connections per displayed profile and arm. P-384 and ML-DSA-65. Chromium did not measure SLH-DSA. |
 | Table I | `data/table_i/native/` and `data/table_i/{ecdsa-p384,mldsa65,slhdsa192s}/` | Median bidirectional TLS bytes over 100 connections per arm. TLS 1.3, `X25519MLKEM768`, SNI `server.mtc.example.com`, X.509 D=3. |
 
+A separate server repeat from November 16 is preserved under
+[`data/repeat_20261116/`](data/repeat_20261116/README.md). Its figure values
+and complete six-arm Table I have been recalculated. The repeat uses current
+server credentials and keeps its figure and table blocks separate.
+
 The figures come from **October 2026** measurement blocks, while the table
 comes from local blocks run on **November 15, 2026**. Their timings are kept
 separate and are not treated as paired observations. The archived Chromium

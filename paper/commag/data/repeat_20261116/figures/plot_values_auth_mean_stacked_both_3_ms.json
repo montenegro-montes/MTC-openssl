@@ -1,0 +1,242 @@
+[
+  {
+    "client": "s_client",
+    "level": "3",
+    "figure": "auth",
+    "profile": "ecdsa-p384",
+    "mode": "x509",
+    "statistic": "mean",
+    "layout": "stacked",
+    "total_metric": "auth_total_ns",
+    "total_ns": "3422266.09",
+    "components_ns": {
+      "certificate_verify_crypto_ns": "970837.22",
+      "credential_validation_total_ns": "2451428.87"
+    },
+    "n_valid": 100
+  },
+  {
+    "client": "s_client",
+    "level": "3",
+    "figure": "auth",
+    "profile": "ecdsa-p384",
+    "mode": "landmark",
+    "statistic": "mean",
+    "layout": "stacked",
+    "total_metric": "auth_total_ns",
+    "total_ns": "1238136.99",
+    "components_ns": {
+      "certificate_verify_crypto_ns": "1067460.47",
+      "credential_validation_total_ns": "170676.52"
+    },
+    "n_valid": 100
+  },
+  {
+    "client": "s_client",
+    "level": "3",
+    "figure": "auth",
+    "profile": "ecdsa-p384",
+    "mode": "standalone",
+    "statistic": "mean",
+    "layout": "stacked",
+    "total_metric": "auth_total_ns",
+    "total_ns": "3261639.37",
+    "components_ns": {
+      "certificate_verify_crypto_ns": "973937.96",
+      "credential_validation_total_ns": "2287701.41"
+    },
+    "n_valid": 100
+  },
+  {
+    "client": "s_client",
+    "level": "3",
+    "figure": "auth",
+    "profile": "mldsa65",
+    "mode": "x509",
+    "statistic": "mean",
+    "layout": "stacked",
+    "total_metric": "auth_total_ns",
+    "total_ns": "556817.88",
+    "components_ns": {
+      "certificate_verify_crypto_ns": "52428.37",
+      "credential_validation_total_ns": "504389.51"
+    },
+    "n_valid": 100
+  },
+  {
+    "client": "s_client",
+    "level": "3",
+    "figure": "auth",
+    "profile": "mldsa65",
+    "mode": "landmark",
+    "statistic": "mean",
+    "layout": "stacked",
+    "total_metric": "auth_total_ns",
+    "total_ns": "222181.29",
+    "components_ns": {
+      "certificate_verify_crypto_ns": "65491.21",
+      "credential_validation_total_ns": "156690.08"
+    },
+    "n_valid": 100
+  },
+  {
+    "client": "s_client",
+    "level": "3",
+    "figure": "auth",
+    "profile": "mldsa65",
+    "mode": "standalone",
+    "statistic": "mean",
+    "layout": "stacked",
+    "total_metric": "auth_total_ns",
+    "total_ns": "366937.00",
+    "components_ns": {
+      "certificate_verify_crypto_ns": "51373.48",
+      "credential_validation_total_ns": "315563.52"
+    },
+    "n_valid": 100
+  },
+  {
+    "client": "s_client",
+    "level": "3",
+    "figure": "auth",
+    "profile": "slhdsa192s",
+    "mode": "x509",
+    "statistic": "mean",
+    "layout": "stacked",
+    "total_metric": "auth_total_ns",
+    "total_ns": "7255570.81",
+    "components_ns": {
+      "certificate_verify_crypto_ns": "1437689.08",
+      "credential_validation_total_ns": "5817881.73"
+    },
+    "n_valid": 100
+  },
+  {
+    "client": "s_client",
+    "level": "3",
+    "figure": "auth",
+    "profile": "slhdsa192s",
+    "mode": "landmark",
+    "statistic": "mean",
+    "layout": "stacked",
+    "total_metric": "auth_total_ns",
+    "total_ns": "3053657.24",
+    "components_ns": {
+      "certificate_verify_crypto_ns": "2704952.38",
+      "credential_validation_total_ns": "348704.86"
+    },
+    "n_valid": 100
+  },
+  {
+    "client": "s_client",
+    "level": "3",
+    "figure": "auth",
+    "profile": "slhdsa192s",
+    "mode": "standalone",
+    "statistic": "mean",
+    "layout": "stacked",
+    "total_metric": "auth_total_ns",
+    "total_ns": "7224943.43",
+    "components_ns": {
+      "certificate_verify_crypto_ns": "1473556.67",
+      "credential_validation_total_ns": "5751386.76"
+    },
+    "n_valid": 100
+  },
+  {
+    "client": "chromium",
+    "level": "3",
+    "figure": "auth",
+    "profile": "ecdsa-p384",
+    "mode": "x509",
+    "statistic": "mean",
+    "layout": "stacked",
+    "total_metric": "auth_total_ns",
+    "total_ns": "5984262.74",
+    "components_ns": {
+      "certificate_verify_crypto_ns": "1380828.63",
+      "credential_validation_total_ns": "4603434.11"
+    },
+    "n_valid": 100
+  },
+  {
+    "client": "chromium",
+    "level": "3",
+    "figure": "auth",
+    "profile": "ecdsa-p384",
+    "mode": "landmark",
+    "statistic": "mean",
+    "layout": "stacked",
+    "total_metric": "auth_total_ns",
+    "total_ns": "2840471.01",
+    "components_ns": {
+      "certificate_verify_crypto_ns": "1403177.50",
+      "credential_validation_total_ns": "1437293.51"
+    },
+    "n_valid": 100
+  },
+  {
+    "client": "chromium",
+    "level": "3",
+    "figure": "auth",
+    "profile": "ecdsa-p384",
+    "mode": "standalone",
+    "statistic": "mean",
+    "layout": "stacked",
+    "total_metric": "auth_total_ns",
+    "total_ns": "5714213.36",
+    "components_ns": {
+      "certificate_verify_crypto_ns": "1374460.31",
+      "credential_validation_total_ns": "4339753.05"
+    },
+    "n_valid": 100
+  },
+  {
+    "client": "chromium",
+    "level": "3",
+    "figure": "auth",
+    "profile": "mldsa65",
+    "mode": "x509",
+    "statistic": "mean",
+    "layout": "stacked",
+    "total_metric": "auth_total_ns",
+    "total_ns": "3593341.91",
+    "components_ns": {
+      "certificate_verify_crypto_ns": "217691.59",
+      "credential_validation_total_ns": "3375650.32"
+    },
+    "n_valid": 100
+  },
+  {
+    "client": "chromium",
+    "level": "3",
+    "figure": "auth",
+    "profile": "mldsa65",
+    "mode": "landmark",
+    "statistic": "mean",
+    "layout": "stacked",
+    "total_metric": "auth_total_ns",
+    "total_ns": "1937913.75",
+    "components_ns": {
+      "certificate_verify_crypto_ns": "357159.47",
+      "credential_validation_total_ns": "1580754.28"
+    },
+    "n_valid": 100
+  },
+  {
+    "client": "chromium",
+    "level": "3",
+    "figure": "auth",
+    "profile": "mldsa65",
+    "mode": "standalone",
+    "statistic": "mean",
+    "layout": "stacked",
+    "total_metric": "auth_total_ns",
+    "total_ns": "2827942.79",
+    "components_ns": {
+      "certificate_verify_crypto_ns": "278881.63",
+      "credential_validation_total_ns": "2549061.16"
+    },
+    "n_valid": 100
+  }
+]

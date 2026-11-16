@@ -1,0 +1,13 @@
+profile,arm,read_median_B,written_median_B,total_median_B,reduction_pct,sent_message,measurement_block
+ecdsa-p384,X.509 D=3,2550,1606,4156,0.00,Certificate,elision
+ecdsa-p384,D=3 + zlib,2307,1613,3920,5.68,CompressedCertificate,elision
+ecdsa-p384,Intermediate omitted,2038,1606,3644,12.32,Certificate,elision
+ecdsa-p384,Omitted + zlib offered,2000,1613,3613,13.07,CompressedCertificate,elision
+mldsa65,X.509 D=3,15876,1606,17482,0.00,Certificate,elision
+mldsa65,D=3 + zlib,15640,1613,17253,1.31,CompressedCertificate,elision
+mldsa65,Intermediate omitted,10305,1606,11911,31.87,Certificate,elision
+mldsa65,Omitted + zlib offered,10291,1613,11904,31.91,CompressedCertificate,elision
+slhdsa192s,X.509 D=3,50858,1606,52464,0.00,Certificate,elision
+slhdsa192s,D=3 + zlib,50706,1613,52319,0.28,CompressedCertificate,elision
+slhdsa192s,Intermediate omitted,34252,1606,35858,31.65,Certificate,elision
+slhdsa192s,Omitted + zlib offered,34250,1613,35863,31.64,CompressedCertificate,elision

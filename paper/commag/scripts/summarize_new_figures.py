@@ -48,6 +48,10 @@ def main():
     parser.add_argument("--chromium", type=Path, action="append", required=True,
                         help="Repeat once for each Chromium profile block")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--samples-output", type=Path,
+                        help="Optional anonymous per-connection CSV")
+    parser.add_argument("--statistics-output", type=Path,
+                        help="Optional mean-statistics CSV for the auth plotter")
     args = parser.parse_args()
     grouped = defaultdict(list)
 
@@ -86,6 +90,8 @@ def main():
         raise ValueError("Both Chromium profile blocks are required")
 
     output = []
+    public_samples = []
+    statistics_rows = []
     for client, profiles in (("s_client", PROFILES), ("chromium", CHROMIUM_PROFILES)):
         for profile in profiles:
             for case in CASES:
@@ -100,13 +106,42 @@ def main():
                                    certificate_verify_mean_ms=f"{verify:.6f}",
                                    authentication_total_mean_ms=f"{total:.6f}",
                                    figure_label_ms=f"{total:.3f}"))
+                for index, (credential_ns, verify_ns) in enumerate(values, 1):
+                    public_samples.append(dict(client=client, profile=profile,
+                                               case=case, sample_index=index,
+                                               credential_validation_total_ns=int(credential_ns),
+                                               certificate_verify_crypto_ns=int(verify_ns),
+                                               auth_total_ns=int(credential_ns + verify_ns)))
+                for metric, mean in (("credential_validation_total_ns", credential * 1_000_000),
+                                     ("certificate_verify_crypto_ns", verify * 1_000_000),
+                                     ("auth_total_ns", total * 1_000_000)):
+                    statistics_rows.append(dict(client=client, profile=profile,
+                                                credential_type="x509" if case == "x509" else "mtc",
+                                                mtc_verification_mode="" if case == "x509" else case,
+                                                phase="measured", metric=metric, unit="ns",
+                                                n_valid=100, n_observations=100, n_missing=0,
+                                                mean=f"{mean:.2f}", median="", stddev="",
+                                                min="", q1="", q3="", iqr="", p05="", p95="", max=""))
+    for path in (args.output, args.samples_output, args.statistics_output):
+        if path is not None and path.exists():
+            raise ValueError(f"Output exists; use a new path: {path}")
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    if args.output.exists():
-        raise ValueError(f"Output exists; use a new path: {args.output}")
     with args.output.open("x", newline="") as stream:
         writer = csv.DictWriter(stream, FIELDS)
         writer.writeheader()
         writer.writerows(output)
+    if args.samples_output:
+        args.samples_output.parent.mkdir(parents=True, exist_ok=True)
+        with args.samples_output.open("x", newline="") as stream:
+            writer = csv.DictWriter(stream, tuple(public_samples[0]))
+            writer.writeheader()
+            writer.writerows(public_samples)
+    if args.statistics_output:
+        args.statistics_output.parent.mkdir(parents=True, exist_ok=True)
+        with args.statistics_output.open("x", newline="") as stream:
+            writer = csv.DictWriter(stream, tuple(statistics_rows[0]))
+            writer.writeheader()
+            writer.writerows(statistics_rows)
     print(f"PASS: {len(output)} figure bars written to {args.output}")
 
 

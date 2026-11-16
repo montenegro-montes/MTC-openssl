@@ -1,0 +1,16 @@
+client,profile,case,n,credential_validation_mean_ms,certificate_verify_mean_ms,authentication_total_mean_ms,figure_label_ms
+s_client,ecdsa-p384,x509,100,2.451429,0.970837,3.422266,3.422
+s_client,ecdsa-p384,landmark,100,0.170677,1.067460,1.238137,1.238
+s_client,ecdsa-p384,standalone,100,2.287701,0.973938,3.261639,3.262
+s_client,mldsa65,x509,100,0.504390,0.052428,0.556818,0.557
+s_client,mldsa65,landmark,100,0.156690,0.065491,0.222181,0.222
+s_client,mldsa65,standalone,100,0.315564,0.051373,0.366937,0.367
+s_client,slhdsa192s,x509,100,5.817882,1.437689,7.255571,7.256
+s_client,slhdsa192s,landmark,100,0.348705,2.704952,3.053657,3.054
+s_client,slhdsa192s,standalone,100,5.751387,1.473557,7.224943,7.225
+chromium,ecdsa-p384,x509,100,4.603434,1.380829,5.984263,5.984
+chromium,ecdsa-p384,landmark,100,1.437294,1.403178,2.840471,2.840
+chromium,ecdsa-p384,standalone,100,4.339753,1.374460,5.714213,5.714
+chromium,mldsa65,x509,100,3.375650,0.217692,3.593342,3.593
+chromium,mldsa65,landmark,100,1.580754,0.357159,1.937914,1.938
+chromium,mldsa65,standalone,100,2.549061,0.278882,2.827943,2.828
